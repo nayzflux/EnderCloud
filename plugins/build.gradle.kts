@@ -4,7 +4,7 @@ plugins {
 }
 
 allprojects {
-    group = "fr.nayz"
+    group = "fr.nayz.endercloud"
     version = "0.1.0"
 
     dependencyLocking {
