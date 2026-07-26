@@ -1,5 +1,6 @@
 plugins {
     java
+    `maven-publish`
     alias(libs.plugins.shadow)
 }
 
@@ -27,5 +28,14 @@ tasks.shadowJar {
 }
 
 tasks.build {
-    dependsOn(tasks.shadowJar)
+    dependsOn(tasks.publishToMavenLocal)
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("mavenJava") {
+            from(components["shadow"])
+            artifactId = "endercloud-velocity"
+        }
+    }
 }

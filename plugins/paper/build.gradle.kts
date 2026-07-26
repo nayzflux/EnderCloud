@@ -1,5 +1,6 @@
 plugins {
     java
+    `maven-publish`
     alias(libs.plugins.shadow)
 }
 
@@ -29,10 +30,15 @@ tasks.shadowJar {
     relocate("com.fasterxml.jackson", "fr.endercloud.libs.jackson")
 }
 
-tasks.publishToMavenLocal {
-
+publishing {
+    publications {
+        create<MavenPublication>("mavenJava") {
+            from(components["shadow"])
+            artifactId = "endercloud-paper"
+        }
+    }
 }
 
 tasks.build {
-    dependsOn(tasks.shadowJar)
+    dependsOn(tasks.publishToMavenLocal)
 }
