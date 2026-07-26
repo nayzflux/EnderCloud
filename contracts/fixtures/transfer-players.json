@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "eventId": "A1b2C3d4E5f6G7h8",
+  "type": "TRANSFER_PLAYERS",
+  "occurredAt": "2026-07-26T12:00:00.000Z",
+  "payload": {
+    "instanceId": "A1b2C3d4E5f6G7h8",
+    "endpoint": "endercloud-A1b2C3d4E5f6G7h8:25565",
+    "players": [
+      "02a1c31e-4748-4106-932d-a780413d7b9a"
+    ]
+  }
+}

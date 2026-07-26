@@ -1,0 +1,18 @@
+[versions]
+jackson = "2.20.1"
+junit = "5.14.1"
+lettuce = "6.8.1.RELEASE"
+paper = "26.2.build.+"
+velocity = "4.1.0-SNAPSHOT"
+shadow = "9.3.1"
+
+[libraries]
+jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+lettuce = { module = "io.lettuce:lettuce-core", version.ref = "lettuce" }
+paper-api = { module = "io.papermc.paper:paper-api", version.ref = "paper" }
+velocity-api = { module = "com.velocitypowered:velocity-api", version.ref = "velocity" }
+
+[plugins]
+shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }

@@ -1,0 +1,14 @@
+{
+  "sessionId": "Q1w2E3r4T5y6U7i8",
+  "groupId": "skywars-solo",
+  "state": "WAITING",
+  "revision": 2,
+  "players": [
+    {
+      "playerId": "02a1c31e-4748-4106-932d-a780413d7b9a",
+      "partyId": "party-1",
+      "teamIndex": 0,
+      "state": "CONNECTED"
+    }
+  ]
+}
