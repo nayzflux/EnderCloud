@@ -81,6 +81,32 @@ services:
     networks:
       - endercloud
 
+  dashboard:
+    build:
+      context: ./dashboard
+    restart: unless-stopped
+    environment:
+      ORCHESTRATOR_URL: ${ORCHESTRATOR_URL:-http://orchestrator:8080}
+      PORT: 3000
+    ports:
+      - "${DASHBOARD_PORT:-3000}:3000"
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const r=await fetch('http://localhost:3000');process.exit(r.ok?0:1)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    networks:
+      - endercloud
+
 volumes:
   postgres-data:
 

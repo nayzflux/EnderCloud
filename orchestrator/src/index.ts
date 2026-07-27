@@ -9,6 +9,7 @@ import { LocalDockerExecutor } from "./executor/local-docker.ts";
 import { Logger } from "./logger.ts";
 import { Scheduler } from "./scheduler.ts";
 import { CapacityController } from "./services/capacity-controller.ts";
+import { DashboardService } from "./services/dashboard-service.ts";
 import { InstanceController } from "./services/instance-controller.ts";
 import { Matchmaker } from "./services/matchmaker.ts";
 import { QueueService } from "./services/queue-service.ts";
@@ -46,6 +47,7 @@ const instances = new InstanceController(
   logger,
 );
 const queues = new QueueService(sql);
+const dashboard = new DashboardService(sql);
 const capacity = new CapacityController(sql, instances, logger);
 const transfers = new TransferService(sql, bus, config, logger);
 const matchmaker = new Matchmaker(sql, transfers, logger);
@@ -57,7 +59,13 @@ await capacity.tick();
 await transfers.tick();
 ready = true;
 
-const app = createApp({ queues, instances, logger, isReady: () => ready });
+const app = createApp({
+  queues,
+  instances,
+  dashboard,
+  logger,
+  isReady: () => ready,
+});
 app.listen({ port: config.port, hostname: "0.0.0.0" });
 const server = app.server;
 if (!server) throw new Error("Elysia failed to start its HTTP server");

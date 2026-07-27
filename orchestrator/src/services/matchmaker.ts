@@ -324,7 +324,7 @@ export class Matchmaker {
             ) VALUES (
               ${sessionId}, ${playerId}, ${party.partyId}, ${team.teamIndex},
               ${transferring ? "TRANSFERRING" : "SELECTED"},
-              ${transferring ? new Date() : null}
+              CASE WHEN ${transferring}::boolean THEN now() ELSE NULL END
             )
             ON CONFLICT (session_id, player_id) DO NOTHING
           `;

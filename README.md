@@ -11,6 +11,7 @@ Docker containers use `endercloud-<variant-id>-<instance-id>`; Velocity register
 ## Repository layout
 
 - `orchestrator/`: Bun, TypeScript, Elysia, Drizzle and the local Docker executor.
+- `dashboard/`: console Next.js, React Flow, TanStack Query et shadcn/ui.
 - `plugins/core`: platform-neutral Java 25 client, contracts and integration APIs.
 - `plugins/velocity`: dynamic server registry, transfers and hub fallback.
 - `plugins/paper`: readiness, player presence and game lifecycle bridge.
@@ -33,6 +34,13 @@ bun test
 
 cd ../plugins
 ./gradlew build
+
+cd ../dashboard
+bun install --frozen-lockfile
+bun run lint
+bun run typecheck
+bun test
+bun run build
 ```
 
 The platform JARs are produced as:
@@ -56,9 +64,22 @@ files through `/data/runtime`.
 docker compose up --build
 ```
 
-The orchestrator API is exposed only to the `endercloud` Docker network. Attach each Velocity
-container and every dynamically created Minecraft container to that same network. The
-orchestrator applies migrations and validates all YAML before its readiness endpoint succeeds.
+Le dashboard est alors disponible sur `http://localhost:3000` (ou le port défini par
+`DASHBOARD_PORT`). Son proxy serveur ne permet que les quatre routes de lecture du dashboard et
+contacte l'orchestrateur avec `ORCHESTRATOR_URL`.
+
+Pour le développement local, lancer l'orchestrateur puis :
+
+```powershell
+cd dashboard
+Copy-Item .env.example .env.local
+bun run dev
+```
+
+L'orchestrateur et les services internes restent sur le réseau `endercloud`. Attachez chaque
+conteneur Velocity et chaque serveur Minecraft créé dynamiquement à ce même réseau.
+L'orchestrateur applique les migrations et valide les YAML avant que son endpoint de readiness
+réussisse.
 
 ## Enable a group
 
@@ -93,6 +114,10 @@ request a hub transfer. Ordinary initial routing and kicked-server fallback are 
 OpenAPI is available at `/openapi` inside the private network. Important routes include:
 
 - `GET /api/v1/proxy/servers`
+- `GET /api/v1/dashboard/cluster`
+- `GET /api/v1/dashboard/groups/{groupId}/queue`
+- `GET /api/v1/dashboard/instances/{instanceId}`
+- `GET /api/v1/dashboard/sessions/{sessionId}`
 - `POST /api/v1/queue/entries`
 - `POST /api/v1/proxy/players/{uuid}/disconnected`
 - `POST /api/v1/instances/{id}/events`

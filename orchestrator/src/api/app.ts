@@ -1,12 +1,14 @@
 import { openapi } from "@elysiajs/openapi";
 import { Elysia, t } from "elysia";
 import type { Logger } from "../logger.ts";
+import type { DashboardService } from "../services/dashboard-service.ts";
 import type { InstanceController } from "../services/instance-controller.ts";
 import type { QueueService } from "../services/queue-service.ts";
 import { nanoid } from "../id.ts";
 
 const playerUuid = t.String({ format: "uuid" });
 const internalId = t.String({ pattern: "^[A-Za-z0-9]{16}$" });
+const groupId = t.String({ pattern: "^[a-z0-9][a-z0-9-]{1,62}$" });
 const paperEventSchema = t.Union([
   t.Object({ type: t.Literal("SERVER_READY"), endpoint: t.Optional(t.String()) }),
   t.Object({
@@ -32,6 +34,7 @@ const paperEventSchema = t.Union([
 export interface ApiDependencies {
   readonly queues: QueueService;
   readonly instances: InstanceController;
+  readonly dashboard: DashboardService;
   readonly logger: Logger;
   readonly isReady: () => boolean;
 }
@@ -87,6 +90,78 @@ export function createApp(dependencies: ApiDependencies) {
         .get("/proxy/servers", () => dependencies.instances.listProxyServers(), {
           detail: { tags: ["Proxy"] },
         })
+        .get("/dashboard/cluster", () => dependencies.dashboard.getCluster(), {
+          detail: {
+            tags: ["Dashboard"],
+            summary: "Read the current cluster topology",
+          },
+        })
+        .get(
+          "/dashboard/groups/:groupId/queue",
+          async ({ params, query, set, store }) => {
+            const detail = await dependencies.dashboard.getQueue(
+              params.groupId,
+              query.limit,
+            );
+            if (detail) return detail;
+            set.status = 404;
+            return {
+              error: "NOT_FOUND",
+              message: `Server group ${params.groupId} was not found`,
+              requestId: (store as { requestId?: string }).requestId,
+            };
+          },
+          {
+            params: t.Object({ groupId }),
+            query: t.Object({
+              limit: t.Optional(t.Numeric({ minimum: 1, maximum: 200 })),
+            }),
+            detail: {
+              tags: ["Dashboard"],
+              summary: "Read the oldest queued parties for a server group",
+            },
+          },
+        )
+        .get(
+          "/dashboard/instances/:instanceId",
+          async ({ params, set, store }) => {
+            const detail = await dependencies.dashboard.getInstance(params.instanceId);
+            if (detail) return detail;
+            set.status = 404;
+            return {
+              error: "NOT_FOUND",
+              message: `Instance ${params.instanceId} was not found`,
+              requestId: (store as { requestId?: string }).requestId,
+            };
+          },
+          {
+            params: t.Object({ instanceId: internalId }),
+            detail: {
+              tags: ["Dashboard"],
+              summary: "Read operational details for an instance",
+            },
+          },
+        )
+        .get(
+          "/dashboard/sessions/:sessionId",
+          async ({ params, set, store }) => {
+            const detail = await dependencies.dashboard.getSession(params.sessionId);
+            if (detail) return detail;
+            set.status = 404;
+            return {
+              error: "NOT_FOUND",
+              message: `Session ${params.sessionId} was not found`,
+              requestId: (store as { requestId?: string }).requestId,
+            };
+          },
+          {
+            params: t.Object({ sessionId: internalId }),
+            detail: {
+              tags: ["Dashboard"],
+              summary: "Read teams and transfers for a game session",
+            },
+          },
+        )
         .post(
           "/proxy/players/:playerId/disconnected",
           async ({ params, set }) => {
