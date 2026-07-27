@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { createApp } from "../src/api/app.ts";
-import type { Logger } from "../src/logger.ts";
-import type { DashboardService } from "../src/services/dashboard-service.ts";
-import type { InstanceController } from "../src/services/instance-controller.ts";
-import type { QueueService } from "../src/services/queue-service.ts";
+import { createApp } from "../../src/api/app.ts";
+import type { Logger } from "../../src/logger.ts";
+import type { DashboardService } from "../../src/services/dashboard-service.ts";
+import type { InstanceController } from "../../src/services/instance-controller.ts";
+import type { QueueService } from "../../src/services/queue-service.ts";
 
 function testApp() {
   const dashboard = {

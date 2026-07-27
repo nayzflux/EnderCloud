@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { nanoid } from "../src/id.ts";
+import { nanoid } from "../../src/id.ts";
 
 describe("nanoid", () => {
   test("generates 16 alphanumeric characters", () => {

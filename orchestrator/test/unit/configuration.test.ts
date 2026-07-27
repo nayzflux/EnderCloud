@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { parseDuration, parseGroup, parseVariant } from "../src/configuration/sync.ts";
-import { jsonParameter } from "../src/db/json.ts";
+import { parseDuration, parseGroup, parseVariant } from "../../src/configuration/sync.ts";
+import { jsonParameter } from "../../src/db/json.ts";
 
 describe("configuration", () => {
   test("parses duration units", () => {

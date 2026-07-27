@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { decideCapacity } from "../src/domain/capacity.ts";
-import { packParties } from "../src/domain/matchmaking.ts";
-import { shouldRetryFailedSession } from "../src/domain/session-recovery.ts";
+import { decideCapacity } from "../../src/domain/capacity.ts";
+import { packParties } from "../../src/domain/matchmaking.ts";
+import { shouldRetryFailedSession } from "../../src/domain/session-recovery.ts";
 import {
   assertAvailabilityTransition,
   assertLifecycleTransition,
   isWarmPending,
-} from "../src/domain/state-machines.ts";
-import { selectVariant } from "../src/domain/variant-selection.ts";
+} from "../../src/domain/state-machines.ts";
+import { selectVariant } from "../../src/domain/variant-selection.ts";
 
 describe("state machines", () => {
   test("accepts valid lifecycle transitions and rejects invalid ones", () => {
@@ -63,52 +63,74 @@ describe("capacity", () => {
   });
 });
 
-describe("matchmaking", () => {
-  test("keeps parties atomic and fills teams first-fit", () => {
-    const now = Date.now();
+describe("matchmaking (packParties)", () => {
+  const now = Date.now();
+
+  test("1.1 Atomicité: garde les groupes unis et ignore les groupes trop grands", () => {
     const result = packParties(
       [
         { entryId: "a", partyId: "a", playerIds: ["1", "2", "3"], joinedAt: new Date(now) },
-        { entryId: "b", partyId: "b", playerIds: ["4"], joinedAt: new Date(now + 1) },
-        { entryId: "c", partyId: "c", playerIds: ["5", "6"], joinedAt: new Date(now + 2) },
-        { entryId: "d", partyId: "d", playerIds: ["7", "8"], joinedAt: new Date(now + 3) },
+        { entryId: "b", partyId: "b", playerIds: ["4", "5", "6", "7", "8"], joinedAt: new Date(now) },
       ],
       2,
       4,
     );
-    expect(result.teams[0]?.playerIds).toEqual(["1", "2", "3", "4"]);
-    expect(result.teams[1]?.playerIds).toEqual(["5", "6", "7", "8"]);
+    // Le groupe "a" (3 joueurs) entre dans la première équipe.
+    expect(result.teams[0]?.playerIds).toEqual(["1", "2", "3"]);
+    // Le groupe "b" (5 joueurs) dépasse la taille d'équipe (4) et est ignoré.
+    expect(result.selected.map(s => s.entryId)).toEqual(["a"]);
   });
 
-  test("leaves an oversized backfill party available for a later session", () => {
-    const party = {
-      entryId: "party",
-      partyId: "party",
-      playerIds: ["4", "5"],
-      joinedAt: new Date(),
-    };
-    const firstSession = packParties(
-      [party],
+  test("1.2 Priorité FIFO: respecte l'ordre d'arrivée dans la file", () => {
+    const result = packParties(
+      [
+        { entryId: "g3", partyId: "g3", playerIds: ["5", "6"], joinedAt: new Date(now + 2) },
+        { entryId: "g1", partyId: "g1", playerIds: ["1", "2"], joinedAt: new Date(now) },
+        { entryId: "g2", partyId: "g2", playerIds: ["3", "4"], joinedAt: new Date(now + 1) },
+      ],
+      2,
+      4,
+      4, // maximumPlayers = 4
+    );
+    // G1 et G2 sont sélectionnés car ils sont arrivés en premier (G1 à now, G2 à now+1).
+    expect(result.selected.map(s => s.entryId)).toEqual(["g1", "g2"]);
+    expect(result.teams[0]?.playerIds).toEqual(["1", "2", "3", "4"]);
+  });
+
+  test("1.3 First-Fit: remplit la première équipe disponible avant de passer à la suivante", () => {
+    const result = packParties(
+      [
+        { entryId: "g1", partyId: "g1", playerIds: ["3", "4"], joinedAt: new Date(now) },
+      ],
       2,
       4,
       8,
       [
-        {
-          teamIndex: 0,
-          parties: [],
-          playerIds: ["a", "b", "c"],
-        },
-        {
-          teamIndex: 1,
-          parties: [],
-          playerIds: ["d", "e", "f"],
-        },
-      ],
+        { teamIndex: 0, parties: [], playerIds: ["1", "2"] }, // Reste 2 places
+        { teamIndex: 1, parties: [], playerIds: [] },         // Reste 4 places
+      ]
     );
-    expect(firstSession.selected).toHaveLength(0);
+    // g1 doit être placé dans l'équipe 0 car il y a de la place (2 joueurs existants + 2 nouveaux = 4)
+    expect(result.teams[0]?.playerIds).toEqual(["1", "2", "3", "4"]);
+    expect(result.teams[1]?.playerIds).toEqual([]);
+  });
 
-    const laterSession = packParties([party], 2, 4, 8);
-    expect(laterSession.selected.map((selected) => selected.entryId)).toEqual(["party"]);
+  test("1.4 Limite Globale: ne dépasse pas maximumPlayers même s'il y a de la place dans une équipe", () => {
+    const result = packParties(
+      [
+        { entryId: "new", partyId: "new", playerIds: ["5", "6"], joinedAt: new Date(now) },
+      ],
+      2,
+      4,
+      6, // maximumPlayers = 6
+      [
+        { teamIndex: 0, parties: [], playerIds: ["1", "2", "3"] }, // Reste 1 place
+        { teamIndex: 1, parties: [], playerIds: ["4", "5"] },      // Reste 2 places (physiquement possible pour 'new')
+      ]
+    );
+    // Total actuel: 5. Groupe 'new': 2. Total attendu: 7 > maximumPlayers (6).
+    // Donc le groupe 'new' ne doit pas être sélectionné.
+    expect(result.selected).toHaveLength(0);
   });
 });
 
