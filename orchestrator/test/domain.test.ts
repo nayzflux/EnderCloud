@@ -79,6 +79,37 @@ describe("matchmaking", () => {
     expect(result.teams[0]?.playerIds).toEqual(["1", "2", "3", "4"]);
     expect(result.teams[1]?.playerIds).toEqual(["5", "6", "7", "8"]);
   });
+
+  test("leaves an oversized backfill party available for a later session", () => {
+    const party = {
+      entryId: "party",
+      partyId: "party",
+      playerIds: ["4", "5"],
+      joinedAt: new Date(),
+    };
+    const firstSession = packParties(
+      [party],
+      2,
+      4,
+      8,
+      [
+        {
+          teamIndex: 0,
+          parties: [],
+          playerIds: ["a", "b", "c"],
+        },
+        {
+          teamIndex: 1,
+          parties: [],
+          playerIds: ["d", "e", "f"],
+        },
+      ],
+    );
+    expect(firstSession.selected).toHaveLength(0);
+
+    const laterSession = packParties([party], 2, 4, 8);
+    expect(laterSession.selected.map((selected) => selected.entryId)).toEqual(["party"]);
+  });
 });
 
 describe("variant selection", () => {

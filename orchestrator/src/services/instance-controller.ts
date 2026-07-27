@@ -1,5 +1,6 @@
 import type { AppConfig } from "../config.ts";
 import type { SqlClient } from "../db/client.ts";
+import type postgres from "postgres";
 import { jsonParameter } from "../db/json.ts";
 import type {
   PaperEvent,
@@ -103,6 +104,7 @@ export class InstanceController {
         await transaction`
           UPDATE server_instances
           SET lifecycle_state = 'STARTING',
+              starting_at = COALESCE(starting_at, now()),
               container_id = ${created.containerId},
               runtime_path = ${created.runtimePath},
               endpoint = ${created.endpoint},
@@ -134,30 +136,30 @@ export class InstanceController {
   }
 
   public async handlePaperEvent(instanceId: string, event: PaperEvent): Promise<void> {
-    await this.recordEvent("instance", instanceId, event.type, event);
     switch (event.type) {
       case "SERVER_READY":
         await this.markReady(instanceId, event.endpoint);
-        return;
+        break;
       case "PLAYER_JOINED":
         await this.playerJoined(instanceId, event.playerId, event.sessionId);
-        return;
+        break;
       case "PLAYER_LEFT":
         await this.playerLeft(instanceId, event.playerId, event.sessionId);
-        return;
+        break;
       case "HEARTBEAT":
         await this.heartbeat(instanceId, event.playerIds);
-        return;
+        break;
       case "GAME_STARTING":
-        await this.setSessionState(event.sessionId, "STARTING");
-        return;
+        await this.setSessionState(instanceId, event.sessionId, "STARTING");
+        break;
       case "GAME_STARTED":
-        await this.setSessionState(event.sessionId, "RUNNING");
-        return;
+        await this.setSessionState(instanceId, event.sessionId, "RUNNING");
+        break;
       case "GAME_FINISHED":
-        await this.finishSession(event.sessionId, event.results);
-        return;
+        await this.finishSession(instanceId, event.sessionId, event.results);
+        break;
     }
+    await this.recordEvent("instance", instanceId, event.type, event);
   }
 
   public async markReady(instanceId: string, reportedEndpoint?: string): Promise<void> {
@@ -179,7 +181,16 @@ export class InstanceController {
         i.player_count AS "playerCount",
         COALESCE(g.maximum_players_per_instance, g.maximum_players, 0) AS "maximumPlayers"
     `;
-    if (rows[0]) await this.bus.publishRegistry("SERVER_REGISTERED", rows[0]);
+    if (rows[0]) {
+      await this.bus.publishRegistry("SERVER_REGISTERED", rows[0]);
+      return;
+    }
+    const current = await this.sql<{ lifecycle_state: string }[]>`
+      SELECT lifecycle_state FROM server_instances WHERE id = ${instanceId}
+    `;
+    if (current[0]?.lifecycle_state !== "RUNNING") {
+      throw new Error(`Instance ${instanceId} is unavailable`);
+    }
   }
 
   public async beginDrain(instanceId: string): Promise<boolean> {
@@ -326,10 +337,11 @@ export class InstanceController {
     sessionId?: string,
   ): Promise<void> {
     await this.sql.begin(async (transaction) => {
-      const instanceSessions = await transaction<{ session_id: string | null }[]>`
-        SELECT session_id FROM server_instances WHERE id = ${instanceId}
-      `;
-      const effectiveSessionId = sessionId ?? instanceSessions[0]?.session_id ?? undefined;
+      const effectiveSessionId = await this.validateEventSession(
+        transaction,
+        instanceId,
+        sessionId,
+      );
       await transaction`
         INSERT INTO instance_players (instance_id, player_id)
         VALUES (${instanceId}, ${playerId})
@@ -345,10 +357,16 @@ export class InstanceController {
       `;
       if (effectiveSessionId) {
         await transaction`
-          UPDATE session_players
-          SET state = 'CONNECTED', connected_at = COALESCE(connected_at, now())
-          WHERE session_id = ${effectiveSessionId} AND player_id = ${playerId}
-            AND state IN ('SELECTED', 'TRANSFERRING')
+          UPDATE session_players sp
+          SET state = 'CONNECTED',
+              connected_at = COALESCE(connected_at, now()),
+              left_at = NULL
+          FROM game_sessions s
+          WHERE sp.session_id = ${effectiveSessionId}
+            AND sp.player_id = ${playerId}
+            AND s.id = sp.session_id
+            AND s.state IN ('TRANSFERRING', 'WAITING')
+            AND sp.state IN ('SELECTED', 'TRANSFERRING', 'LEFT')
         `;
       }
     });
@@ -360,10 +378,11 @@ export class InstanceController {
     sessionId?: string,
   ): Promise<void> {
     await this.sql.begin(async (transaction) => {
-      const instanceSessions = await transaction<{ session_id: string | null }[]>`
-        SELECT session_id FROM server_instances WHERE id = ${instanceId}
-      `;
-      const effectiveSessionId = sessionId ?? instanceSessions[0]?.session_id ?? undefined;
+      const effectiveSessionId = await this.validateEventSession(
+        transaction,
+        instanceId,
+        sessionId,
+      );
       await transaction`
         DELETE FROM instance_players
         WHERE instance_id = ${instanceId} AND player_id = ${playerId}
@@ -388,6 +407,7 @@ export class InstanceController {
 
   private async heartbeat(instanceId: string, playerIds: readonly string[]): Promise<void> {
     await this.sql.begin(async (transaction) => {
+      const effectiveSessionId = await this.validateEventSession(transaction, instanceId);
       for (const playerId of playerIds) {
         await transaction`
           INSERT INTO instance_players (instance_id, player_id)
@@ -395,12 +415,40 @@ export class InstanceController {
           ON CONFLICT (instance_id, player_id)
           DO UPDATE SET last_seen_at = now()
         `;
+        if (effectiveSessionId) {
+          await transaction`
+            UPDATE session_players sp
+            SET state = 'CONNECTED',
+                connected_at = COALESCE(connected_at, now()),
+                left_at = NULL
+            FROM game_sessions s
+            WHERE sp.session_id = ${effectiveSessionId}
+              AND sp.player_id = ${playerId}
+              AND s.id = sp.session_id
+              AND s.state IN ('TRANSFERRING', 'WAITING')
+              AND sp.state IN ('SELECTED', 'TRANSFERRING', 'LEFT')
+          `;
+        }
       }
       await transaction`
         DELETE FROM instance_players
         WHERE instance_id = ${instanceId}
           AND last_seen_at < now() - interval '30 seconds'
       `;
+      if (effectiveSessionId) {
+        await transaction`
+          UPDATE session_players sp
+          SET state = 'LEFT', left_at = now()
+          WHERE sp.session_id = ${effectiveSessionId}
+            AND sp.state = 'CONNECTED'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM instance_players ip
+              WHERE ip.instance_id = ${instanceId}
+                AND ip.player_id = sp.player_id
+            )
+        `;
+      }
       await transaction`
         UPDATE server_instances
         SET player_count = (
@@ -411,29 +459,91 @@ export class InstanceController {
     });
   }
 
-  private async setSessionState(sessionId: string, state: "STARTING" | "RUNNING"): Promise<void> {
-    await this.sql`
-      UPDATE game_sessions
+  private async setSessionState(
+    instanceId: string,
+    sessionId: string,
+    state: "STARTING" | "RUNNING",
+  ): Promise<void> {
+    const rows = await this.sql<{ id: string }[]>`
+      UPDATE game_sessions s
       SET state = ${state},
           started_at = CASE WHEN ${state} = 'RUNNING' THEN COALESCE(started_at, now()) ELSE started_at END,
           updated_at = now()
-      WHERE id = ${sessionId}
+      FROM server_instances i
+      WHERE s.id = ${sessionId}
+        AND i.id = ${instanceId}
+        AND i.session_id = s.id
+        AND s.instance_id = i.id
         AND (
           (${state} = 'STARTING' AND state IN ('TRANSFERRING', 'WAITING'))
           OR (${state} = 'RUNNING' AND state = 'STARTING')
         )
+      RETURNING s.id
     `;
+    if (rows.length > 0) return;
+    const current = await this.sql<{ state: string }[]>`
+      SELECT s.state
+      FROM game_sessions s
+      JOIN server_instances i ON i.id = s.instance_id AND i.session_id = s.id
+      WHERE s.id = ${sessionId} AND i.id = ${instanceId}
+    `;
+    if (current[0]?.state === state) return;
+    throw this.invalidSessionEvent(instanceId, sessionId);
   }
 
-  private async finishSession(sessionId: string, results: unknown): Promise<void> {
+  private async finishSession(
+    instanceId: string,
+    sessionId: string,
+    results: unknown,
+  ): Promise<void> {
     const rows = await this.sql<{ instance_id: string }[]>`
-      UPDATE game_sessions
+      UPDATE game_sessions s
       SET state = 'FINISHED', finished_at = now(), updated_at = now()
-      WHERE id = ${sessionId} AND state IN ('STARTING', 'RUNNING')
-      RETURNING instance_id
+      FROM server_instances i
+      WHERE s.id = ${sessionId}
+        AND i.id = ${instanceId}
+        AND i.session_id = s.id
+        AND s.instance_id = i.id
+        AND s.state IN ('STARTING', 'RUNNING')
+      RETURNING s.instance_id
     `;
+    if (rows.length === 0) {
+      const current = await this.sql<{ state: string }[]>`
+        SELECT s.state
+        FROM game_sessions s
+        JOIN server_instances i ON i.id = s.instance_id AND i.session_id = s.id
+        WHERE s.id = ${sessionId} AND i.id = ${instanceId}
+      `;
+      if (current[0]?.state === "FINISHED") return;
+      throw this.invalidSessionEvent(instanceId, sessionId);
+    }
     await this.recordEvent("session", sessionId, "GAME_RESULTS", results ?? {});
     if (rows[0]?.instance_id) await this.beginDrain(rows[0].instance_id);
+  }
+
+  private async validateEventSession(
+    transaction: postgres.TransactionSql,
+    instanceId: string,
+    providedSessionId?: string,
+  ): Promise<string | undefined> {
+    const rows = await transaction<{ session_id: string | null }[]>`
+      SELECT session_id
+      FROM server_instances
+      WHERE id = ${instanceId}
+      FOR SHARE
+    `;
+    const instance = rows[0];
+    if (!instance) {
+      throw new Error(`Instance ${instanceId} is unavailable`);
+    }
+    if (providedSessionId && providedSessionId !== instance.session_id) {
+      throw this.invalidSessionEvent(instanceId, providedSessionId);
+    }
+    return instance.session_id ?? undefined;
+  }
+
+  private invalidSessionEvent(instanceId: string, sessionId: string): Error {
+    return new Error(`Session ${sessionId} is unavailable for instance ${instanceId}`);
   }
 
   private async recordEvent(

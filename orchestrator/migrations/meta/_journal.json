@@ -22,6 +22,13 @@
       "when": 1785090600000,
       "tag": "0002_active_session_instance_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785142800000,
+      "tag": "0003_transfer_reliability",
+      "breakpoints": true
     }
   ]
 }

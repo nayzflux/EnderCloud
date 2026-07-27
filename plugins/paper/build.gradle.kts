@@ -34,7 +34,8 @@ publishing {
     publications {
         create<MavenPublication>("mavenJava") {
             from(components["shadow"])
-            artifactId = "endercloud-paper"
+            groupId = "fr.nayz.endercloud"
+            artifactId = "paper"
         }
     }
 }

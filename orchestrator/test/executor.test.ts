@@ -5,9 +5,9 @@ test("Docker instance names include the variant and unique instance id", () => {
   expect(
     instanceName(
       "skywars-solo-japan",
-      "6c3e143b-9357-4db2-9c81-a64f69ec8d0d",
+      "aB3dE5fG7hJ9kL2m",
     ),
   ).toBe(
-    "endercloud-skywars-solo-japan-6c3e143b-9357-4db2-9c81-a64f69ec8d0d",
+    "endercloud-skywars-solo-japan-aB3dE5fG7hJ9kL2m",
   );
 });

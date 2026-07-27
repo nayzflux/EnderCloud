@@ -14,6 +14,7 @@ import { Matchmaker } from "./services/matchmaker.ts";
 import { QueueService } from "./services/queue-service.ts";
 import { Reconciler } from "./services/reconciler.ts";
 import { SessionController } from "./services/session-controller.ts";
+import { TransferService } from "./services/transfer-service.ts";
 import { VariantSelector } from "./services/variant-selector.ts";
 
 const config = loadConfig();
@@ -46,12 +47,14 @@ const instances = new InstanceController(
 );
 const queues = new QueueService(sql);
 const capacity = new CapacityController(sql, instances, logger);
-const matchmaker = new Matchmaker(sql, bus, logger);
-const sessions = new SessionController(sql, instances, bus, config, logger);
+const transfers = new TransferService(sql, bus, config, logger);
+const matchmaker = new Matchmaker(sql, transfers, logger);
+const sessions = new SessionController(sql, instances, transfers, config, logger);
 const reconciler = new Reconciler(sql, executor, instances, logger);
 
 await reconciler.tick();
 await capacity.tick();
+await transfers.tick();
 ready = true;
 
 const app = createApp({ queues, instances, logger, isReady: () => ready });
@@ -62,6 +65,7 @@ const scheduler = new Scheduler(logger);
 scheduler.every("capacity", config.capacityIntervalMs, () => capacity.tick());
 scheduler.every("matchmaking", config.matchmakingIntervalMs, () => matchmaker.tick());
 scheduler.every("sessions", config.matchmakingIntervalMs, () => sessions.tick());
+scheduler.every("transfers", config.matchmakingIntervalMs, () => transfers.tick());
 scheduler.every("reconciliation", config.reconcileIntervalMs, () => reconciler.tick());
 
 logger.info("EnderCloud orchestrator started", {

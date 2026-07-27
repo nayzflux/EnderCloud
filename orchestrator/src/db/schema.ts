@@ -108,6 +108,7 @@ export const gameSessions = pgTable(
     assignmentRevision: integer("assignment_revision").notNull().default(1),
     assignmentAcknowledgedAt: timestamp("assignment_acknowledged_at", { withTimezone: true }),
     waitingDeadline: timestamp("waiting_deadline", { withTimezone: true }).notNull(),
+    transferStartedAt: timestamp("transfer_started_at", { withTimezone: true }),
     retryCount: integer("retry_count").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     startedAt: timestamp("started_at", { withTimezone: true }),
@@ -139,6 +140,7 @@ export const serverInstances = pgTable(
     playerCount: integer("player_count").notNull().default(0),
     drainDeadline: timestamp("drain_deadline", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    startingAt: timestamp("starting_at", { withTimezone: true }),
     runningAt: timestamp("running_at", { withTimezone: true }),
     drainingAt: timestamp("draining_at", { withTimezone: true }),
     stoppedAt: timestamp("stopped_at", { withTimezone: true }),
@@ -208,6 +210,7 @@ export const sessionPlayers = pgTable(
     teamIndex: integer("team_index").notNull(),
     state: sessionPlayerStateEnum("state").notNull().default("SELECTED"),
     selectedAt: timestamp("selected_at", { withTimezone: true }).defaultNow().notNull(),
+    transferringAt: timestamp("transferring_at", { withTimezone: true }),
     connectedAt: timestamp("connected_at", { withTimezone: true }),
     leftAt: timestamp("left_at", { withTimezone: true }),
   },
@@ -230,6 +233,32 @@ export const instancePlayers = pgTable(
   (table) => [
     primaryKey({ columns: [table.instanceId, table.playerId] }),
     index("instance_players_player_idx").on(table.playerId),
+  ],
+);
+
+export const transferCommands = pgTable(
+  "transfer_commands",
+  {
+    id: text("id").primaryKey(),
+    instanceId: text("instance_id")
+      .notNull()
+      .references(() => serverInstances.id, { onDelete: "cascade" }),
+    sessionId: text("session_id").references(() => gameSessions.id, { onDelete: "cascade" }),
+    payload: jsonb("payload").notNull(),
+    state: text("state").notNull().default("PENDING"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow().notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("transfer_commands_due_idx").on(table.state, table.nextAttemptAt),
+    index("transfer_commands_session_idx").on(table.sessionId),
+    check(
+      "transfer_commands_state_check",
+      sql`${table.state} IN ('PENDING', 'COMPLETED', 'EXPIRED', 'CANCELLED')`,
+    ),
   ],
 );
 
@@ -287,6 +316,7 @@ export const schema = {
   queueEntryPlayers,
   sessionPlayers,
   instancePlayers,
+  transferCommands,
   commands,
   nodes,
   events,

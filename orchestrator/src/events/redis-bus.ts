@@ -12,7 +12,8 @@ export class RedisEventBus {
   public constructor(url: string, logger: Logger) {
     this.redis = new Redis(url, {
       lazyConnect: true,
-      maxRetriesPerRequest: null,
+      maxRetriesPerRequest: 1,
+      enableOfflineQueue: false,
       retryStrategy: (attempt) => Math.min(250 * 2 ** attempt, 5_000),
     });
     this.redis.on("error", (error) =>
@@ -39,6 +40,7 @@ export class RedisEventBus {
     readonly instanceId: string;
     readonly endpoint: string;
     readonly players: readonly string[];
+    readonly commandId?: string;
   }): Promise<void> {
     await this.publish(TRANSFER_CHANNEL, "TRANSFER_PLAYERS", payload);
   }

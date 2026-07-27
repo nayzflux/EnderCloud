@@ -1,4 +1,4 @@
-package fr.endercloud.paper;
+package fr.nayz.endercloud.paper;
 
 import fr.endercloud.core.api.EnderCloudPaperApi;
 import fr.endercloud.core.http.EnderCloudClient;
@@ -20,11 +20,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 public final class EnderCloudPaperPlugin extends JavaPlugin
         implements Listener, EnderCloudPaperApi {
     private final AtomicReference<SessionAssignment> assignment = new AtomicReference<>();
+    private final AtomicInteger acknowledgedRevision = new AtomicInteger();
+    private final AtomicBoolean serverReadyAcknowledged = new AtomicBoolean();
     private EnderCloudClient orchestrator;
     private String instanceId;
 
@@ -50,8 +54,15 @@ public final class EnderCloudPaperPlugin extends JavaPlugin
                 ServicePriority.Normal
         );
 
-        String endpoint = System.getenv("ENDERCLOUD_REPORTED_ENDPOINT");
-        publish(PaperEvent.serverReady(endpoint));
+        publishServerReady();
+        Bukkit.getScheduler().runTaskTimerAsynchronously(
+                this,
+                () -> {
+                    if (!serverReadyAcknowledged.get()) publishServerReady();
+                },
+                100L,
+                100L
+        );
         Bukkit.getScheduler().runTaskTimer(this, this::sendHeartbeat, 200L, 200L);
         Bukkit.getScheduler().runTaskTimerAsynchronously(
                 this,
@@ -124,6 +135,18 @@ public final class EnderCloudPaperPlugin extends JavaPlugin
         );
     }
 
+    private void publishServerReady() {
+        String endpoint = System.getenv("ENDERCLOUD_REPORTED_ENDPOINT");
+        orchestrator.publishEvent(instanceId, PaperEvent.serverReady(endpoint))
+                .thenRun(() -> serverReadyAcknowledged.set(true))
+                .exceptionally(error -> {
+                    getLogger().warning(
+                            "Unable to confirm SERVER_READY: " + error.getMessage()
+                    );
+                    return null;
+                });
+    }
+
     private void sendHeartbeat() {
         List<java.util.UUID> playerIds = Bukkit.getOnlinePlayers().stream()
                 .map(player -> player.getUniqueId())
@@ -133,22 +156,32 @@ public final class EnderCloudPaperPlugin extends JavaPlugin
 
     private void refreshAssignment() {
         orchestrator.getAssignment(instanceId)
-                .thenAccept(optional -> optional.ifPresent(next -> {
-                    SessionAssignment previous = assignment.get();
-                    if (previous == null || previous.revision() < next.revision()) {
-                        assignment.set(next);
-                        orchestrator.acknowledgeAssignment(instanceId, next.revision())
-                                .exceptionally(error -> {
-                                    getLogger().warning(
-                                            "Unable to acknowledge assignment: "
-                                                    + error.getMessage()
-                                    );
-                                    return false;
-                                });
-                    } else {
-                        assignment.set(next);
+                .thenAccept(optional -> {
+                    if (optional.isEmpty()) {
+                        assignment.set(null);
+                        acknowledgedRevision.set(0);
+                        return;
                     }
-                }))
+                    SessionAssignment next = optional.orElseThrow();
+                    assignment.set(next);
+                    if (acknowledgedRevision.get() >= next.revision()) return;
+                    orchestrator.acknowledgeAssignment(instanceId, next.revision())
+                            .thenAccept(acknowledged -> {
+                                if (acknowledged) {
+                                    acknowledgedRevision.accumulateAndGet(
+                                            next.revision(),
+                                            Math::max
+                                    );
+                                }
+                            })
+                            .exceptionally(error -> {
+                                getLogger().warning(
+                                        "Unable to acknowledge assignment: "
+                                                + error.getMessage()
+                                );
+                                return null;
+                            });
+                })
                 .exceptionally(error -> {
                     getLogger().warning("Unable to refresh assignment: " + error.getMessage());
                     return null;

@@ -1,4 +1,4 @@
-package fr.endercloud.velocity;
+package fr.nayz.endercloud.velocity;
 
 import org.junit.jupiter.api.Test;
 
