@@ -9,11 +9,14 @@ import { eq } from "drizzle-orm";
 import { nanoid } from "../../src/id.ts";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 
-const mockLogger: Logger = {
+const mockLogger = {
+  minimum: "debug",
+  debug: () => {},
   info: () => {},
   warn: () => {},
   error: console.error,
-};
+  write: () => {},
+} as unknown as Logger;
 
 const mockTransfers = {
   enqueue: mock(async () => {
@@ -22,8 +25,8 @@ const mockTransfers = {
 } as unknown as TransferService;
 
 let container: StartedPostgreSqlContainer;
-let sql: SqlClient["sql"];
-let db: SqlClient["db"];
+let sql: ReturnType<typeof createDatabase>["sql"];
+let db: ReturnType<typeof createDatabase>["db"];
 let matchmaker: Matchmaker;
 
 async function cleanDb() {
@@ -81,7 +84,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
 
   beforeEach(async () => {
     await cleanDb();
-    mockTransfers.enqueue.mockClear();
+    (mockTransfers.enqueue as any).mockClear();
   });
 
   afterAll(async () => {
@@ -122,15 +125,15 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     // Assertions
     const sessions = await db.select().from(gameSessions);
     expect(sessions).toHaveLength(1);
-    expect(sessions[0].state).toBe("TRANSFERRING");
-    expect(sessions[0].instanceId).toBe(instanceId);
+    expect(sessions[0]!.state).toBe("TRANSFERRING");
+    expect(sessions[0]!.instanceId).toBe(instanceId);
 
     const instances = await db.select().from(serverInstances).where(eq(serverInstances.id, instanceId));
-    expect(instances[0].availabilityState).toBe("RESERVED");
-    expect(instances[0].sessionId).toBe(sessions[0].id);
+    expect(instances[0]!.availabilityState).toBe("RESERVED");
+    expect(instances[0]!.sessionId).toBe(sessions[0]!.id);
 
     const entries = await db.select().from(queueEntries);
-    expect(entries[0].state).toBe("SELECTED");
+    expect(entries[0]!.state).toBe("SELECTED");
     
     expect(mockTransfers.enqueue).toHaveBeenCalledTimes(1);
   });
@@ -154,8 +157,8 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
 
     const sessions = await db.select().from(gameSessions);
     expect(sessions).toHaveLength(1);
-    expect(sessions[0].state).toBe("WAITING_FOR_INSTANCE");
-    expect(sessions[0].instanceId).toBeNull();
+    expect(sessions[0]!.state).toBe("WAITING_FOR_INSTANCE");
+    expect(sessions[0]!.instanceId).toBeNull();
     
     expect(mockTransfers.enqueue).toHaveBeenCalledTimes(0);
   });
@@ -200,15 +203,15 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
 
     // Assertions
     const sessions = await db.select().from(gameSessions).where(eq(gameSessions.id, sessionId));
-    expect(sessions[0].state).toBe("TRANSFERRING");
-    expect(sessions[0].instanceId).toBe(instanceId);
+    expect(sessions[0]!.state).toBe("TRANSFERRING");
+    expect(sessions[0]!.instanceId).toBe(instanceId);
 
     const instances = await db.select().from(serverInstances).where(eq(serverInstances.id, instanceId));
-    expect(instances[0].availabilityState).toBe("RESERVED");
-    expect(instances[0].sessionId).toBe(sessionId);
+    expect(instances[0]!.availabilityState).toBe("RESERVED");
+    expect(instances[0]!.sessionId).toBe(sessionId);
 
     const sPlayers = await db.select().from(sessionPlayers).where(eq(sessionPlayers.sessionId, sessionId));
-    expect(sPlayers[0].state).toBe("TRANSFERRING");
+    expect(sPlayers[0]!.state).toBe("TRANSFERRING");
     
     expect(mockTransfers.enqueue).toHaveBeenCalledTimes(1);
   });
@@ -242,7 +245,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     expect(sessions).toHaveLength(0);
     
     const entries = await db.select().from(queueEntries);
-    expect(entries[0].state).toBe("QUEUED");
+    expect(entries[0]!.state).toBe("QUEUED");
   });
 
   test("3.1 & 3.2 Successful Backfill and Team Stability", async () => {
@@ -298,7 +301,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     await matchmaker.tick();
 
     const sessions = await db.select().from(gameSessions).where(eq(gameSessions.id, sessionId));
-    expect(sessions[0].assignmentRevision).toBe(2);
+    expect(sessions[0]!.assignmentRevision).toBe(2);
 
     const sPlayers = await db.select().from(sessionPlayers).where(eq(sessionPlayers.sessionId, sessionId));
     expect(sPlayers).toHaveLength(3);

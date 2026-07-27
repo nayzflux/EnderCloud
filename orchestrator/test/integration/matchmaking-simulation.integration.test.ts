@@ -10,11 +10,14 @@ import { nanoid } from "../../src/id.ts";
 import { eq, count } from "drizzle-orm";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 
-const mockLogger: Logger = {
+const mockLogger = {
+  minimum: "debug",
+  debug: () => {},
   info: () => {},
   warn: () => {},
   error: console.error,
-};
+  write: () => {},
+} as unknown as Logger;
 
 const mockTransfers = {
   enqueue: mock(async () => {
@@ -25,8 +28,8 @@ const mockTransfers = {
 } as unknown as TransferService;
 
 let container: StartedPostgreSqlContainer;
-let sql: SqlClient["sql"];
-let db: SqlClient["db"];
+let sql: ReturnType<typeof createDatabase>["sql"];
+let db: ReturnType<typeof createDatabase>["db"];
 let matchmaker: Matchmaker;
 let queueService: QueueService;
 
@@ -51,7 +54,7 @@ describe("Mega Simulation End-to-End Matchmaking", () => {
 
   beforeEach(async () => {
     await cleanDb();
-    mockTransfers.enqueue.mockClear();
+    (mockTransfers.enqueue as any).mockClear();
   });
 
   afterAll(async () => {
@@ -167,29 +170,29 @@ describe("Mega Simulation End-to-End Matchmaking", () => {
     const sessionsStep1 = await db.select().from(gameSessions);
     expect(sessionsStep1).toHaveLength(3); // 3 sessions created!
     
-    const activeSession = sessionsStep1.find(s => s.state === "TRANSFERRING");
+    const activeSession = sessionsStep1.find((s: any) => s.state === "TRANSFERRING");
     expect(activeSession).toBeDefined();
     expect(activeSession?.instanceId).toBe(warmInstanceId);
     
-    const waitingSessions = sessionsStep1.filter(s => s.state === "WAITING_FOR_INSTANCE");
+    const waitingSessions = sessionsStep1.filter((s: any) => s.state === "WAITING_FOR_INSTANCE");
     expect(waitingSessions).toHaveLength(2);
     
     expect(mockTransfers.enqueue).toHaveBeenCalledTimes(1); // Only for the warm instance
-    mockTransfers.enqueue.mockClear();
+    (mockTransfers.enqueue as any).mockClear();
     
     console.log("-> Start 4. Disconnection");
     // ---------------------------------------------------------
     // 4. Player disconnected before departure
     // ---------------------------------------------------------
     // We take a player from the first session
-    const leaverId = party1[0];
+    const leaverId = party1[0] as string;
     
     // Simulates a network disconnect from the proxy
     await queueService.networkDisconnected(leaverId);
     
     // Verify their state is 'LEFT' in session_players
     const playerRecord = await db.select().from(sessionPlayers).where(eq(sessionPlayers.playerId, leaverId));
-    expect(playerRecord[0].state).toBe("LEFT");
+    expect(playerRecord[0]!.state).toBe("LEFT");
 
     console.log("-> Start 5. Backfill");
     // ---------------------------------------------------------
@@ -202,13 +205,13 @@ describe("Mega Simulation End-to-End Matchmaking", () => {
     console.log("-> End Matchmaker Tick 2");
     
     // The solo player must have filled the empty spot (Backfill)
-    const soloRecord = await db.select().from(sessionPlayers).where(eq(sessionPlayers.playerId, soloPlayer[0]));
-    expect(soloRecord[0].sessionId).toBe(activeSession!.id);
-    expect(soloRecord[0].state).toBe("TRANSFERRING"); // Immediately transferring since the instance is warm
+    const soloRecord = await db.select().from(sessionPlayers).where(eq(sessionPlayers.playerId, soloPlayer[0] as string));
+    expect(soloRecord[0]!.sessionId).toBe(activeSession!.id);
+    expect(soloRecord[0]!.state).toBe("TRANSFERRING"); // Immediately transferring since the instance is warm
     
     // A new transfer command was emitted (only for them)
     expect(mockTransfers.enqueue).toHaveBeenCalledTimes(1);
-    mockTransfers.enqueue.mockClear();
+    (mockTransfers.enqueue as any).mockClear();
 
     console.log("-> Start 6. Autoscaling");
     // ---------------------------------------------------------
@@ -243,10 +246,10 @@ describe("Mega Simulation End-to-End Matchmaking", () => {
     
     const sessionsFinal = await db.select().from(gameSessions);
     // No sessions should be waiting anymore
-    const remainingWaiting = sessionsFinal.filter(s => s.state === "WAITING_FOR_INSTANCE");
+    const remainingWaiting = sessionsFinal.filter((s: any) => s.state === "WAITING_FOR_INSTANCE");
     expect(remainingWaiting).toHaveLength(0);
     
-    const transferring = sessionsFinal.filter(s => s.state === "TRANSFERRING");
+    const transferring = sessionsFinal.filter((s: any) => s.state === "TRANSFERRING");
     expect(transferring).toHaveLength(3); // All 3 sessions are transferring
     
     // Transfer commands sent for the two newly bound sessions
@@ -261,15 +264,15 @@ describe("Mega Simulation End-to-End Matchmaking", () => {
     const finalPlayers = await db.select().from(sessionPlayers);
     expect(finalPlayers).toHaveLength(49);
     
-    const leftPlayers = finalPlayers.filter(p => p.state === "LEFT");
+    const leftPlayers = finalPlayers.filter((p: any) => p.state === "LEFT");
     expect(leftPlayers).toHaveLength(1);
-    expect(leftPlayers[0].playerId).toBe(leaverId);
+    expect(leftPlayers[0]!.playerId).toBe(leaverId);
 
-    const transferringPlayers = finalPlayers.filter(p => p.state === "TRANSFERRING");
+    const transferringPlayers = finalPlayers.filter((p: any) => p.state === "TRANSFERRING");
     expect(transferringPlayers).toHaveLength(48);
 
     const finalQueue = await db.select({ count: count() }).from(queueEntries).where(eq(queueEntries.state, "QUEUED"));
-    expect(finalQueue[0].count).toBe(0); // Empty queue
+    expect(finalQueue[0]!.count).toBe(0); // Empty queue
     console.log("-> End test");
   });
 });
