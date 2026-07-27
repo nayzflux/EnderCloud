@@ -1,28 +1,25 @@
-import type {
-  Edge,
-  MarkerType,
-  Node,
-  XYPosition,
-} from "@xyflow/react";
+import type { Edge, MarkerType, Node } from "@xyflow/react";
 import type {
   DashboardClusterSnapshot,
   DashboardGroup,
   DashboardInstance,
   DashboardSession,
 } from "./contracts";
+import { matchesInstanceFilter, type InstanceFilter } from "./status";
 
-export type ClusterNodeKind = "group" | "queue" | "pool" | "instance" | "session";
-export type ClusterStateFilter =
-  | "all"
-  | "warm"
-  | "reserved"
-  | "starting"
-  | "attention";
+export type ClusterNodeKind =
+  | "groupFrame"
+  | "queue"
+  | "pool"
+  | "instance"
+  | "session";
 
-export interface ClusterSelection {
-  readonly kind: "queue" | "instance" | "session";
+/** Caption drawn inside a group frame to name a row of nodes. */
+export interface LaneLabel {
   readonly id: string;
-  readonly groupId: string;
+  readonly text: string;
+  readonly x: number;
+  readonly y: number;
 }
 
 export interface ClusterNodeData extends Record<string, unknown> {
@@ -30,132 +27,86 @@ export interface ClusterNodeData extends Record<string, unknown> {
   readonly group: DashboardGroup;
   readonly instance?: DashboardInstance;
   readonly session?: DashboardSession;
-  readonly selection?: ClusterSelection;
+  /** Set on session nodes that have no instance yet. */
+  readonly waiting?: boolean;
+  /** Set on group frames. */
+  readonly lanes?: readonly LaneLabel[];
 }
 
 export type ClusterFlowNode = Node<ClusterNodeData, ClusterNodeKind>;
 
 export interface ClusterFlowFilters {
   readonly groupId: string;
-  readonly state: ClusterStateFilter;
+  readonly state: InstanceFilter;
   readonly search: string;
 }
 
 export interface ClusterFlowModel {
-  readonly nodes: ClusterFlowNode[];
-  readonly edges: Edge[];
-  readonly width: number;
-  readonly height: number;
+  readonly nodes: readonly ClusterFlowNode[];
+  readonly edges: readonly Edge[];
 }
 
-const groupGap = 64;
-const groupHeaderHeight = 88;
-const groupPadding = 32;
-const laneGap = 24;
-const queueWidth = 184;
-const poolWidth = 210;
-const instanceWidth = 240;
-const instanceColumnGap = 28;
-const instanceRowHeight = 350;
-const columns = 4;
-const minimumGroupWidth = 1_460;
+/*
+ * Each group is drawn as a top-down tree: queue → warm pool → instances →
+ * sessions. Every node takes its single inbound edge on the top and emits its
+ * outbound edges from the bottom, so lines can only ever run downwards — no
+ * loops, no back-references, and never two lines between the same pair.
+ *
+ * Two line styles, one meaning each:
+ *   solid  — an established link (the pool holds that instance, that instance
+ *            runs that session)
+ *   dashed — a pending link (that session is still waiting for an instance)
+ *
+ * Node sizes are declared rather than measured: the layout is deterministic, it
+ * lets React Flow draw edges and the minimap without a measurement pass, and it
+ * stops nodes from shifting on every five-second refresh.
+ */
+const HEADER_HEIGHT = 76;
+const PADDING = 28;
+const LANE_LABEL_HEIGHT = 24;
+const COLUMN_GAP = 32;
+const GROUP_GAP = 48;
+const QUEUE_TO_POOL_GAP = 28;
+const POOL_TO_INSTANCES_GAP = 52;
+const INSTANCE_TO_SESSION_GAP = 26;
 
-function matchesState(
-  instance: DashboardInstance,
-  state: ClusterStateFilter,
-): boolean {
-  switch (state) {
-    case "warm":
-      return (
-        instance.lifecycleState === "RUNNING" &&
-        instance.availabilityState === "OPEN"
-      );
-    case "reserved":
-      return instance.availabilityState === "RESERVED";
-    case "starting":
-      return (
-        instance.lifecycleState === "CREATING" ||
-        instance.lifecycleState === "STARTING"
-      );
-    case "attention":
-      return (
-        instance.lifecycleState === "FAILED" ||
-        instance.lifecycleState === "ORPHANED" ||
-        instance.lifecycleState === "DRAINING" ||
-        instance.lifecycleState === "STOPPING"
-      );
-    case "all":
-      return true;
-  }
-}
+const QUEUE_SIZE = { width: 216, height: 140 } as const;
+const POOL_SIZE = { width: 216, height: 116 } as const;
+const INSTANCE_SIZE = { width: 260, height: 148 } as const;
+const SESSION_SIZE = { width: 260, height: 92 } as const;
+const WAITING_SIZE = { width: 260, height: 112 } as const;
 
-function matchesSearch(
-  group: DashboardGroup,
-  instance: DashboardInstance,
-  search: string,
-): boolean {
+/** Instances, waiting sessions and hosted sessions share one column pitch. */
+const COLUMN_PITCH = INSTANCE_SIZE.width + COLUMN_GAP;
+/** Enough room for the frame header to lay out, even with nothing under it. */
+const MIN_CONTENT_WIDTH = 560;
+
+function matchesSearch(values: readonly string[], search: string): boolean {
   if (!search) return true;
-  return [
-    group.id,
-    instance.id,
-    instance.variantId,
-    instance.endpoint ?? "",
-    instance.sessionId ?? "",
-  ].some((value) => value.toLocaleLowerCase("fr").includes(search));
+  return values.some((value) => value.toLowerCase().includes(search));
 }
 
-function sessionMatchesSearch(
-  group: DashboardGroup,
-  session: DashboardSession,
-  search: string,
-): boolean {
-  if (!search) return true;
-  return [group.id, session.id, session.instanceId ?? "", session.state].some(
-    (value) => value.toLocaleLowerCase("fr").includes(search),
-  );
-}
-
-function childPosition(x: number, y: number): XYPosition {
-  return { x, y };
-}
-
-function edge(
-  id: string,
-  source: string,
-  target: string,
-  dashed = false,
-): Edge {
+function edge(source: string, target: string, pending = false): Edge {
   return {
-    id,
+    id: `${source}->${target}`,
     source,
     target,
+    sourceHandle: "out",
+    targetHandle: "in",
     type: "smoothstep",
     selectable: false,
     focusable: false,
     markerEnd: {
       type: "arrowclosed" as MarkerType,
-      width: 14,
-      height: 14,
+      width: 11,
+      height: 11,
+      color: "var(--muted-foreground)",
     },
-    style: dashed ? { strokeDasharray: "5 6" } : undefined,
-    className: "cluster-edge",
-  };
-}
-
-function groupNode(
-  group: DashboardGroup,
-  position: XYPosition,
-  width: number,
-  height: number,
-): ClusterFlowNode {
-  return {
-    id: `group:${group.id}`,
-    type: "group",
-    position,
-    data: { kind: "group", group },
-    style: { width, height },
-    selectable: false,
-    draggable: false,
+    style: {
+      stroke: "var(--muted-foreground)",
+      strokeWidth: 1.5,
+      ...(pending ? { strokeDasharray: "5 5" } : {}),
+    },
   };
 }
 
@@ -163,170 +114,206 @@ export function buildClusterFlow(
   snapshot: DashboardClusterSnapshot,
   filters: ClusterFlowFilters,
 ): ClusterFlowModel {
-  const normalizedSearch = filters.search.trim().toLocaleLowerCase("fr");
+  const search = filters.search.trim().toLowerCase();
+  const nodes: ClusterFlowNode[] = [];
+  const edges: Edge[] = [];
+  let offsetY = 0;
+
   const groups = snapshot.groups.filter(
     (group) => filters.groupId === "all" || group.id === filters.groupId,
   );
-  const nodes: ClusterFlowNode[] = [];
-  const edges: Edge[] = [];
-  let y = 0;
-  let maximumWidth = minimumGroupWidth;
 
   for (const group of groups) {
     const instances = group.instances.filter(
       (instance) =>
-        matchesState(instance, filters.state) &&
-        matchesSearch(group, instance, normalizedSearch),
+        matchesInstanceFilter(instance, filters.state) &&
+        matchesSearch(
+          [
+            group.id,
+            instance.id,
+            instance.variantId,
+            instance.endpoint ?? "",
+            instance.sessionId ?? "",
+          ],
+          search,
+        ),
     );
     const visibleInstanceIds = new Set(instances.map((instance) => instance.id));
     const sessions = group.sessions.filter((session) => {
       if (session.instanceId && !visibleInstanceIds.has(session.instanceId)) {
         return false;
       }
-      return sessionMatchesSearch(group, session, normalizedSearch);
+      return matchesSearch(
+        [group.id, session.id, session.instanceId ?? "", session.state],
+        search,
+      );
     });
     const waitingSessions = sessions.filter((session) => !session.instanceId);
-    const instanceRows = Math.max(1, Math.ceil(instances.length / columns));
-    const waitingHeight = Math.max(0, waitingSessions.length - 1) * 116;
-    const groupHeight = Math.max(
-      540 + waitingHeight,
-      groupHeaderHeight + groupPadding + instanceRows * instanceRowHeight,
-    );
-    const groupWidth = Math.max(
-      minimumGroupWidth,
-      530 +
-        Math.min(columns, Math.max(1, instances.length)) *
-          (instanceWidth + instanceColumnGap),
-    );
-    maximumWidth = Math.max(maximumWidth, groupWidth);
-    const parentId = `group:${group.id}`;
-    nodes.push(groupNode(group, { x: 0, y }, groupWidth, groupHeight));
+    const hasQueue = group.type === "minigame";
 
-    const queueId = `queue:${group.id}`;
-    if (group.type === "minigame") {
-      nodes.push({
-        id: queueId,
-        parentId,
-        extent: "parent",
-        type: "queue",
-        position: childPosition(groupPadding, groupHeaderHeight + 28),
-        data: {
-          kind: "queue",
-          group,
-          selection: { kind: "queue", id: group.id, groupId: group.id },
-        },
-        style: { width: queueWidth },
-        draggable: false,
+    // Rows.
+    const queueY = HEADER_HEIGHT + PADDING;
+    const poolY = hasQueue ? queueY + QUEUE_SIZE.height + QUEUE_TO_POOL_GAP : queueY;
+    const instancesY =
+      poolY + POOL_SIZE.height + POOL_TO_INSTANCES_GAP + LANE_LABEL_HEIGHT;
+    const sessionsY = instancesY + INSTANCE_SIZE.height + INSTANCE_TO_SESSION_GAP;
+
+    // Columns: instances first, then any session still waiting for capacity.
+    const columnCount = instances.length + waitingSessions.length;
+    const rowSpan = columnCount > 0 ? columnCount * COLUMN_PITCH - COLUMN_GAP : 0;
+    const contentWidth = Math.max(
+      rowSpan,
+      POOL_SIZE.width,
+      QUEUE_SIZE.width,
+      MIN_CONTENT_WIDTH,
+    );
+    const columnsX = PADDING + (contentWidth - rowSpan) / 2;
+    const groupWidth = contentWidth + PADDING * 2;
+
+    const hasHostedSession = instances.some((instance) =>
+      sessions.some((session) => session.id === instance.sessionId),
+    );
+
+    const frameId = `group:${group.id}`;
+    const lanes: LaneLabel[] = [];
+    let groupHeight: number;
+
+    if (columnCount === 0) {
+      // Nothing to lay out below the pool: stop the frame right after it.
+      lanes.push({
+        id: "instances",
+        text: "No instance running",
+        x: PADDING,
+        y: poolY + POOL_SIZE.height + 22,
       });
+      groupHeight = poolY + POOL_SIZE.height + 22 + LANE_LABEL_HEIGHT + PADDING;
+    } else {
+      lanes.push({
+        id: "instances",
+        text: `Instances · ${instances.length}`,
+        x: columnsX,
+        y: instancesY - LANE_LABEL_HEIGHT,
+      });
+      if (waitingSessions.length > 0) {
+        lanes.push({
+          id: "waiting",
+          text: "Waiting for capacity",
+          x: columnsX + instances.length * COLUMN_PITCH,
+          y: instancesY - LANE_LABEL_HEIGHT,
+        });
+      }
+      groupHeight =
+        (hasHostedSession
+          ? sessionsY + SESSION_SIZE.height
+          : instancesY + INSTANCE_SIZE.height) + PADDING;
     }
 
-    const poolId = `pool:${group.id}`;
-    const poolX =
-      groupPadding + (group.type === "minigame" ? queueWidth + laneGap : 0);
     nodes.push({
-      id: poolId,
-      parentId,
-      extent: "parent",
-      type: "pool",
-      position: childPosition(poolX, groupHeaderHeight + 28),
-      data: { kind: "pool", group },
-      style: { width: poolWidth },
+      id: frameId,
+      type: "groupFrame",
+      position: { x: 0, y: offsetY },
+      width: groupWidth,
+      height: groupHeight,
+      data: { kind: "groupFrame", group, lanes },
+      style: { width: groupWidth, height: groupHeight },
       selectable: false,
       draggable: false,
+      zIndex: 0,
     });
-    if (group.type === "minigame") {
-      edges.push(edge(`edge:${queueId}:${poolId}`, queueId, poolId, true));
+
+    const poolId = `pool:${group.id}`;
+
+    if (hasQueue) {
+      const queueId = `queue:${group.id}`;
+      nodes.push({
+        id: queueId,
+        parentId: frameId,
+        extent: "parent",
+        type: "queue",
+        position: {
+          x: PADDING + (contentWidth - QUEUE_SIZE.width) / 2,
+          y: queueY,
+        },
+        ...QUEUE_SIZE,
+        data: { kind: "queue", group },
+        style: QUEUE_SIZE,
+        draggable: false,
+        selectable: false,
+      });
+      edges.push(edge(queueId, poolId));
     }
 
-    const instancesX = poolX + poolWidth + 54;
+    nodes.push({
+      id: poolId,
+      parentId: frameId,
+      extent: "parent",
+      type: "pool",
+      position: { x: PADDING + (contentWidth - POOL_SIZE.width) / 2, y: poolY },
+      ...POOL_SIZE,
+      data: { kind: "pool", group },
+      style: POOL_SIZE,
+      draggable: false,
+      selectable: false,
+    });
+
     for (const [index, instance] of instances.entries()) {
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-      const instanceId = `instance:${instance.id}`;
+      const x = columnsX + index * COLUMN_PITCH;
+      const instanceNodeId = `instance:${instance.id}`;
+
       nodes.push({
-        id: instanceId,
-        parentId,
+        id: instanceNodeId,
+        parentId: frameId,
         extent: "parent",
         type: "instance",
-        position: childPosition(
-          instancesX + column * (instanceWidth + instanceColumnGap),
-          groupHeaderHeight + 28 + row * instanceRowHeight,
-        ),
-        data: {
-          kind: "instance",
-          group,
-          instance,
-          selection: { kind: "instance", id: instance.id, groupId: group.id },
-        },
-        style: { width: instanceWidth },
+        position: { x, y: instancesY },
+        ...INSTANCE_SIZE,
+        data: { kind: "instance", group, instance },
+        style: INSTANCE_SIZE,
         draggable: false,
       });
-      edges.push(
-        edge(
-          `edge:${poolId}:${instanceId}`,
-          poolId,
-          instanceId,
-          instance.availabilityState === "RESERVED",
-        ),
-      );
-      const attachedSession = sessions.find(
+      edges.push(edge(poolId, instanceNodeId));
+
+      const hosted = sessions.find(
         (session) => session.id === instance.sessionId,
       );
-      if (attachedSession) {
-        const sessionId = `session:${attachedSession.id}`;
+      if (hosted) {
+        const sessionNodeId = `session:${hosted.id}`;
         nodes.push({
-          id: sessionId,
-          parentId,
+          id: sessionNodeId,
+          parentId: frameId,
           extent: "parent",
           type: "session",
-          position: childPosition(
-            instancesX + column * (instanceWidth + instanceColumnGap),
-            groupHeaderHeight + 252 + row * instanceRowHeight,
-          ),
-          data: {
-            kind: "session",
-            group,
-            session: attachedSession,
-            selection: {
-              kind: "session",
-              id: attachedSession.id,
-              groupId: group.id,
-            },
-          },
-          style: { width: instanceWidth },
+          position: { x, y: sessionsY },
+          ...SESSION_SIZE,
+          data: { kind: "session", group, session: hosted },
+          style: SESSION_SIZE,
           draggable: false,
         });
-        edges.push(edge(`edge:${instanceId}:${sessionId}`, instanceId, sessionId));
+        edges.push(edge(instanceNodeId, sessionNodeId));
       }
     }
 
     for (const [index, session] of waitingSessions.entries()) {
-      const sessionId = `session:${session.id}`;
+      const sessionNodeId = `session:${session.id}`;
       nodes.push({
-        id: sessionId,
-        parentId,
+        id: sessionNodeId,
+        parentId: frameId,
         extent: "parent",
         type: "session",
-        position: childPosition(poolX, groupHeaderHeight + 284 + index * 116),
-        data: {
-          kind: "session",
-          group,
-          session,
-          selection: { kind: "session", id: session.id, groupId: group.id },
+        position: {
+          x: columnsX + (instances.length + index) * COLUMN_PITCH,
+          y: instancesY,
         },
-        style: { width: poolWidth },
+        ...WAITING_SIZE,
+        data: { kind: "session", group, session, waiting: true },
+        style: WAITING_SIZE,
         draggable: false,
       });
-      edges.push(edge(`edge:${poolId}:${sessionId}`, poolId, sessionId, true));
+      edges.push(edge(poolId, sessionNodeId, true));
     }
 
-    y += groupHeight + groupGap;
+    offsetY += groupHeight + GROUP_GAP;
   }
 
-  return {
-    nodes,
-    edges,
-    width: maximumWidth,
-    height: Math.max(0, y - groupGap),
-  };
+  return { nodes, edges };
 }

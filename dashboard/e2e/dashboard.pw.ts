@@ -1,163 +1,218 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
-const cluster = {
-  schemaVersion: 1,
-  generatedAt: new Date().toISOString(),
-  summary: {
-    enabledGroups: 1,
-    activeInstances: 1,
-    runningInstances: 1,
-    warmInstances: 0,
-    pendingWarmInstances: 0,
-    reservedInstances: 1,
-    playersOnline: 4,
-    activeSessions: 1,
-    queuedParties: 2,
-    queuedPlayers: 3,
-  },
-  groups: [
-    {
-      id: "skywars-solo",
-      type: "minigame",
-      enabled: true,
-      capacity: {
-        minimumInstances: 0,
-        maximumInstances: 20,
-        minimumWarmInstances: 2,
-        maximumWarmInstances: 4,
-        activeInstances: 1,
-        warmInstances: 0,
-        pendingWarmInstances: 0,
-        reservedInstances: 1,
-      },
-      lifecycle: {
-        startupTimeoutMs: 90_000,
-        drainingTimeoutMs: 900_000,
-        shutdownTimeoutMs: 20_000,
-      },
-      matchmaking: {
-        minimumPlayers: 4,
-        maximumPlayers: 12,
-        teamCount: 12,
-        teamSize: 1,
-        waitingTimeoutMs: 45_000,
-      },
-      routing: null,
-      queue: {
-        partyCount: 2,
-        playerCount: 3,
-        oldestJoinedAt: new Date(Date.now() - 30_000).toISOString(),
-      },
-      variants: [
-        {
-          id: "skywars-japan",
-          enabled: true,
-          revision: 2,
-          weight: 100,
-          runtime: {
-            image: "itzg/minecraft-server:java25",
-            memoryBytes: 4 * 1024 ** 3,
-            cpu: 2,
-            environment: {},
-          },
-        },
-      ],
-      instances: [
-        {
-          id: "abcdefghijklmnop",
-          variantId: "skywars-japan",
-          sessionId: "qrstuvwxyzABCDEF",
-          lifecycleState: "RUNNING",
-          availabilityState: "RESERVED",
-          endpoint: "server:25565",
-          playerCount: 4,
-          maximumPlayers: 12,
-          createdAt: new Date(Date.now() - 120_000).toISOString(),
-          startingAt: new Date(Date.now() - 110_000).toISOString(),
-          runningAt: new Date(Date.now() - 90_000).toISOString(),
-          drainingAt: null,
-          drainDeadline: null,
-          updatedAt: new Date().toISOString(),
-        },
-      ],
-      sessions: [
-        {
-          id: "qrstuvwxyzABCDEF",
-          instanceId: "abcdefghijklmnop",
-          state: "RUNNING",
-          assignmentRevision: 1,
-          assignmentAcknowledgedAt: new Date().toISOString(),
-          waitingDeadline: new Date(Date.now() + 60_000).toISOString(),
-          retryCount: 0,
-          activePlayerCount: 4,
-          connectedPlayerCount: 4,
-          teamCount: 4,
-          createdAt: new Date(Date.now() - 120_000).toISOString(),
-          startedAt: new Date(Date.now() - 30_000).toISOString(),
-          finishedAt: null,
-          updatedAt: new Date().toISOString(),
-        },
-      ],
-    },
-  ],
-};
+/**
+ * The suite runs against the synthetic cluster served when DASHBOARD_MOCK_DATA
+ * is enabled (see playwright.config.ts), so it exercises the real proxy routes
+ * without an orchestrator behind them.
+ */
 
-const instanceDetail = {
-  schemaVersion: 1,
-  generatedAt: new Date().toISOString(),
-  instance: {
-    ...cluster.groups[0].instances[0],
-    groupId: "skywars-solo",
-    groupType: "minigame",
-    containerId: "docker-container",
-    runtimePath: "/data/runtime/abcdefghijklmnop",
-    stoppedAt: null,
-  },
-  variant: {
-    ...cluster.groups[0].variants[0],
-    checksum: "abc123",
-  },
-  players: [],
-  session: cluster.groups[0].sessions[0],
-  commands: [],
-  events: [],
-};
+const desktopOnly = (page: Page) => page.viewportSize()!.width >= 768;
 
-test.beforeEach(async ({ page }) => {
-  await page.route("**/api/cluster", async (route) => {
-    await route.fulfill({ json: cluster });
+/** Table rows are `tr[role=button]`; some cells hold their own buttons. */
+const tableRows = (page: Page) =>
+  page.getByRole("button").filter({ has: page.locator("td") });
+
+/** Clicks a row on its first cell, away from any nested control. */
+async function openRow(page: Page, index = 0) {
+  const row = tableRows(page).nth(index);
+  await expect(row).toBeVisible();
+  await row.locator("td").first().click();
+}
+
+/**
+ * Pages render their header straight away and their data once the shared
+ * cluster snapshot lands, so each test waits on the content it actually needs.
+ */
+async function visit(page: Page, path: string) {
+  // `load` guarantees the client bundle is in, so clicks land on a hydrated
+  // tree rather than on the server-rendered markup.
+  await page.goto(path, { waitUntil: "load" });
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+}
+
+/** The canvas is a lazily imported client chunk; give it room to arrive. */
+async function visitTopology(page: Page) {
+  await visit(page, "/topology");
+  await expect(page.locator(".react-flow")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".react-flow__node-groupFrame").first()).toBeVisible({
+    timeout: 20_000,
   });
-  await page.route("**/api/instances/abcdefghijklmnop", async (route) => {
-    await route.fulfill({ json: instanceDetail });
+}
+
+test.describe("overview", () => {
+  test("summarises the fleet", async ({ page }) => {
+    await visit(page, "/");
+    await expect(
+      page.getByRole("heading", { name: "Cluster overview" }),
+    ).toBeVisible();
+
+    await expect(page.getByText("Fleet health", { exact: true })).toBeVisible();
+    await expect(page.getByText("Needs attention", { exact: true })).toBeVisible();
+    // The groups table, not the sidebar entry of the same name.
+    await expect(
+      page.getByText("Capacity, occupancy and queue pressure", { exact: false }),
+    ).toBeVisible();
+
+    // Synthetic groups from the mock cluster.
+    await expect(page.getByText("skywars-solo").first()).toBeVisible();
+    await expect(page.getByText("bedwars-duo").first()).toBeVisible();
+  });
+
+  test("reports live synchronisation in the header", async ({ page }) => {
+    await visit(page, "/");
+    await expect(page.getByText(/^(Live|Syncing)$/)).toBeVisible();
   });
 });
 
-test("renders the topology and opens instance details", async (
-  { page },
-  testInfo,
-) => {
-  await page.goto("/");
-  await expect(
-    page.getByRole("heading", { name: "Topologie du cluster" }),
-  ).toBeVisible();
-  await expect(page.getByText("skywars-solo").first()).toBeVisible();
-  await page.screenshot({
-    path: testInfo.outputPath("dashboard.png"),
-    fullPage: true,
+test.describe("instances", () => {
+  test("lists instances and opens the detail panel", async ({ page }) => {
+    await visit(page, "/instances");
+    await expect(page.getByRole("heading", { name: "Instances" })).toBeVisible();
+
+    await openRow(page);
+    const panel = page.getByRole("dialog");
+    await expect(panel.getByRole("tab", { name: /Overview/ })).toBeVisible();
+    await expect(panel.getByText("Runtime", { exact: true })).toBeVisible();
+
+    await panel.getByRole("tab", { name: /Events/ }).click();
+    await expect(panel.getByText(/instance\./).first()).toBeVisible();
   });
-  await page.getByText("abcdefghijklmnop").click();
-  await expect(page.getByRole("heading", { name: "Instance" })).toBeVisible();
-  await expect(page.getByText("docker-container")).toBeVisible();
+
+  test("narrows the table down to degraded instances", async ({ page }) => {
+    test.skip(!desktopOnly(page), "state filter is shown on wide viewports too");
+    await visit(page, "/instances");
+
+    await expect(page.locator("tbody tr").first()).toBeVisible();
+    const before = await page.locator("tbody tr").count();
+
+    await page.getByLabel("Filter by state").click();
+    const option = page.getByRole("option", { name: "Needs attention" });
+    await expect(option).toBeVisible();
+    await option.click();
+
+    await expect
+      .poll(async () => page.locator("tbody tr").count())
+      .toBeLessThan(before);
+    await expect(page.getByText("Failed").first()).toBeVisible();
+  });
 });
 
-test("keeps filters and refresh controls usable on a narrow viewport", async ({
-  page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "mobile");
-  await page.goto("/");
-  await expect(
-    page.getByLabel("Rechercher une instance, variante ou session"),
-  ).toBeVisible();
-  await expect(page.getByRole("button", { name: "Actualiser" })).toBeVisible();
-  await expect(page.getByLabel("Carte du cluster")).toBeVisible();
+test.describe("sessions", () => {
+  test("opens a session and shows its teams", async ({ page }) => {
+    await visit(page, "/sessions");
+    await expect(page.getByRole("heading", { name: "Sessions" })).toBeVisible();
+
+    await openRow(page);
+
+    const panel = page.getByRole("dialog");
+    await expect(panel.getByRole("tab", { name: /Transfers/ })).toBeVisible();
+    await panel.getByRole("tab", { name: /Teams/ }).click();
+    await expect(panel.getByText(/Team \d/).first()).toBeVisible();
+  });
+});
+
+test.describe("queues", () => {
+  test("shows queue pressure per matchmaking group", async ({ page }) => {
+    await visit(page, "/queues");
+    await expect(
+      page.getByRole("heading", { name: "Matchmaking queues" }),
+    ).toBeVisible();
+
+    await expect(page.getByText("PARTIES QUEUED").first()).toBeVisible();
+    await expect(page.getByText("LONGEST WAIT").first()).toBeVisible();
+
+    // One tab per matchmaking group, hub excluded.
+    await expect(page.getByRole("tab", { name: /skywars-solo/ })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /bedwars-duo/ })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /^hub/ })).toHaveCount(0);
+
+    await expect(
+      page.getByText("Wait distribution", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText("Queued parties", { exact: true })).toBeVisible();
+    await expect(page.locator("tbody tr").first()).toBeVisible();
+  });
+
+  test("switches between groups", async ({ page }) => {
+    await visit(page, "/queues");
+    await page.getByRole("tab", { name: /bedwars-duo/ }).click();
+    await expect(page.getByRole("tab", { name: /bedwars-duo/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(page.getByText("PARTIES WAITING").first()).toBeVisible();
+  });
+});
+
+test.describe("topology", () => {
+  test("draws the group frames, instances and their edges", async ({ page }) => {
+    await visitTopology(page);
+    await expect(page.getByRole("heading", { name: "Topology" })).toBeVisible();
+    await expect
+      .poll(async () => page.locator(".react-flow__node-instance").count())
+      .toBeGreaterThan(0);
+    await expect
+      .poll(async () => page.locator(".react-flow__edge").count())
+      .toBeGreaterThan(0);
+    // The minimap needs the nodes to carry their own dimensions.
+    await expect
+      .poll(async () => page.locator(".react-flow__minimap-node").count())
+      .toBeGreaterThan(0);
+  });
+
+  test("opens the detail panel from an instance node", async ({ page }) => {
+    test.skip(!desktopOnly(page), "node targets are too small on a phone");
+    await visitTopology(page);
+    const node = page.locator(".react-flow__node-instance").first();
+    await expect(node).toBeVisible();
+    await node.click();
+    await expect(
+      page.getByRole("dialog").getByText("Instance", { exact: true }),
+    ).toBeVisible();
+  });
+});
+
+test.describe("shell", () => {
+  test("navigates through the sidebar", async ({ page }) => {
+    test.skip(!desktopOnly(page), "the sidebar is off-canvas on a phone");
+    await visit(page, "/");
+
+    for (const [label, href, heading] of [
+      ["Groups", "/groups", "Groups"],
+      ["Queues", "/queues", "Matchmaking queues"],
+      ["Sessions", "/sessions", "Sessions"],
+      ["Overview", "/", "Cluster overview"],
+    ] as const) {
+      await page.getByRole("link", { name: label, exact: true }).click();
+      // Navigation is client-side: settle on the route before asserting.
+      await page.waitForURL((url) => url.pathname === href);
+      await expect(page.getByRole("heading", { name: heading })).toBeVisible();
+    }
+  });
+
+  test("switches to the dark theme", async ({ page }) => {
+    await visit(page, "/");
+    await page.getByRole("button", { name: "Change theme" }).click();
+    const dark = page.getByRole("menuitem", { name: "Dark" });
+    await expect(dark).toBeVisible();
+    await dark.click();
+    await expect(page.locator("html")).toHaveClass(/dark/);
+  });
+
+  test("flags synthetic data mode", async ({ page }) => {
+    test.skip(!desktopOnly(page), "the sidebar footer is off-canvas on a phone");
+    await visit(page, "/");
+    await expect(page.getByText("Synthetic data")).toBeVisible();
+  });
+
+  test("stays usable on a narrow viewport", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile");
+    await visit(page, "/instances");
+    await expect(page.getByRole("heading", { name: "Instances" })).toBeVisible();
+    await expect(page.getByLabel("Search instances")).toBeVisible();
+    await expect(page.locator("tbody tr").first()).toBeVisible();
+
+    await page.getByRole("button", { name: "Toggle Sidebar" }).click();
+    await expect(page.getByRole("link", { name: "Queues", exact: true })).toBeVisible();
+  });
 });
