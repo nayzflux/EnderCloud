@@ -1,12 +1,43 @@
 # EnderCloud Dashboard
 
-Console interne en lecture seule pour observer les groupes, la capacité chaude, les files de
-matchmaking, les instances et leurs sessions. L'interface utilise Next.js, React Flow,
-TanStack Query et shadcn/ui, avec un rafraîchissement automatique toutes les cinq secondes.
+Read-only operations console for the EnderCloud cluster: groups, warm capacity,
+matchmaking queues, instances and the sessions running on them. Built with
+Next.js, TanStack Query, React Flow and shadcn/ui.
 
-## Développement
+## Pages
 
-Copier `.env.example` vers `.env.local`, puis renseigner l'URL HTTP de l'orchestrateur :
+| Route        | What it answers                                                                  |
+| ------------ | -------------------------------------------------------------------------------- |
+| `/`          | Fleet health at a glance: summary tiles, lifecycle distribution, capacity per group, what needs attention |
+| `/groups`    | Capacity policy, matchmaking or routing rules, lifecycle timeouts and variants of every group |
+| `/instances` | Sortable, filterable table of every managed container, with a detail panel per instance |
+| `/sessions`  | Matches formed by the matchmaker, their assigned instance and connection progress |
+| `/queues`    | Queue pressure per matchmaking group: parties, wait-time distribution and the queued parties themselves |
+| `/topology`  | React Flow map wiring each group's queue and warm pool to its instances and sessions |
+
+Selecting an instance or a session anywhere in the console opens the same detail
+panel, with its players, commands, events, teams and transfers.
+
+## UI foundation
+
+The interface is generated from the shadcn CLI using preset `b0`
+(`base-nova` style, neutral base colour, Inter, lucide icons). To inspect or
+re-apply it:
+
+```bash
+npx shadcn@latest preset decode b0
+```
+
+Components live in `src/components/ui` and are managed by the CLI — add more
+with `npx shadcn@latest add <component>` rather than hand-writing them. On top
+of the neutral preset, `src/app/globals.css` defines `--success`, `--warning`
+and `--info` so operational states stay readable in both themes; the mapping
+from a contract state to a tone lives in `src/lib/status.ts`.
+
+Light and dark themes both ship, following the system preference by default and
+switchable from the header.
+
+## Development
 
 ```powershell
 Copy-Item .env.example .env.local
@@ -14,8 +45,27 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-Le dashboard est disponible sur `http://localhost:3000`. `ORCHESTRATOR_URL` reste une variable
-serveur : le navigateur passe uniquement par les quatre routes proxy en lecture du dashboard.
+The console is served on `http://localhost:3000`. `ORCHESTRATOR_URL` stays a
+server-side variable: the browser only ever talks to the dashboard's four
+read-only proxy routes.
+
+### Synthetic data
+
+Set `DASHBOARD_MOCK_DATA=true` to serve a synthetic cluster instead of proxying
+the orchestrator, so the console can be developed and demoed without Docker,
+PostgreSQL, Redis or a running orchestrator:
+
+```powershell
+"DASHBOARD_MOCK_DATA=true" | Add-Content .env.local
+bun run dev
+```
+
+The sidebar shows a **Synthetic data** marker whenever the flag is on. The world
+is rebuilt from a fixed seed on every request, so identifiers stay stable across
+refreshes while ages, deadlines and queue waits keep ticking. It covers four
+groups (a hub, two live minigames and a disabled one), healthy and degraded
+instances, running and stalled sessions, and populated queues. See
+`src/lib/mock-data.ts`.
 
 ## Validation
 
@@ -27,5 +77,8 @@ bun run test:e2e
 bun run build
 ```
 
-Les tests Playwright utilisent une API simulée et couvrent Chromium desktop ainsi qu'un viewport
-mobile.
+`bun test` covers the topology layout builder, the formatting helpers and the
+coherence of the synthetic cluster. The Playwright suite builds the app and
+runs it on port 3100 with `DASHBOARD_MOCK_DATA=true`, covering desktop Chromium
+and a mobile viewport; browsers are installed with `npx playwright install
+chromium`.

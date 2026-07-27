@@ -76,6 +76,10 @@ Copy-Item .env.example .env.local
 bun run dev
 ```
 
+Pour travailler sur l'interface sans lancer l'orchestrateur, Docker ni PostgreSQL, activer
+`DASHBOARD_MOCK_DATA=true` dans `dashboard/.env.local` : le dashboard sert alors un cluster
+synthétique. Voir `dashboard/README.md`.
+
 L'orchestrateur et les services internes restent sur le réseau `endercloud`. Attachez chaque
 conteneur Velocity et chaque serveur Minecraft créé dynamiquement à ce même réseau.
 L'orchestrateur applique les migrations et valide les YAML avant que son endpoint de readiness

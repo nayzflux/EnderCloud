@@ -1,181 +1,174 @@
 import { describe, expect, test } from "bun:test";
 import { buildClusterFlow } from "../src/lib/cluster-flow";
-import type { DashboardClusterSnapshot } from "../src/lib/contracts";
+import { snapshot } from "./fixtures";
 
-const snapshot: DashboardClusterSnapshot = {
-  schemaVersion: 1,
-  generatedAt: "2026-07-27T12:00:00.000Z",
-  summary: {
-    enabledGroups: 1,
-    activeInstances: 2,
-    runningInstances: 1,
-    warmInstances: 0,
-    pendingWarmInstances: 1,
-    reservedInstances: 1,
-    playersOnline: 4,
-    activeSessions: 2,
-    queuedParties: 2,
-    queuedPlayers: 3,
-  },
-  groups: [
-    {
-      id: "skywars-solo",
-      type: "minigame",
-      enabled: true,
-      capacity: {
-        minimumInstances: 0,
-        maximumInstances: 20,
-        minimumWarmInstances: 2,
-        maximumWarmInstances: 4,
-        activeInstances: 2,
-        warmInstances: 0,
-        pendingWarmInstances: 1,
-        reservedInstances: 1,
-      },
-      lifecycle: {
-        startupTimeoutMs: 90_000,
-        drainingTimeoutMs: 900_000,
-        shutdownTimeoutMs: 20_000,
-      },
-      matchmaking: {
-        minimumPlayers: 4,
-        maximumPlayers: 12,
-        teamCount: 12,
-        teamSize: 1,
-        waitingTimeoutMs: 45_000,
-      },
-      routing: null,
-      queue: {
-        partyCount: 2,
-        playerCount: 3,
-        oldestJoinedAt: "2026-07-27T11:59:00.000Z",
-      },
-      variants: [],
-      instances: [
-        {
-          id: "abcdefghijklmnop",
-          variantId: "skywars-japan",
-          sessionId: "qrstuvwxyzABCDEF",
-          lifecycleState: "RUNNING",
-          availabilityState: "RESERVED",
-          endpoint: "server:25565",
-          playerCount: 4,
-          maximumPlayers: 12,
-          createdAt: "2026-07-27T11:58:00.000Z",
-          startingAt: "2026-07-27T11:58:01.000Z",
-          runningAt: "2026-07-27T11:58:20.000Z",
-          drainingAt: null,
-          drainDeadline: null,
-          updatedAt: "2026-07-27T12:00:00.000Z",
-        },
-        {
-          id: "startingInstance",
-          variantId: "skywars-japan",
-          sessionId: null,
-          lifecycleState: "STARTING",
-          availabilityState: "OPEN",
-          endpoint: null,
-          playerCount: 0,
-          maximumPlayers: 12,
-          createdAt: "2026-07-27T11:59:30.000Z",
-          startingAt: "2026-07-27T11:59:31.000Z",
-          runningAt: null,
-          drainingAt: null,
-          drainDeadline: null,
-          updatedAt: "2026-07-27T12:00:00.000Z",
-        },
-      ],
-      sessions: [
-        {
-          id: "qrstuvwxyzABCDEF",
-          instanceId: "abcdefghijklmnop",
-          state: "RUNNING",
-          assignmentRevision: 1,
-          assignmentAcknowledgedAt: "2026-07-27T11:58:30.000Z",
-          waitingDeadline: "2026-07-27T12:01:00.000Z",
-          retryCount: 0,
-          activePlayerCount: 4,
-          connectedPlayerCount: 4,
-          teamCount: 4,
-          createdAt: "2026-07-27T11:58:00.000Z",
-          startedAt: "2026-07-27T11:59:00.000Z",
-          finishedAt: null,
-          updatedAt: "2026-07-27T12:00:00.000Z",
-        },
-        {
-          id: "waitingSessionAB",
-          instanceId: null,
-          state: "WAITING_FOR_INSTANCE",
-          assignmentRevision: 1,
-          assignmentAcknowledgedAt: null,
-          waitingDeadline: "2026-07-27T12:01:00.000Z",
-          retryCount: 0,
-          activePlayerCount: 4,
-          connectedPlayerCount: 0,
-          teamCount: 4,
-          createdAt: "2026-07-27T11:59:40.000Z",
-          startedAt: null,
-          finishedAt: null,
-          updatedAt: "2026-07-27T12:00:00.000Z",
-        },
-      ],
-    },
-  ],
+const noFilters = { groupId: "all", state: "all", search: "" } as const;
+
+function idsOfKind(
+  model: ReturnType<typeof buildClusterFlow>,
+  kind: string,
+): string[] {
+  return model.nodes
+    .filter((node) => node.data.kind === kind)
+    .map((node) => node.id);
+}
+
+/** Depth of a node in the queue → pool → instance → session tree. */
+const depthOf: Record<string, number> = {
+  queue: 0,
+  pool: 1,
+  instance: 2,
+  session: 3,
 };
 
-describe("cluster flow layout", () => {
-  test("creates stable group, queue, pool, instance and attached session nodes", () => {
-    const first = buildClusterFlow(snapshot, {
-      groupId: "all",
-      state: "all",
-      search: "",
-    });
-    const second = buildClusterFlow(snapshot, {
-      groupId: "all",
-      state: "all",
-      search: "",
-    });
-    expect(first.nodes.map((node) => node.id)).toEqual(
-      second.nodes.map((node) => node.id),
-    );
-    expect(new Set(first.nodes.map((node) => node.type))).toEqual(
-      new Set(["group", "queue", "pool", "instance", "session"]),
-    );
-    expect(
-      first.edges.find(
-        (edge) =>
-          edge.source === "instance:abcdefghijklmnop" &&
-          edge.target === "session:qrstuvwxyzABCDEF",
-      ),
-    ).toBeDefined();
-    expect(
-      first.edges.find(
-        (edge) =>
-          edge.source === "pool:skywars-solo" &&
-          edge.target === "session:waitingSessionAB",
-      )?.style,
-    ).toMatchObject({ strokeDasharray: "5 6" });
+describe("buildClusterFlow", () => {
+  test("renders one frame and one pool per group", () => {
+    const model = buildClusterFlow(snapshot, noFilters);
+    expect(idsOfKind(model, "groupFrame")).toEqual([
+      "group:hub",
+      "group:skywars-solo",
+    ]);
+    expect(idsOfKind(model, "pool")).toEqual(["pool:hub", "pool:skywars-solo"]);
   });
 
-  test("filters the topology by state and search", () => {
-    const starting = buildClusterFlow(snapshot, {
-      groupId: "all",
-      state: "starting",
-      search: "",
-    });
-    expect(starting.nodes.some((node) => node.id === "instance:startingInstance"))
-      .toBeTrue();
-    expect(starting.nodes.some((node) => node.id === "instance:abcdefghijklmnop"))
-      .toBeFalse();
+  test("only matchmaking groups get a queue node", () => {
+    const model = buildClusterFlow(snapshot, noFilters);
+    expect(idsOfKind(model, "queue")).toEqual(["queue:skywars-solo"]);
+  });
 
-    const searched = buildClusterFlow(snapshot, {
-      groupId: "all",
-      state: "all",
-      search: "server:25565",
+  test("declares a size for every node so edges and the minimap can render", () => {
+    const model = buildClusterFlow(snapshot, noFilters);
+    for (const node of model.nodes) {
+      expect(node.width).toBeGreaterThan(0);
+      expect(node.height).toBeGreaterThan(0);
+    }
+  });
+
+  test("captions the instance row and the waiting area", () => {
+    const model = buildClusterFlow(snapshot, noFilters);
+    const frame = model.nodes.find((node) => node.id === "group:skywars-solo");
+    expect((frame?.data.lanes ?? []).map((lane) => lane.id)).toEqual([
+      "instances",
+      "waiting",
+    ]);
+  });
+
+  test("nests children in their group frame and pins them to it", () => {
+    const model = buildClusterFlow(snapshot, noFilters);
+    const children = model.nodes.filter((node) => node.data.kind !== "groupFrame");
+    expect(children.length).toBeGreaterThan(0);
+    for (const child of children) {
+      expect(child.parentId).toBe(`group:${child.data.group.id}`);
+      expect(child.extent).toBe("parent");
+    }
+  });
+
+  test("stacks groups without overlapping", () => {
+    const model = buildClusterFlow(snapshot, noFilters);
+    const [first, second] = model.nodes.filter(
+      (node) => node.data.kind === "groupFrame",
+    );
+    const firstBottom = first.position.y + Number(first.height ?? 0);
+    expect(second.position.y).toBeGreaterThan(firstBottom);
+  });
+
+  test("every edge runs one level down the tree, through the same handles", () => {
+    const model = buildClusterFlow(snapshot, noFilters);
+    const byId = new Map(model.nodes.map((node) => [node.id, node]));
+    expect(model.edges.length).toBeGreaterThan(0);
+
+    for (const edge of model.edges) {
+      const source = byId.get(edge.source);
+      const target = byId.get(edge.target);
+      expect(source).toBeDefined();
+      expect(target).toBeDefined();
+      expect(edge.sourceHandle).toBe("out");
+      expect(edge.targetHandle).toBe("in");
+      // Strictly forwards: a link never points back up or sideways.
+      expect(depthOf[target!.data.kind]).toBeGreaterThan(
+        depthOf[source!.data.kind],
+      );
+      expect(target!.position.y).toBeGreaterThan(source!.position.y);
+    }
+  });
+
+  test("never draws two edges between the same pair of nodes", () => {
+    const model = buildClusterFlow(snapshot, noFilters);
+    const pairs = model.edges.map((edge) => `${edge.source}|${edge.target}`);
+    expect(new Set(pairs).size).toBe(pairs.length);
+    expect(new Set(model.edges.map((edge) => edge.id)).size).toBe(
+      model.edges.length,
+    );
+  });
+
+  test("wires the whole chain for a matchmaking group", () => {
+    const model = buildClusterFlow(snapshot, noFilters);
+    const ids = model.edges.map((edge) => edge.id);
+    expect(ids).toContain("queue:skywars-solo->pool:skywars-solo");
+    expect(ids).toContain("pool:skywars-solo->instance:skywarsrunning01");
+    expect(ids).toContain(
+      "instance:skywarsrunning01->session:skywarssession01",
+    );
+  });
+
+  test("dashes only the link to a session still waiting for an instance", () => {
+    const model = buildClusterFlow(snapshot, noFilters);
+    const dashed = model.edges.filter(
+      (edge) => edge.style?.strokeDasharray !== undefined,
+    );
+    expect(dashed.map((edge) => edge.target)).toEqual([
+      "session:skywarssession02",
+    ]);
+    expect(
+      model.nodes.find((node) => node.id === "session:skywarssession02")?.data
+        .waiting,
+    ).toBe(true);
+  });
+
+  test("places a hosted session directly under its instance", () => {
+    const model = buildClusterFlow(snapshot, noFilters);
+    const instance = model.nodes.find(
+      (node) => node.id === "instance:skywarsrunning01",
+    );
+    const session = model.nodes.find(
+      (node) => node.id === "session:skywarssession01",
+    );
+    expect(session?.position.x).toBe(instance!.position.x);
+    expect(session!.position.y).toBeGreaterThan(instance!.position.y);
+  });
+
+  test("filters instances by state", () => {
+    const model = buildClusterFlow(snapshot, { ...noFilters, state: "attention" });
+    expect(idsOfKind(model, "instance")).toEqual(["instance:skywarsfailed001"]);
+  });
+
+  test("filters instances by search across id, variant and endpoint", () => {
+    const byEndpoint = buildClusterFlow(snapshot, {
+      ...noFilters,
+      search: "25566",
     });
-    expect(searched.nodes.some((node) => node.id === "instance:abcdefghijklmnop"))
-      .toBeTrue();
-    expect(searched.nodes.some((node) => node.id === "instance:startingInstance"))
-      .toBeFalse();
+    expect(idsOfKind(byEndpoint, "instance")).toEqual([
+      "instance:skywarsrunning01",
+    ]);
+
+    const byVariant = buildClusterFlow(snapshot, {
+      ...noFilters,
+      search: "hub-aurora",
+    });
+    expect(idsOfKind(byVariant, "instance")).toEqual(["instance:hubinstance00001"]);
+  });
+
+  test("restricts the model to a single group", () => {
+    const model = buildClusterFlow(snapshot, { ...noFilters, groupId: "hub" });
+    expect(idsOfKind(model, "groupFrame")).toEqual(["group:hub"]);
+    expect(idsOfKind(model, "queue")).toEqual([]);
+  });
+
+  test("hides a session whose instance was filtered out", () => {
+    const model = buildClusterFlow(snapshot, { ...noFilters, state: "attention" });
+    expect(idsOfKind(model, "session")).toEqual(["session:skywarssession02"]);
+    expect(
+      model.edges.some((edge) => edge.target === "session:skywarssession01"),
+    ).toBe(false);
   });
 });

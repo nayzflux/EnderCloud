@@ -1,46 +1,70 @@
 import type { Metadata, Viewport } from "next";
-import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
-import "@xyflow/react/dist/style.css";
+import { Inter, JetBrains_Mono } from "next/font/google";
+import { AppSidebar } from "@/components/app-sidebar";
 import { Providers } from "@/components/providers";
+import { SiteHeader } from "@/components/site-header";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { isMockEnabled } from "@/lib/mock-data";
+import { cn } from "@/lib/utils";
 import "./globals.css";
 
-const plexSans = IBM_Plex_Sans({
-  variable: "--font-plex-sans",
+const sans = Inter({
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+  variable: "--font-sans",
+  display: "swap",
 });
 
-const plexMono = IBM_Plex_Mono({
-  variable: "--font-plex-mono",
+const mono = JetBrains_Mono({
   subsets: ["latin"],
-  weight: ["400", "500"],
+  variable: "--font-mono-code",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "EnderCloud · Cluster Control",
-  description: "Vue opérationnelle en temps réel du cluster EnderCloud.",
+  title: "EnderCloud · Cluster control",
+  description:
+    "Read-only operations console for EnderCloud groups, instances, sessions and matchmaking queues.",
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  colorScheme: "light",
-  themeColor: "#e8e5dc",
+  colorScheme: "light dark",
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+}: Readonly<{ children: React.ReactNode }>) {
+  const mockMode = isMockEnabled();
+
   return (
-    <html lang="fr" className={`${plexSans.variable} ${plexMono.variable}`}>
-      <body>
-        <a className="skip-link" href="#main-content">
-          Aller au contenu
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={cn(sans.variable, mono.variable)}
+    >
+      <body className="min-h-svh bg-background font-sans antialiased">
+        <a
+          href="#main-content"
+          className="sr-only rounded-lg bg-primary px-4 py-2 text-primary-foreground focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50"
+        >
+          Skip to content
         </a>
-        <Providers>{children}</Providers>
+        <Providers>
+          <SidebarProvider>
+            <AppSidebar mockMode={mockMode} />
+            <SidebarInset className="min-w-0 overflow-hidden">
+              <SiteHeader />
+              <div
+                id="main-content"
+                className="flex min-w-0 flex-1 flex-col gap-5 p-4 md:p-6"
+              >
+                {children}
+              </div>
+            </SidebarInset>
+          </SidebarProvider>
+        </Providers>
       </body>
     </html>
   );
