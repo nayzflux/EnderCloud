@@ -165,6 +165,7 @@ const emptyQueue: DashboardQueueSummary = {
   oldestJoinedAt: null,
 };
 
+// Assemble normalized database rows into the dashboard cluster graph.
 export function assembleClusterSnapshot(
   rows: DashboardRows,
   generatedAt = new Date(),
@@ -174,6 +175,7 @@ export function assembleClusterSnapshot(
   const sessionsByGroup = new Map<string, DashboardSession[]>();
   const queuesByGroup = new Map<string, DashboardQueueSummary>();
 
+  // Pre-index child rows by group to avoid repeatedly scanning whole result sets.
   for (const variant of rows.variants) {
     const groupVariants = variantsByGroup.get(variant.group_id) ?? [];
     groupVariants.push(toVariant(variant));
@@ -197,8 +199,10 @@ export function assembleClusterSnapshot(
     });
   }
 
+  // Build each group from its indexed children and derive operational counters in one pass.
   const groups: DashboardGroup[] = rows.groups.map((group) => {
     const instances = instancesByGroup.get(group.id) ?? [];
+    // STOPPED and FAILED rows remain useful historically but do not consume active capacity.
     const activeInstances = instances.filter(
       (instance) =>
         instance.lifecycleState !== "STOPPED" && instance.lifecycleState !== "FAILED",
@@ -266,6 +270,7 @@ export function assembleClusterSnapshot(
     };
   });
 
+  // Flatten only after group construction so global summary values reuse group-derived data.
   const allInstances = groups.flatMap((group) => group.instances);
   const allSessions = groups.flatMap((group) => group.sessions);
   return {
@@ -315,6 +320,7 @@ export function assembleClusterSnapshot(
   };
 }
 
+// Clamp dashboard pagination limits to a safe range.
 export function normalizeDashboardLimit(value: number | undefined): number {
   if (!Number.isFinite(value)) return 50;
   return Math.max(1, Math.min(200, Math.trunc(value ?? 50)));
@@ -323,6 +329,7 @@ export function normalizeDashboardLimit(value: number | undefined): number {
 export class DashboardService {
   public constructor(private readonly sql: SqlClient) {}
 
+  // Return the complete cluster snapshot consumed by the dashboard.
   public async getCluster(): Promise<DashboardClusterSnapshot> {
     const rows = await this.sql.begin(
       "read only isolation level repeatable read",
@@ -331,11 +338,13 @@ export class DashboardService {
     return assembleClusterSnapshot(rows);
   }
 
+  // Return a bounded queue view with parties and player membership.
   public async getQueue(
     groupId: string,
     requestedLimit?: number,
   ): Promise<DashboardQueueDetail | null> {
     const limit = normalizeDashboardLimit(requestedLimit);
+    // Repeatable-read keeps totals and paginated entries from describing different queue moments.
     return this.sql.begin("read only isolation level repeatable read", async (transaction) => {
       const groups = await transaction<{ id: string }[]>`
         SELECT id FROM server_groups WHERE id = ${groupId}
@@ -389,6 +398,7 @@ export class DashboardService {
     });
   }
 
+  // Load one instance together with its runtime, session, and event details.
   public async getInstance(instanceId: string): Promise<DashboardInstanceDetail | null> {
     return this.sql.begin("read only isolation level repeatable read", async (transaction) => {
       const instances = await transaction<
@@ -420,6 +430,7 @@ export class DashboardService {
       `;
       const instance = instances[0];
       if (!instance) return null;
+      // Detail collections are independent and can be fetched concurrently inside one snapshot.
       const [players, commands, events, sessions] = await Promise.all([
         transaction<
           {
@@ -514,11 +525,13 @@ export class DashboardService {
     });
   }
 
+  // Load one session together with its assignment and transfer history.
   public async getSession(sessionId: string): Promise<DashboardSessionDetail | null> {
     return this.sql.begin("read only isolation level repeatable read", async (transaction) => {
       const sessions = await this.readSessionRows(transaction, sessionId);
       const session = sessions[0];
       if (!session) return null;
+      // Assignment and transfer history share the same repeatable-read snapshot.
       const [players, transfers] = await Promise.all([
         transaction<
           {
@@ -559,6 +572,7 @@ export class DashboardService {
         `,
       ]);
       const byTeam = new Map<number, (DashboardSessionDetail["teams"][number]["players"][number])[]>();
+      // Regroup flat SQL rows into the team-oriented API shape expected by the dashboard.
       for (const player of players) {
         const team = byTeam.get(player.team_index) ?? [];
         team.push({
@@ -576,6 +590,7 @@ export class DashboardService {
         schemaVersion: 1,
         generatedAt: new Date().toISOString(),
         session: { ...toSession(session), groupId: session.group_id },
+        // Sort numeric team indexes because Map insertion order follows query rows, not the API contract.
         teams: [...byTeam.entries()]
           .sort(([left], [right]) => left - right)
           .map(([teamIndex, teamPlayers]) => ({ teamIndex, players: teamPlayers })),
@@ -593,6 +608,7 @@ export class DashboardService {
     });
   }
 
+  // Fetch the row sets needed to build a consistent cluster snapshot.
   private async readClusterRows(
     transaction: postgres.TransactionSql,
   ): Promise<DashboardRows> {
@@ -655,6 +671,7 @@ export class DashboardService {
     return { groups, variants, instances, sessions, queues };
   }
 
+  // Fetch session summaries shared by cluster and detail endpoints.
   private async readSessionRows(
     transaction: postgres.TransactionSql,
     sessionId: string,

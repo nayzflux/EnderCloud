@@ -1,5 +1,6 @@
 import type { SessionState } from "./types.ts";
 
+// Allow retries only while a session is still safe to reassign to another instance.
 export function shouldRetryFailedSession(
   state: SessionState,
   connectedPlayers: number,

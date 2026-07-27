@@ -4,6 +4,10 @@ EnderCloud is a modular monolithic orchestrator for disposable Minecraft servers
 stores every durable decision, Redis broadcasts ephemeral proxy events, and Docker runs
 instances copied from immutable template directories.
 
+![Overview](./images/dashboard/overview_tab.png)
+
+![Instances Tab](./images/dashboard/instances_tab.png)
+
 Managed Minecraft containers use the name
 Docker containers use `endercloud-<variant-id>-<instance-id>`; Velocity registers them as
 `ec-<variant-id>-<instance-id>`.

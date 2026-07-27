@@ -32,12 +32,15 @@ export class TransferService {
     private readonly logger: Logger,
   ) {}
 
+  // Persist a durable transfer command inside the caller transaction.
   public async enqueue(
     transaction: postgres.TransactionSql,
     payload: TransferPayload,
     sessionId?: string,
   ): Promise<string> {
     const commandId = nanoid();
+    // Store transfer intent in the caller's transaction. Publishing happens later,
+    // so a committed session assignment cannot be lost during a Redis outage.
     await transaction`
       INSERT INTO transfer_commands (
         id, instance_id, session_id, payload, expires_at
@@ -54,6 +57,7 @@ export class TransferService {
     return commandId;
   }
 
+  // Cancel every pending transfer targeting a failed or draining instance.
   public async cancelForInstance(instanceId: string): Promise<void> {
     await this.sql`
       UPDATE transfer_commands
@@ -62,21 +66,26 @@ export class TransferService {
     `;
   }
 
+  // Complete observed commands, expire stale ones, and publish due retries.
   public async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
     try {
+      // Observe arrivals before expiry so a just-completed transfer wins the race with its deadline.
       await this.completeObservedTransfers();
       await this.expireTransfers();
+      // Publish only due commands and bound each tick to keep other control loops responsive.
       const commands = await this.sql<TransferCommandRow[]>`
         SELECT id, payload
         FROM transfer_commands
         WHERE state = 'PENDING'
           AND next_attempt_at <= now()
           AND expires_at > now()
+        -- Preserve command order so older player moves are retried first.
         ORDER BY created_at
         LIMIT 100
       `;
+      // Publish sequentially to avoid flooding Redis and to preserve deterministic retry updates.
       for (const command of commands) {
         await this.publish(command);
       }
@@ -85,11 +94,13 @@ export class TransferService {
     }
   }
 
+  // Complete commands once every expected player arrived or definitively left.
   private async completeObservedTransfers(): Promise<void> {
     await this.sql`
       UPDATE transfer_commands tc
       SET state = 'COMPLETED', completed_at = now()
       WHERE tc.state = 'PENDING'
+        -- Complete only when no expected player remains unaccounted for.
         AND NOT EXISTS (
           SELECT 1
           FROM jsonb_array_elements_text(tc.payload->'players') AS expected(player_id)
@@ -113,6 +124,7 @@ export class TransferService {
     `;
   }
 
+  // Mark commands expired once their delivery window closes.
   private async expireTransfers(): Promise<void> {
     const expired = await this.sql<{ id: string; instance_id: string }[]>`
       UPDATE transfer_commands
@@ -120,6 +132,7 @@ export class TransferService {
       WHERE state = 'PENDING' AND expires_at <= now()
       RETURNING id, instance_id
     `;
+    // Emit one warning per command so operators can identify the affected destination.
     for (const command of expired) {
       this.logger.warn("Transfer command expired", {
         commandId: command.id,
@@ -128,6 +141,7 @@ export class TransferService {
     }
   }
 
+  // Publish one command and schedule bounded retries with exponential backoff.
   private async publish(command: TransferCommandRow): Promise<void> {
     try {
       await this.bus.publishTransfer({
@@ -137,6 +151,7 @@ export class TransferService {
       await this.sql`
         UPDATE transfer_commands
         SET attempts = attempts + 1,
+            -- Redis publish is not an acknowledgement; repeat until arrivals are observed.
             next_attempt_at = now() + interval '2 seconds'
         WHERE id = ${command.id} AND state = 'PENDING'
       `;
@@ -145,6 +160,7 @@ export class TransferService {
         UPDATE transfer_commands
         SET attempts = attempts + 1,
             next_attempt_at = now() + (
+              -- Exponential backoff is capped at 30 seconds to balance recovery and load.
               LEAST(30, power(2, LEAST(attempts, 5))) * interval '1 second'
             )
         WHERE id = ${command.id} AND state = 'PENDING'

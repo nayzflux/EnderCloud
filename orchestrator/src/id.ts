@@ -7,9 +7,11 @@ export function nanoid(size = DEFAULT_SIZE): string {
   let result = "";
   const bytes = new Uint8Array(size);
 
+  // Refill until enough unbiased characters survive rejection sampling.
   while (result.length < size) {
     crypto.getRandomValues(bytes);
     for (const byte of bytes) {
+      // Reject the incomplete modulo range; otherwise early alphabet characters are more likely.
       if (byte >= RANDOM_BYTE_LIMIT) continue;
       result += ALPHABET[byte % ALPHABET.length];
       if (result.length === size) break;

@@ -28,16 +28,20 @@ export class SessionController {
     private readonly logger: Logger,
   ) {}
 
+  // Advance timeout, recovery, and draining stages for all active sessions.
   public async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
     try {
+      // Stage order matters: expire stale players before deciding whether sessions may start,
+      // then recover failures before final drain cleanup.
       const stages = [
         ["expire-transfers", () => this.expireTransfers()],
         ["advance-waiting", () => this.advanceWaitingSessions()],
         ["recover-failed", () => this.recoverFailedInstances()],
         ["finish-draining", () => this.finishDrainingInstances()],
       ] as const;
+      // Isolate stages so a failure in recovery does not block timeout or drain processing.
       for (const [stage, task] of stages) {
         try {
           await task();
@@ -53,6 +57,7 @@ export class SessionController {
     }
   }
 
+  // Mark players as left when their transfer acknowledgement never arrives.
   private async expireTransfers(): Promise<void> {
     await this.sql`
       UPDATE session_players sp
@@ -68,6 +73,7 @@ export class SessionController {
     `;
   }
 
+  // Start, keep waiting, or cancel sessions based on arrivals and deadlines.
   private async advanceWaitingSessions(): Promise<void> {
     const sessions = await this.sql<SessionRow[]>`
       SELECT
@@ -82,6 +88,7 @@ export class SessionController {
       WHERE s.state IN ('WAITING_FOR_INSTANCE', 'TRANSFERRING', 'WAITING')
       GROUP BY s.id, g.id
     `;
+    // Evaluate each session from the same database snapshot of counts and deadline state.
     for (const session of sessions) {
       if (session.state === "WAITING_FOR_INSTANCE") {
         if (session.deadline_reached) {
@@ -92,6 +99,7 @@ export class SessionController {
         }
         continue;
       }
+      // Start immediately when full, or at the deadline once the minimum viable count arrived.
       if (
         session.connected_players >= session.maximum_players ||
         (session.deadline_reached &&
@@ -107,6 +115,7 @@ export class SessionController {
           WHERE session_id = ${session.id} AND state = 'PENDING'
         `;
       } else if (
+        // Below-minimum sessions cannot start safely after the waiting window closes.
         session.deadline_reached &&
         session.connected_players < session.minimum_players
       ) {
@@ -115,6 +124,7 @@ export class SessionController {
         );
         await this.cancel(session.id, session.instance_id);
       } else if (
+        // Once every still-active selection arrived, the lobby is waiting on game start rather than transfers.
         session.state === "TRANSFERRING" &&
         session.active_players > 0 &&
         session.active_players === session.connected_players
@@ -127,6 +137,7 @@ export class SessionController {
     }
   }
 
+  // Retry safe pre-start failures or fail sessions that can no longer be reassigned.
   private async recoverFailedInstances(): Promise<void> {
     const failures = await this.sql<
       {
@@ -148,6 +159,7 @@ export class SessionController {
         AND s.state NOT IN ('FINISHED', 'CANCELLED', 'FAILED')
       GROUP BY s.id, i.id
     `;
+    // Each failed instance owns at most one active session, so recover them independently.
     for (const failure of failures) {
       if (
         shouldRetryFailedSession(
@@ -163,6 +175,7 @@ export class SessionController {
           retry: failure.retry_count + 1,
         });
         await this.transfers.cancelForInstance(failure.instance_id);
+        // Reset the session and its players atomically so no observer sees mixed retry state.
         await this.sql.begin(async (transaction) => {
           await transaction`
             UPDATE game_sessions s
@@ -195,10 +208,12 @@ export class SessionController {
         `;
         await this.transfers.cancelForInstance(failure.instance_id);
       }
+      // Cleanup happens after the session is detached or failed, making retries safe.
       await this.instances.stopAndDelete(failure.instance_id);
     }
   }
 
+  // Evacuate hubs when needed and delete instances whose drain is complete.
   private async finishDrainingInstances(): Promise<void> {
     const due = await this.sql<
       {
@@ -214,6 +229,7 @@ export class SessionController {
       WHERE i.lifecycle_state = 'DRAINING'
         AND (i.player_count = 0 OR i.drain_deadline <= now())
     `;
+    // Drain candidates are already due; hubs require evacuation before deletion.
     for (const instance of due) {
       if (instance.type === "hub" && instance.player_count > 0) {
         await this.evacuateHub(instance.id, instance.group_id);
@@ -222,6 +238,7 @@ export class SessionController {
     }
   }
 
+  // Distribute remaining hub players across healthy instances with spare capacity.
   private async evacuateHub(
     sourceInstanceId: string,
     groupId: string,
@@ -246,10 +263,12 @@ export class SessionController {
           AND i.lifecycle_state = 'RUNNING'
           AND i.availability_state = 'OPEN'
           AND i.player_count < g.maximum_players_per_instance
+        -- Fill the emptiest hubs first to spread load; use age as a stable tie-breaker.
         ORDER BY i.player_count, i.running_at
       `,
     ]);
     let offset = 0;
+    // Consume the player list in slices sized to each destination's free capacity.
     for (const target of targets) {
       const selected = players
         .slice(offset, offset + target.available)
@@ -263,11 +282,13 @@ export class SessionController {
           });
         });
       }
+      // Move the cursor by actual assignments, not advertised capacity, for the final partial slice.
       offset += selected.length;
       if (offset >= players.length) break;
     }
   }
 
+  // Cancel a pre-start session, its transfers, and release its reserved instance.
   private async cancel(
     sessionId: string,
     instanceId: string | null,

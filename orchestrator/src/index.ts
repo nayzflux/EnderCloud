@@ -22,6 +22,7 @@ const config = loadConfig();
 const logger = new Logger(config.logLevel);
 let ready = false;
 
+// Bootstrap persistent dependencies before exposing the HTTP service as ready.
 await mkdir(config.groupsRoot, { recursive: true });
 await mkdir(config.templatesRoot, { recursive: true });
 await mkdir(config.runtimeRoot, { recursive: true });
@@ -54,6 +55,7 @@ const matchmaker = new Matchmaker(sql, transfers, logger);
 const sessions = new SessionController(sql, instances, transfers, config, logger);
 const reconciler = new Reconciler(sql, executor, instances, logger);
 
+// Converge database and runtime state once before readiness probes can succeed.
 await reconciler.tick();
 await capacity.tick();
 await transfers.tick();
@@ -69,6 +71,8 @@ const app = createApp({
 app.listen({ port: config.port, hostname: "0.0.0.0" });
 const server = app.server;
 if (!server) throw new Error("Elysia failed to start its HTTP server");
+
+// Each periodic control loop is independent and protects itself from overlapping ticks.
 const scheduler = new Scheduler(logger);
 scheduler.every("capacity", config.capacityIntervalMs, () => capacity.tick());
 scheduler.every("matchmaking", config.matchmakingIntervalMs, () => matchmaker.tick());
@@ -83,6 +87,7 @@ logger.info("EnderCloud orchestrator started", {
 
 async function shutdown(signal: string): Promise<void> {
   if (!ready) return;
+  // Fail readiness immediately so no new traffic is routed during teardown.
   ready = false;
   logger.info("Graceful shutdown requested", { signal });
   scheduler.stop();

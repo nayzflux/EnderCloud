@@ -38,6 +38,7 @@ export interface AppConfig {
   readonly logLevel: string;
 }
 
+// Load and validate all runtime settings from environment variables.
 export function loadConfig(): AppConfig {
   const runtimeRoot = resolve(process.env.RUNTIME_ROOT ?? "../runtime");
   return {

@@ -38,10 +38,14 @@ export class InstanceController {
     private readonly logger: Logger,
   ) {}
 
+  // Create an unassigned warm instance for the requested server group.
   public async createWarm(groupId: string): Promise<string> {
     const variant = await this.variants.select(groupId);
     const instanceId = nanoid();
+    // Track deletion separately so failed cleanup is visible and retryable.
     const commandId = nanoid();
+    // Persist the desired instance and its command before touching Docker. This
+    // makes creation recoverable if the orchestrator crashes between the two steps.
     await this.sql.begin(async (transaction) => {
       await transaction`
         INSERT INTO server_instances (
@@ -59,7 +63,9 @@ export class InstanceController {
     return instanceId;
   }
 
+  // Resume an interrupted CREATE command from persisted state.
   public async resumeCreate(instanceId: string): Promise<void> {
+    // Use the newest CREATE command because older attempts may describe an already-retried operation.
     const commands = await this.sql<{ id: string }[]>`
       SELECT id FROM commands
       WHERE instance_id = ${instanceId} AND operation = 'CREATE'
@@ -75,6 +81,7 @@ export class InstanceController {
     await this.performCreate(instanceId, commandId);
   }
 
+  // Execute the recoverable database-to-Docker creation workflow.
   private async performCreate(instanceId: string, commandId: string): Promise<void> {
     const rows = await this.sql<CreateRow[]>`
       SELECT i.id, i.group_id, i.variant_id, i.session_id,
@@ -91,6 +98,8 @@ export class InstanceController {
       WHERE id = ${commandId} AND state <> 'SUCCEEDED'
     `;
     try {
+      // Executor creation is idempotent: an existing managed container is reused
+      // when reconciliation resumes a partially completed CREATE command.
       const created = await this.executor.createInstance({
         instanceId: row.id,
         groupId: row.group_id,
@@ -135,7 +144,9 @@ export class InstanceController {
     }
   }
 
+  // Apply an event emitted by the Paper plugin and persist it for auditing.
   public async handlePaperEvent(instanceId: string, event: PaperEvent): Promise<void> {
+    // Dispatch by protocol event so every event type has one state mutation path.
     switch (event.type) {
       case "SERVER_READY":
         await this.markReady(instanceId, event.endpoint);
@@ -159,9 +170,11 @@ export class InstanceController {
         await this.finishSession(instanceId, event.sessionId, event.results);
         break;
     }
+    // Audit only after successful handling; rejected stale events must not look accepted.
     await this.recordEvent("instance", instanceId, event.type, event);
   }
 
+  // Promote a starting instance to RUNNING and register it with proxies.
   public async markReady(instanceId: string, reportedEndpoint?: string): Promise<void> {
     const rows = await this.sql<ServerSnapshot[]>`
       UPDATE server_instances i
@@ -182,9 +195,11 @@ export class InstanceController {
         COALESCE(g.maximum_players_per_instance, g.maximum_players, 0) AS "maximumPlayers"
     `;
     if (rows[0]) {
+      // Publish registration only for the transaction that actually performed STARTING -> RUNNING.
       await this.bus.publishRegistry("SERVER_REGISTERED", rows[0]);
       return;
     }
+    // A repeated SERVER_READY is valid; distinguish idempotency from an invalid lifecycle.
     const current = await this.sql<{ lifecycle_state: string }[]>`
       SELECT lifecycle_state FROM server_instances WHERE id = ${instanceId}
     `;
@@ -193,6 +208,7 @@ export class InstanceController {
     }
   }
 
+  // Remove an eligible instance from routing and start its drain deadline.
   public async beginDrain(instanceId: string): Promise<boolean> {
     const rows = await this.sql<{ id: string }[]>`
       UPDATE server_instances i
@@ -215,12 +231,14 @@ export class InstanceController {
       RETURNING i.id
     `;
     if (rows.length > 0) {
+      // Remove routing before waiting for players to leave, preventing new joins during drain.
       await this.bus.publishRegistry("SERVER_UNREGISTERED", { instanceId });
       return true;
     }
     return false;
   }
 
+  // Converge a terminal instance to STOPPED and clean its runtime resources.
   public async stopAndDelete(instanceId: string): Promise<void> {
     const rows = await this.sql<StopRow[]>`
       UPDATE server_instances i
@@ -239,6 +257,7 @@ export class InstanceController {
       VALUES (${commandId}, ${instanceId}, 'DELETE', 'RUNNING')
     `;
     try {
+      // Give Minecraft its configured graceful shutdown window before forcing removal.
       await this.executor.stopInstance(instanceId, Math.ceil(row.shutdown_timeout_ms / 1_000));
       await this.executor.deleteInstance(instanceId);
       await this.sql.begin(async (transaction) => {
@@ -264,6 +283,7 @@ export class InstanceController {
     }
   }
 
+  // Return all running endpoints that may be registered by a proxy.
   public async listProxyServers(): Promise<readonly ServerSnapshot[]> {
     return this.sql<ServerSnapshot[]>`
       SELECT
@@ -276,10 +296,12 @@ export class InstanceController {
       FROM server_instances i
       JOIN server_groups g ON g.id = i.group_id
       WHERE i.lifecycle_state = 'RUNNING' AND i.endpoint IS NOT NULL
+      -- Stable startup ordering keeps proxy registry snapshots deterministic.
       ORDER BY i.running_at, i.id
     `;
   }
 
+  // Return the current versioned player assignment for a minigame instance.
   public async getAssignment(instanceId: string) {
     const sessions = await this.sql<{
       session_id: string;
@@ -302,6 +324,7 @@ export class InstanceController {
     }[]>`
       SELECT player_id, party_id, team_index, state
       FROM session_players WHERE session_id = ${session.session_id}
+      -- Group players by team and preserve assignment order inside each team.
       ORDER BY team_index, selected_at
     `;
     return {
@@ -318,6 +341,7 @@ export class InstanceController {
     };
   }
 
+  // Record that the game server consumed the expected assignment revision.
   public async acknowledgeAssignment(instanceId: string, revision: number): Promise<boolean> {
     const rows = await this.sql<{ id: string }[]>`
       UPDATE game_sessions s
@@ -331,6 +355,7 @@ export class InstanceController {
     return rows.length > 0;
   }
 
+  // Atomically reflect a player arrival in both instance and session state.
   private async playerJoined(
     instanceId: string,
     playerId: string,
@@ -372,6 +397,7 @@ export class InstanceController {
     });
   }
 
+  // Atomically remove a player from the instance and mark the session departure.
   private async playerLeft(
     instanceId: string,
     playerId: string,
@@ -383,6 +409,7 @@ export class InstanceController {
         instanceId,
         sessionId,
       );
+      // A grace window tolerates one delayed heartbeat before treating a player as absent.
       await transaction`
         DELETE FROM instance_players
         WHERE instance_id = ${instanceId} AND player_id = ${playerId}
@@ -405,9 +432,11 @@ export class InstanceController {
     });
   }
 
+  // Reconcile the authoritative player list reported by the game server.
   private async heartbeat(instanceId: string, playerIds: readonly string[]): Promise<void> {
     await this.sql.begin(async (transaction) => {
       const effectiveSessionId = await this.validateEventSession(transaction, instanceId);
+      // Refresh every reported player before removing stale rows, making the heartbeat authoritative.
       for (const playerId of playerIds) {
         await transaction`
           INSERT INTO instance_players (instance_id, player_id)
@@ -436,6 +465,7 @@ export class InstanceController {
           AND last_seen_at < now() - interval '30 seconds'
       `;
       if (effectiveSessionId) {
+        // Mirror heartbeat removals into session state so transfer completion can account for departures.
         await transaction`
           UPDATE session_players sp
           SET state = 'LEFT', left_at = now()
@@ -459,6 +489,7 @@ export class InstanceController {
     });
   }
 
+  // Apply only valid, idempotent game-driven session state transitions.
   private async setSessionState(
     instanceId: string,
     sessionId: string,
@@ -480,6 +511,7 @@ export class InstanceController {
         )
       RETURNING s.id
     `;
+    // The conditional UPDATE is the concurrency-safe transition path.
     if (rows.length > 0) return;
     const current = await this.sql<{ state: string }[]>`
       SELECT s.state
@@ -487,10 +519,12 @@ export class InstanceController {
       JOIN server_instances i ON i.id = s.instance_id AND i.session_id = s.id
       WHERE s.id = ${sessionId} AND i.id = ${instanceId}
     `;
+    // Duplicate plugin events are idempotent, while skipped or foreign transitions are rejected.
     if (current[0]?.state === state) return;
     throw this.invalidSessionEvent(instanceId, sessionId);
   }
 
+  // Persist game completion results and drain the consumed instance.
   private async finishSession(
     instanceId: string,
     sessionId: string,
@@ -521,6 +555,7 @@ export class InstanceController {
     if (rows[0]?.instance_id) await this.beginDrain(rows[0].instance_id);
   }
 
+  // Reject stale plugin events that refer to a different instance assignment.
   private async validateEventSession(
     transaction: postgres.TransactionSql,
     instanceId: string,
@@ -546,6 +581,7 @@ export class InstanceController {
     return new Error(`Session ${sessionId} is unavailable for instance ${instanceId}`);
   }
 
+  // Append an immutable domain event to the audit log.
   private async recordEvent(
     aggregateType: string,
     aggregateId: string,

@@ -22,10 +22,12 @@ export class Reconciler {
     private readonly logger: Logger,
   ) {}
 
+  // Converge persisted lifecycle state with the containers currently managed by Docker.
   public async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
     try {
+      // Read desired and actual state concurrently; neither query depends on the other.
       const [databaseInstances, runtimeInstances] = await Promise.all([
         this.sql<InstanceRow[]>`
           SELECT
@@ -42,9 +44,11 @@ export class Reconciler {
         `,
         this.executor.listManagedInstances(),
       ]);
+      // Index both snapshots once to avoid repeated linear searches inside reconciliation loops.
       const databaseById = new Map(databaseInstances.map((instance) => [instance.id, instance]));
       const runtimeById = new Map(runtimeInstances.map((instance) => [instance.instanceId, instance]));
 
+      // Reconcile each database-owned instance independently so one failure does not abort the scan.
       for (const database of databaseInstances) {
         try {
           const runtime = runtimeById.get(database.id);
@@ -53,11 +57,13 @@ export class Reconciler {
             // creation completed just before an orchestrator crash.
             await this.instances.resumeCreate(database.id);
           } else if (database.lifecycle_state === "STARTING" && database.startup_expired) {
+            // A server that never reports readiness is failed so capacity can replace it.
             await this.sql`
               UPDATE server_instances SET lifecycle_state = 'FAILED', updated_at = now()
               WHERE id = ${database.id} AND lifecycle_state = 'STARTING'
             `;
           } else if (
+            // RUNNING/STARTING in the database requires a live container; disappearance is failure.
             (database.lifecycle_state === "RUNNING" ||
               database.lifecycle_state === "STARTING") &&
             (!runtime || !runtime.running)
@@ -67,6 +73,7 @@ export class Reconciler {
               WHERE id = ${database.id}
             `;
           } else if (database.lifecycle_state === "DRAINING") {
+            // Drain waits for zero players, but the deadline guarantees eventual cleanup.
             if (!runtime || !runtime.running) {
               await this.instances.stopAndDelete(database.id);
             } else {
@@ -89,6 +96,7 @@ export class Reconciler {
         }
       }
 
+      // Scan the opposite direction to detect containers with no persisted owner.
       for (const runtime of runtimeInstances) {
         if (!databaseById.has(runtime.instanceId)) {
           this.logger.warn("Quarantined orphan Docker container", {

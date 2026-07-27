@@ -47,6 +47,7 @@ function boolean(value: unknown, context: string, fallback?: boolean): boolean {
   return value;
 }
 
+// Convert human-readable duration values into milliseconds.
 export function parseDuration(value: unknown, context: string): number {
   if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
   if (typeof value !== "string") {
@@ -67,6 +68,7 @@ function validateId(value: unknown, context: string): string {
   return id;
 }
 
+// Validate a group descriptor and enforce cross-field capacity constraints.
 export function parseGroup(document: unknown, source: string): ServerGroupConfig {
   const root = object(document, source);
   const id = validateId(root.id, `${source}.id`);
@@ -180,6 +182,7 @@ function parseMemory(value: unknown, context: string): number {
   return Number.parseInt(match[1]!, 10) * factors[match[2]!.toUpperCase() as keyof typeof factors];
 }
 
+// Validate a variant descriptor and normalize its Docker runtime specification.
 export function parseVariant(document: unknown, source: string): ServerVariantConfig {
   const root = object(document, source);
   const docker = object(root.docker, `${source}.docker`);
@@ -190,6 +193,7 @@ export function parseVariant(document: unknown, source: string): ServerVariantCo
   }
   const rawEnvironment = object(root.environment ?? {}, `${source}.environment`);
   const environment: Record<string, string> = {};
+  // Docker expects strings, so accept YAML scalars and normalize them here.
   for (const [key, value] of Object.entries(rawEnvironment)) {
     if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
       throw new Error(`${source}.environment.${key} must be scalar`);
@@ -212,11 +216,14 @@ export function parseVariant(document: unknown, source: string): ServerVariantCo
   };
 }
 
+// Produce a deterministic checksum so template revisions can be tracked reliably.
 async function checksumDirectory(root: string): Promise<string> {
   const hasher = createHash("sha256");
   async function visit(directory: string): Promise<void> {
     const entries = await readdir(directory, { withFileTypes: true });
+    // Filesystem enumeration order is unstable; sorting makes the checksum reproducible.
     entries.sort((a, b) => a.name.localeCompare(b.name));
+    // Hash both relative paths and bytes so renames and content changes alter the revision.
     for (const entry of entries) {
       const path = join(directory, entry.name);
       if (entry.isSymbolicLink()) {
@@ -233,14 +240,17 @@ async function checksumDirectory(root: string): Promise<string> {
   return hasher.digest("hex");
 }
 
+// Load all group and variant descriptors and verify their references.
 export async function loadConfiguration(groupsRoot: string, templatesRoot: string) {
   const groupFiles = (await readdir(groupsRoot, { withFileTypes: true }))
     .filter((entry) => entry.isFile() && /\.ya?ml$/i.test(entry.name))
     .map((entry) => join(groupsRoot, entry.name));
+  // Group files are independent, so parse them concurrently during startup.
   const groups = await Promise.all(
     groupFiles.map(async (path) => parseGroup(parse(await readFile(path, "utf8")), path)),
   );
   const variants: Array<ServerVariantConfig & { templatePath: string; checksum: string }> = [];
+  // Each template directory is optional until it contains a valid variant.yml descriptor.
   for (const entry of await readdir(templatesRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const templatePath = resolve(templatesRoot, entry.name);
@@ -255,6 +265,7 @@ export async function loadConfiguration(groupsRoot: string, templatesRoot: strin
     variants.push({ ...variant, templatePath, checksum: await checksumDirectory(templatePath) });
   }
   const groupIds = new Set(groups.map((group) => group.id));
+  // Reject dangling variant references before writing any configuration to the database.
   for (const variant of variants) {
     if (!groupIds.has(variant.group)) {
       throw new Error(`Variant ${variant.id} references unknown group ${variant.group}`);
@@ -263,6 +274,7 @@ export async function loadConfiguration(groupsRoot: string, templatesRoot: strin
   return { groups, variants };
 }
 
+// Upsert the filesystem configuration into the database as one atomic snapshot.
 export async function synchronizeConfiguration(
   sql: SqlClient,
   groupsRoot: string,
@@ -270,7 +282,9 @@ export async function synchronizeConfiguration(
   logger: Logger,
 ): Promise<void> {
   const configuration = await loadConfiguration(groupsRoot, templatesRoot);
+  // Groups and variants are committed together so readers never observe a partial config refresh.
   await sql.begin(async (transaction) => {
+    // Upsert preserves runtime rows that reference stable group identifiers.
     for (const group of configuration.groups) {
       const matchmaking = group.matchmaking;
       const routing = group.routing;
@@ -311,6 +325,7 @@ export async function synchronizeConfiguration(
           updated_at = now()
       `;
     }
+    // Variant metadata changes in place; existing instances keep their selected variant id.
     for (const variant of configuration.variants) {
       await transaction`
         INSERT INTO server_variants (

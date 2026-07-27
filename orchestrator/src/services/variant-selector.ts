@@ -14,6 +14,7 @@ interface VariantRow {
 export class VariantSelector {
   public constructor(private readonly sql: SqlClient) {}
 
+  // Select the best enabled variant using current weighted representation.
   public async select(groupId: string): Promise<VariantRow> {
     const rows = await this.sql<VariantRow[]>`
       SELECT

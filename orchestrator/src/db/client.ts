@@ -4,6 +4,7 @@ import * as schema from "./schema.ts";
 
 export type SqlClient = ReturnType<typeof postgres>;
 
+// Create the shared PostgreSQL client used by all orchestrator services.
 export function createDatabase(databaseUrl: string) {
   const sql = postgres(databaseUrl, {
     max: 10,

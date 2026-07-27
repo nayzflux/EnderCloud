@@ -14,14 +14,17 @@ export interface CapacityDecision {
   readonly drain: number;
 }
 
+// Compute how many instances to create or drain from the current pool state.
 export function decideCapacity(
   policy: CapacityPolicy,
   instances: readonly InstanceCapacityState[],
   enabled = true,
 ): CapacityDecision {
+  // Terminal instances consume no capacity and must not affect scaling decisions.
   const activeInstances = instances.filter(
     ({ lifecycle }) => lifecycle !== "STOPPED" && lifecycle !== "FAILED",
   );
+  // Separate usable capacity from capacity still booting to avoid over-creation.
   const warmReady = activeInstances.filter(({ lifecycle, availability }) =>
     isWarmReady(lifecycle, availability),
   ).length;
@@ -34,13 +37,16 @@ export function decideCapacity(
     return { warmReady, warmPending, active, create: 0, drain: warmReady };
   }
 
+  // Two independent deficits are considered: total resilience and immediately usable warm capacity.
   const desiredForMinimumInstances = Math.max(0, policy.minimumInstances - active);
   const desiredForWarm = Math.max(
     0,
     policy.minimumWarmInstances - warmReady - warmPending,
   );
   const room = Math.max(0, policy.maximumInstances - active);
+  // Create enough for the larger deficit, but never cross the absolute maximum.
   const create = Math.min(room, Math.max(desiredForMinimumInstances, desiredForWarm));
+  // Drain only the overlap between excess warm capacity and instances above the minimum floor.
   const drain = Math.max(
     0,
     Math.min(

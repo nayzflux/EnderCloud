@@ -39,6 +39,7 @@ export interface ApiDependencies {
   readonly isReady: () => boolean;
 }
 
+// Build the HTTP API and bind each route to the orchestrator services.
 export function createApp(dependencies: ApiDependencies) {
   return new Elysia({ name: "endercloud-api" })
     .use(

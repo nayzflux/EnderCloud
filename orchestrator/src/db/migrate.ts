@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfig } from "../config.ts";
 import { createDatabase } from "./client.ts";
 
+// Apply pending schema migrations before any service starts reading state.
 export async function migrateDatabase(databaseUrl: string): Promise<void> {
   const { db, sql } = createDatabase(databaseUrl);
   await migrate(db, {

@@ -29,6 +29,7 @@ export class RedisEventBus {
     await this.redis.quit();
   }
 
+  // Notify proxies when a backend becomes available or unavailable.
   public async publishRegistry(
     type: "SERVER_REGISTERED" | "SERVER_UNREGISTERED",
     payload: unknown,
@@ -36,6 +37,7 @@ export class RedisEventBus {
     await this.publish(REGISTRY_CHANNEL, type, payload);
   }
 
+  // Publish a player transfer command for the proxy layer.
   public async publishTransfer(payload: {
     readonly instanceId: string;
     readonly endpoint: string;
@@ -45,6 +47,7 @@ export class RedisEventBus {
     await this.publish(TRANSFER_CHANNEL, "TRANSFER_PLAYERS", payload);
   }
 
+  // Wrap every Redis message in the versioned event envelope.
   private async publish(
     channel: string,
     type: RedisEnvelope["type"],

@@ -25,12 +25,14 @@ export class LocalDockerExecutor implements Executor {
     this.docker = new Docker({ socketPath: config.dockerSocket });
   }
 
+  // Materialize a template, create its container, and return the proxy endpoint.
   public async createInstance(spec: InstanceSpec): Promise<CreatedInstance> {
     const existing = await this.findByInstanceId(spec.instanceId);
     const runtimePath = join(this.config.runtimeRoot, "instances", spec.instanceId);
     const hostRuntimePath = join(this.config.runtimeHostRoot, "instances", spec.instanceId);
     const name = instanceName(spec.variantId, spec.instanceId);
     if (existing) {
+      // Reuse the labeled container to make CREATE safe to retry after crashes.
       if (existing.State !== "running") await this.docker.getContainer(existing.Id).start();
       return {
         containerId: existing.Id,
@@ -39,6 +41,7 @@ export class LocalDockerExecutor implements Executor {
       };
     }
 
+    // Rebuild runtime data from the immutable template to avoid leftovers from failed attempts.
     await mkdir(join(this.config.runtimeRoot, "instances"), { recursive: true });
     await rm(runtimePath, { recursive: true, force: true });
     await cp(spec.templatePath, runtimePath, {
@@ -49,6 +52,7 @@ export class LocalDockerExecutor implements Executor {
     });
     await this.ensureImage(spec.runtime.image);
 
+    // Labels are the durable ownership metadata used for discovery after orchestrator restarts.
     const labels: Record<string, string> = {
       "orchestrator.managed": "true",
       "orchestrator.instance-id": spec.instanceId,
@@ -56,6 +60,7 @@ export class LocalDockerExecutor implements Executor {
       "orchestrator.variant-id": spec.variantId,
     };
     if (spec.sessionId) labels["orchestrator.session-id"] = spec.sessionId;
+    // Explicit request values override variant defaults, then orchestrator identity is enforced.
     const env = {
       ...spec.runtime.environment,
       ...spec.environment,
@@ -79,6 +84,7 @@ export class LocalDockerExecutor implements Executor {
     try {
       await container.start();
     } catch (error) {
+      // Creation succeeded but startup failed; remove the unusable container before retrying.
       await container.remove({ force: true }).catch(() => undefined);
       throw error;
     }
@@ -90,12 +96,14 @@ export class LocalDockerExecutor implements Executor {
     return { containerId: container.id, runtimePath, endpoint: `${name}:25565` };
   }
 
+  // Gracefully stop a managed container when it is still running.
   public async stopInstance(instanceId: string, timeoutSeconds: number): Promise<void> {
     const existing = await this.findByInstanceId(instanceId);
     if (!existing || existing.State !== "running") return;
     await this.docker.getContainer(existing.Id).stop({ t: timeoutSeconds });
   }
 
+  // Remove both the managed container and its generated runtime directory.
   public async deleteInstance(instanceId: string): Promise<void> {
     const existing = await this.findByInstanceId(instanceId);
     if (existing) {
@@ -105,6 +113,7 @@ export class LocalDockerExecutor implements Executor {
     await rm(runtimePath, { recursive: true, force: true });
   }
 
+  // Read the runtime state used by reconciliation and diagnostics.
   public async inspectInstance(instanceId: string): Promise<RuntimeState> {
     const existing = await this.findByInstanceId(instanceId);
     if (!existing) return { exists: false, running: false };
@@ -117,11 +126,13 @@ export class LocalDockerExecutor implements Executor {
     };
   }
 
+  // Discover only containers owned by this orchestrator through Docker labels.
   public async listManagedInstances(): Promise<readonly RuntimeInstance[]> {
     const containers = await this.docker.listContainers({
       all: true,
       filters: { label: ["orchestrator.managed=true"] },
     });
+    // Normalize Docker's shape into the executor contract consumed by reconciliation.
     return containers.map((container) => ({
       containerId: container.Id,
       instanceId: container.Labels["orchestrator.instance-id"] ?? "",
@@ -135,6 +146,7 @@ export class LocalDockerExecutor implements Executor {
     }));
   }
 
+  // Resolve a managed container by its stable orchestrator instance identifier.
   private async findByInstanceId(instanceId: string): Promise<Docker.ContainerInfo | undefined> {
     const containers = await this.docker.listContainers({
       all: true,
@@ -148,6 +160,7 @@ export class LocalDockerExecutor implements Executor {
     return containers[0];
   }
 
+  // Pull the configured image only when it is not already available locally.
   private async ensureImage(image: string): Promise<void> {
     try {
       await this.docker.getImage(image).inspect();

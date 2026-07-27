@@ -36,6 +36,7 @@ export class Matchmaker {
     private readonly logger: Logger,
   ) {}
 
+  // Assign waiting sessions, backfill active lobbies, then form new sessions.
   public async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
@@ -46,12 +47,16 @@ export class Matchmaker {
         FROM server_groups
         WHERE type = 'minigame' AND enabled = true
       `;
+      // Process groups independently so a failure in one game mode does not stop others.
       for (const group of groups) {
         try {
+          // Consume all currently available warm instances for already-formed sessions first.
           while (await this.assignWaitingSession(group)) {
             // Assign every available warm instance before forming more sessions.
           }
+          // Fill sessions that already own an instance before consuming queue entries for new sessions.
           await this.backfill(group);
+          // The hard cap keeps one busy group from monopolizing the scheduler tick.
           for (let formed = 0; formed < 32 && (await this.formSession(group)); formed += 1) {
             // Drain the currently matchable queue without monopolising the scheduler forever.
           }
@@ -69,14 +74,19 @@ export class Matchmaker {
     }
   }
 
+  // Select queued parties, reserve a warm instance, and persist a new session.
   private async formSession(group: GroupRow): Promise<boolean> {
     return this.sql.begin<boolean>(async (transaction) => {
+      // Row locks plus SKIP LOCKED allow multiple orchestrator workers to form
+      // sessions concurrently without selecting the same queued party twice.
       const queue = await transaction<QueueRow[]>`
         WITH locked_entries AS (
           SELECT q.id, q.party_id, q.joined_at
           FROM queue_entries q
           WHERE q.group_id = ${group.id} AND q.state = 'QUEUED'
+          -- Oldest parties are considered first for queue fairness.
           ORDER BY q.joined_at
+          -- Locked rows are skipped so concurrent workers never select the same party.
           FOR UPDATE SKIP LOCKED
         )
         SELECT q.id AS entry_id, q.party_id, q.joined_at,
@@ -93,6 +103,7 @@ export class Matchmaker {
         group.team_size,
         group.maximum_players,
       );
+      // Do not consume queue entries until a valid minimum-sized match can be committed.
       if (packed.playerCount < group.minimum_players) return false;
 
       const sessionId = nanoid();
@@ -103,10 +114,13 @@ export class Matchmaker {
            AND lifecycle_state = 'RUNNING'
            AND availability_state = 'OPEN'
            AND endpoint IS NOT NULL
+        -- Prefer the oldest warm instance to rotate the pool predictably.
         ORDER BY running_at
+        -- Lock the reservation candidate so only this transaction can claim it.
         LIMIT 1 FOR UPDATE SKIP LOCKED
       `;
       const reservation = reservations[0];
+      // Session formation is allowed without capacity; it can wait while autoscaling catches up.
       const state = reservation ? "TRANSFERRING" : "WAITING_FOR_INSTANCE";
       await transaction`
         INSERT INTO game_sessions (
@@ -117,6 +131,7 @@ export class Matchmaker {
         )
       `;
       if (reservation) {
+        // Reserve the instance in the same transaction as the session to prevent double assignment.
         await transaction`
           UPDATE server_instances
           SET availability_state = 'RESERVED', session_id = ${sessionId}, updated_at = now()
@@ -151,6 +166,7 @@ export class Matchmaker {
     });
   }
 
+  // Attach the oldest waiting session to the next available warm instance.
   private async assignWaitingSession(group: GroupRow): Promise<boolean> {
     return this.sql.begin<boolean>(async (transaction) => {
       const sessions = await transaction<{ id: string }[]>`
@@ -207,6 +223,7 @@ export class Matchmaker {
     });
   }
 
+  // Try to fill open pre-start sessions with newly queued parties.
   private async backfill(group: GroupRow): Promise<void> {
     const candidates = await this.sql<{ id: string }[]>`
       SELECT id
@@ -216,11 +233,13 @@ export class Matchmaker {
         AND waiting_deadline > now()
       ORDER BY created_at
     `;
+    // Oldest sessions receive backfill candidates first.
     for (const candidate of candidates) {
       await this.backfillSession(group, candidate.id);
     }
   }
 
+  // Extend one existing assignment without moving players already selected.
   private async backfillSession(group: GroupRow, sessionId: string): Promise<boolean> {
     return this.sql.begin<boolean>(async (transaction) => {
       const sessions = await transaction<{
@@ -253,6 +272,8 @@ export class Matchmaker {
       `;
       if (existing.length >= group.maximum_players) return false;
       const initialTeams = this.toInitialTeams(existing, group.team_count);
+      // Row locks plus SKIP LOCKED allow multiple orchestrator workers to form
+      // sessions concurrently without selecting the same queued party twice.
       const queue = await transaction<QueueRow[]>`
         WITH locked_entries AS (
           SELECT q.id, q.party_id, q.joined_at
@@ -302,6 +323,7 @@ export class Matchmaker {
     });
   }
 
+  // Move selected queue entries into their durable session team assignments.
   private async persistSelection(
     transaction: postgres.TransactionSql,
     sessionId: string,
@@ -310,6 +332,7 @@ export class Matchmaker {
     transferring: boolean,
   ): Promise<void> {
     const selectedIds = new Set(selected.map((party) => party.entryId));
+    // Persist team by team so each player receives the exact packing result.
     for (const team of teams) {
       for (const party of team.parties) {
         if (!selectedIds.has(party.entryId)) continue;
@@ -342,6 +365,7 @@ export class Matchmaker {
     }));
   }
 
+  // Reconstruct team occupancy before attempting a backfill pack.
   private toInitialTeams(
     players: readonly { player_id: string; party_id: string; team_index: number }[],
     teamCount: number,
@@ -349,6 +373,7 @@ export class Matchmaker {
     return Array.from({ length: teamCount }, (_, teamIndex) => {
       const teamPlayers = players.filter((player) => player.team_index === teamIndex);
       const byParty = new Map<string, string[]>();
+      // Regroup players by party because the packing algorithm treats parties atomically.
       for (const player of teamPlayers) {
         const party = byParty.get(player.party_id) ?? [];
         party.push(player.player_id);
