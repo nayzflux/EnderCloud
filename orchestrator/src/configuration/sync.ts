@@ -127,6 +127,19 @@ export function parseGroup(document: unknown, source: string): ServerGroupConfig
 
   if (type === "minigame") {
     const matchmaking = object(root.matchmaking, `${source}.matchmaking`);
+    const waitingTimeoutMs = parseDuration(
+      matchmaking.waiting_timeout,
+      `${source}.matchmaking.waiting_timeout`,
+    );
+    const teamSize = integer(
+      matchmaking.team_size,
+      `${source}.matchmaking.team_size`,
+      1,
+    );
+    const partialStart = object(
+      matchmaking.partial_start ?? {},
+      `${source}.matchmaking.partial_start`,
+    );
     const policy = {
       minimumPlayers: integer(
         matchmaking.minimum_players,
@@ -139,15 +152,36 @@ export function parseGroup(document: unknown, source: string): ServerGroupConfig
         1,
       ),
       teamCount: integer(matchmaking.team_count, `${source}.matchmaking.team_count`, 1),
-      teamSize: integer(matchmaking.team_size, `${source}.matchmaking.team_size`, 1),
-      waitingTimeoutMs: parseDuration(
-        matchmaking.waiting_timeout,
-        `${source}.matchmaking.waiting_timeout`,
+      teamSize,
+      waitingTimeoutMs,
+      candidateWindow: integer(
+        matchmaking.candidate_window ?? 20,
+        `${source}.matchmaking.candidate_window`,
+        1,
+      ),
+      instanceWaitTimeoutMs: parseDuration(
+        matchmaking.instance_wait_timeout ?? waitingTimeoutMs,
+        `${source}.matchmaking.instance_wait_timeout`,
+      ),
+      maximumWaitingTimeoutMs: parseDuration(
+        matchmaking.maximum_waiting_timeout ?? waitingTimeoutMs * 3,
+        `${source}.matchmaking.maximum_waiting_timeout`,
+      ),
+      minimumPlayersPerTeam: integer(
+        partialStart.minimum_players_per_team ?? 0,
+        `${source}.matchmaking.partial_start.minimum_players_per_team`,
+      ),
+      maximumTeamSpread: integer(
+        partialStart.maximum_team_spread ?? teamSize,
+        `${source}.matchmaking.partial_start.maximum_team_spread`,
       ),
     };
     if (
       policy.minimumPlayers > policy.maximumPlayers ||
-      policy.maximumPlayers > policy.teamCount * policy.teamSize
+      policy.maximumPlayers > policy.teamCount * policy.teamSize ||
+      policy.minimumPlayersPerTeam > policy.teamSize ||
+      policy.maximumTeamSpread > policy.teamSize ||
+      policy.maximumWaitingTimeoutMs < policy.waitingTimeoutMs
     ) {
       throw new Error(`${source} has inconsistent matchmaking limits`);
     }
@@ -298,6 +332,11 @@ export async function synchronizeConfiguration(
         teamCount: matchmaking?.teamCount ?? null,
         teamSize: matchmaking?.teamSize ?? null,
         waitingTimeoutMs: matchmaking?.waitingTimeoutMs ?? null,
+        candidateWindow: matchmaking?.candidateWindow ?? null,
+        instanceWaitTimeoutMs: matchmaking?.instanceWaitTimeoutMs ?? null,
+        maximumWaitingTimeoutMs: matchmaking?.maximumWaitingTimeoutMs ?? null,
+        minimumPlayersPerTeam: matchmaking?.minimumPlayersPerTeam ?? null,
+        maximumTeamSpread: matchmaking?.maximumTeamSpread ?? null,
         minimumInstances: group.capacity.minimumInstances,
         maximumInstances: group.capacity.maximumInstances,
         minimumWarmInstances: group.capacity.minimumWarmInstances,
@@ -318,6 +357,11 @@ export async function synchronizeConfiguration(
           teamCount: matchmaking?.teamCount ?? null,
           teamSize: matchmaking?.teamSize ?? null,
           waitingTimeoutMs: matchmaking?.waitingTimeoutMs ?? null,
+          candidateWindow: matchmaking?.candidateWindow ?? null,
+          instanceWaitTimeoutMs: matchmaking?.instanceWaitTimeoutMs ?? null,
+          maximumWaitingTimeoutMs: matchmaking?.maximumWaitingTimeoutMs ?? null,
+          minimumPlayersPerTeam: matchmaking?.minimumPlayersPerTeam ?? null,
+          maximumTeamSpread: matchmaking?.maximumTeamSpread ?? null,
           minimumInstances: group.capacity.minimumInstances,
           maximumInstances: group.capacity.maximumInstances,
           minimumWarmInstances: group.capacity.minimumWarmInstances,

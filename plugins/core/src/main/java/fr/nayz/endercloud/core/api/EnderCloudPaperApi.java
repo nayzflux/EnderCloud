@@ -1,12 +1,12 @@
-package fr.endercloud.core.api;
-
-import fr.endercloud.core.model.QueueRequest;
-import fr.endercloud.core.model.QueueResult;
-import fr.endercloud.core.model.SessionAssignment;
+package fr.nayz.endercloud.core.api;
 
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+
+import fr.nayz.endercloud.core.model.QueueRequest;
+import fr.nayz.endercloud.core.model.QueueResult;
+import fr.nayz.endercloud.core.model.SessionAssignment;
 
 public interface EnderCloudPaperApi {
     CompletableFuture<QueueResult> enqueue(QueueRequest request);
@@ -18,6 +18,8 @@ public interface EnderCloudPaperApi {
     CompletableFuture<Void> reportGameStarting(String sessionId);
 
     CompletableFuture<Void> reportGameStarted(String sessionId);
+
+    CompletableFuture<Void> reportGameCancelled(String sessionId, String reason);
 
     CompletableFuture<Void> reportGameFinished(String sessionId, Map<String, Object> results);
 }

@@ -10,5 +10,8 @@ test("shared contract fixtures match the TypeScript protocol", async () => {
   expect(transfer.schemaVersion).toBe(1);
   expect(transfer.type).toBe("TRANSFER_PLAYERS");
   expect(assignment.state).toBe("WAITING");
-  expect(assignment.players[0].teamIndex).toBe(0);
+  expect(assignment.players[0].teamIndex).toBeUndefined();
+  expect(assignment.players[0].ticketId).toBe("queue-ticket-1");
+  expect(assignment.acceptingTickets).toBe(true);
+  expect(assignment.recommendedProfile).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
 });

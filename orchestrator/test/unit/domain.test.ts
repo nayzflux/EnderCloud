@@ -1,10 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { decideCapacity } from "../../src/domain/capacity.ts";
-import { packParties } from "../../src/domain/matchmaking.ts";
+import {
+  computeFeasibleProfiles,
+  isSessionLockEligible,
+  rankSessionCandidates,
+  selectRecommendedProfile,
+} from "../../src/domain/matchmaking.ts";
 import { shouldRetryFailedSession } from "../../src/domain/session-recovery.ts";
 import {
   assertAvailabilityTransition,
   assertLifecycleTransition,
+  assertSessionTransition,
   isWarmPending,
 } from "../../src/domain/state-machines.ts";
 import { selectVariant } from "../../src/domain/variant-selection.ts";
@@ -13,6 +19,8 @@ describe("state machines", () => {
   test("accepts valid lifecycle transitions and rejects invalid ones", () => {
     expect(() => assertLifecycleTransition("STARTING", "RUNNING")).not.toThrow();
     expect(() => assertLifecycleTransition("RUNNING", "CREATING")).toThrow();
+    expect(() => assertSessionTransition("STARTING", "CANCELLED")).not.toThrow();
+    expect(() => assertSessionTransition("RUNNING", "CANCELLED")).not.toThrow();
   });
 
   test("reservation is irreversible", () => {
@@ -24,6 +32,10 @@ describe("state machines", () => {
     expect(isWarmPending("CREATING", "OPEN")).toBeTrue();
     expect(isWarmPending("STARTING", "OPEN")).toBeTrue();
     expect(isWarmPending("DRAINING", "OPEN")).toBeFalse();
+  });
+
+  test("reopens an instance-waiting session after a pre-transfer ticket cancellation", () => {
+    expect(() => assertSessionTransition("WAITING_FOR_INSTANCE", "FORMING")).not.toThrow();
   });
 });
 
@@ -50,7 +62,7 @@ describe("capacity", () => {
       lifecycle: "RUNNING" as const,
       availability: "RESERVED" as const,
     }));
-    const decision = decideCapacity(
+    expect(decideCapacity(
       {
         minimumInstances: 0,
         maximumInstances: 10,
@@ -58,89 +70,72 @@ describe("capacity", () => {
         maximumWarmInstances: 4,
       },
       instances,
-    );
-    expect(decision.create).toBe(0);
+    ).create).toBe(0);
   });
 });
 
-describe("matchmaking (packParties)", () => {
-  const now = Date.now();
-
-  test("1.1 Atomicité: garde les groupes unis et ignore les groupes trop grands", () => {
-    const result = packParties(
-      [
-        { entryId: "a", partyId: "a", playerIds: ["1", "2", "3"], joinedAt: new Date(now) },
-        { entryId: "b", partyId: "b", playerIds: ["4", "5", "6", "7", "8"], joinedAt: new Date(now) },
-      ],
-      2,
-      4,
-    );
-    // Le groupe "a" (3 joueurs) entre dans la première équipe.
-    expect(result.teams[0]?.playerIds).toEqual(["1", "2", "3"]);
-    // Le groupe "b" (5 joueurs) dépasse la taille d'équipe (4) et est ignoré.
-    expect(result.selected.map(s => s.entryId)).toEqual(["a"]);
+describe("matchmaking profiles", () => {
+  test("recommends the required balanced partial composition", () => {
+    const profiles = computeFeasibleProfiles([3, 2, 1, 1, 1], 4, 4);
+    expect(selectRecommendedProfile(profiles)).toEqual([1, 2, 2, 3]);
   });
 
-  test("1.2 Priorité FIFO: respecte l'ordre d'arrivée dans la file", () => {
-    const result = packParties(
-      [
-        { entryId: "g3", partyId: "g3", playerIds: ["5", "6"], joinedAt: new Date(now + 2) },
-        { entryId: "g1", partyId: "g1", playerIds: ["1", "2"], joinedAt: new Date(now) },
-        { entryId: "g2", partyId: "g2", playerIds: ["3", "4"], joinedAt: new Date(now + 1) },
-      ],
-      2,
-      4,
-      4, // maximumPlayers = 4
-    );
-    // G1 et G2 sont sélectionnés car ils sont arrivés en premier (G1 à now, G2 à now+1).
-    expect(result.selected.map(s => s.entryId)).toEqual(["g1", "g2"]);
-    expect(result.teams[0]?.playerIds).toEqual(["1", "2", "3", "4"]);
+  test("finds an exact full composition", () => {
+    const profiles = computeFeasibleProfiles([4, 3, 2, 2, 1, 1, 1, 1, 1], 4, 4);
+    expect(profiles).toContainEqual([4, 4, 4, 4]);
   });
 
-  test("1.3 First-Fit: remplit la première équipe disponible avant de passer à la suivante", () => {
-    const result = packParties(
-      [
-        { entryId: "g1", partyId: "g1", playerIds: ["3", "4"], joinedAt: new Date(now) },
-      ],
-      2,
-      4,
-      8,
-      [
-        { teamIndex: 0, parties: [], playerIds: ["1", "2"] }, // Reste 2 places
-        { teamIndex: 1, parties: [], playerIds: [] },         // Reste 4 places
-      ]
-    );
-    // g1 doit être placé dans l'équipe 0 car il y a de la place (2 joueurs existants + 2 nouveaux = 4)
-    expect(result.teams[0]?.playerIds).toEqual(["1", "2", "3", "4"]);
-    expect(result.teams[1]?.playerIds).toEqual([]);
+  test("rejects impossible atomic tickets and aggregate compositions", () => {
+    expect(computeFeasibleProfiles([5], 4, 4)).toEqual([]);
+    expect(computeFeasibleProfiles([3, 3, 3, 3, 2, 2], 4, 4)).toEqual([]);
+    expect(computeFeasibleProfiles([4, 4, 3, 3, 3], 4, 4)).toEqual([]);
   });
 
-  test("1.4 Limite Globale: ne dépasse pas maximumPlayers même s'il y a de la place dans une équipe", () => {
-    const result = packParties(
+  test("prefers completing the 14-player session with a ticket of two", () => {
+    const ranked = rankSessionCandidates(
       [
-        { entryId: "new", partyId: "new", playerIds: ["5", "6"], joinedAt: new Date(now) },
+        { sessionId: "eight", createdAt: new Date(0), ticketSizes: [2, 2, 2, 2] },
+        { sessionId: "fourteen", createdAt: new Date(1), ticketSizes: [4, 4, 4, 2] },
       ],
       2,
       4,
-      6, // maximumPlayers = 6
-      [
-        { teamIndex: 0, parties: [], playerIds: ["1", "2", "3"] }, // Reste 1 place
-        { teamIndex: 1, parties: [], playerIds: ["4", "5"] },      // Reste 2 places (physiquement possible pour 'new')
-      ]
+      4,
+      16,
     );
-    // Total actuel: 5. Groupe 'new': 2. Total attendu: 7 > maximumPlayers (6).
-    // Donc le groupe 'new' ne doit pas être sélectionné.
-    expect(result.selected).toHaveLength(0);
+    expect(ranked[0]?.sessionId).toBe("fourteen");
+    expect(ranked[0]?.recommendedProfile).toEqual([4, 4, 4, 4]);
+  });
+
+  test("skips an incompatible older session for a compatible later one", () => {
+    const ranked = rankSessionCandidates(
+      [
+        { sessionId: "blocked", createdAt: new Date(0), ticketSizes: [4, 4, 3, 3] },
+        { sessionId: "open", createdAt: new Date(1), ticketSizes: [3, 2, 1, 1, 1] },
+      ],
+      3,
+      4,
+      4,
+      16,
+    );
+    expect(ranked.map((candidate) => candidate.sessionId)).not.toContain("blocked");
+    expect(ranked[0]?.sessionId).toBe("open");
+  });
+
+  test("lets only a full or deadline-eligible connected profile lock", () => {
+    expect(isSessionLockEligible(8, 8, 16, false, [1, 2, 2, 3], 1, 2)).toBeFalse();
+    expect(isSessionLockEligible(8, 8, 16, true, [1, 2, 2, 3], 1, 2)).toBeTrue();
+    expect(isSessionLockEligible(8, 8, 16, true, [0, 0, 4, 4], 1, 2)).toBeFalse();
+    expect(isSessionLockEligible(16, 8, 16, false, [4, 4, 4, 4], 1, 2)).toBeTrue();
+    expect(isSessionLockEligible(16, 8, 16, false, null, 1, 2)).toBeFalse();
   });
 });
 
 describe("variant selection", () => {
   test("prefers the least represented weighted variant", () => {
-    const selected = selectVariant([
+    expect(selectVariant([
       { id: "japan", weight: 100, warmCount: 2 },
       { id: "mayas", weight: 100, warmCount: 0 },
-    ]);
-    expect(selected.id).toBe("mayas");
+    ]).id).toBe("mayas");
   });
 });
 

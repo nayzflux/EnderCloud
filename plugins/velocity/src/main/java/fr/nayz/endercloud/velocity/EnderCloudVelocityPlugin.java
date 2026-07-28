@@ -12,11 +12,12 @@ import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.server.ServerInfo;
-import fr.endercloud.core.api.EnderCloudVelocityApi;
-import fr.endercloud.core.http.EnderCloudClient;
-import fr.endercloud.core.json.JsonCodec;
-import fr.endercloud.core.model.RedisEnvelope;
-import fr.endercloud.core.model.ServerSnapshot;
+
+import fr.nayz.endercloud.core.api.EnderCloudVelocityApi;
+import fr.nayz.endercloud.core.json.JsonCodec;
+import fr.nayz.endercloud.core.model.RedisEnvelope;
+import fr.nayz.endercloud.core.model.ServerSnapshot;
+import fr.nayz.endercloud.core.http.EnderCloudClient;
 import io.lettuce.core.RedisChannelHandler;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisConnectionStateListener;

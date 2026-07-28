@@ -4,8 +4,8 @@ Ce document décrit le contrat entre un plugin de mini-jeu Paper et EnderCloud.
 
 Le plugin de mini-jeu reste responsable des règles de jeu, des téléportations, des kits, des
 inventaires, de la victoire et des résultats. EnderCloud est responsable de la file d’attente,
-de la création d’instance, du transfert Velocity, de l’assignation des équipes et du cycle de
-vie de la session.
+de la création d’instance, du transfert Velocity, du calcul des profils d’équipes réalisables et
+du cycle de vie de la session. Le plugin choisit l’affectation finale.
 
 ## Architecture
 
@@ -75,10 +75,10 @@ de Paper.
     Joueurs dans le hub
         │ enqueue(party)
         ▼
-    File d’attente
-        │ minimum_players atteint
+    FORMING
+        │ profil minimal réalisable
         ▼
-    Session créée + équipes assignées
+    WAITING_FOR_INSTANCE / TRANSFERRING
         │ transfert Velocity
         ▼
     WAITING
@@ -94,6 +94,7 @@ de Paper.
 
 | État | Signification |
 |---|---|
+| FORMING | La session collecte des tickets hors serveur. |
 | WAITING_FOR_INSTANCE | La session attend un serveur disponible. |
 | TRANSFERRING | Les joueurs sont transférés vers l’instance. |
 | WAITING | L’instance attend les arrivées ou le remplissage. |
@@ -151,21 +152,26 @@ Le bridge Paper actualise régulièrement l’assignation :
 
     cloud.currentAssignment().ifPresent(assignment -> {
         String sessionId = assignment.sessionId();
+        List<Integer> recommendedProfile = assignment.recommendedProfile();
 
         for (SessionAssignment.AssignedPlayer player : assignment.players()) {
             UUID uuid = UUID.fromString(player.playerId());
-            int team = player.teamIndex();
-            // Téléportation, kit et sidebar selon team.
+            String partyId = player.partyId();
+            String ticketId = player.ticketId();
+            // Le plugin place les tickets dans des équipes compatibles avec le profil.
         }
     });
 
-Une assignation contient sessionId, groupId, l’état de session, une revision et la liste des
-joueurs. Chaque joueur contient son UUID, sa party, son teamIndex et son état.
+Une assignation contient sessionId, groupId, l’état de session, une revision, les comptes attendus
+et connectés, `acceptingTickets`, `lockEligible`, les profils réalisables et le profil recommandé.
+Chaque joueur contient son UUID, sa party, le `ticketId` de cette inscription et son état.
 
 Les états d’un joueur sont SELECTED, TRANSFERRING, CONNECTED et LEFT.
 
-Le plugin doit utiliser teamIndex. Il ne doit pas déduire les équipes à partir de l’ordre
-d’arrivée des joueurs.
+Les profils sont anonymes et triés. Le plugin mini-jeu reste responsable de l’affectation finale
+des tickets aux équipes ; il doit conserver chaque `ticketId` indivisible et produire le profil
+choisi. Deux tickets successifs peuvent partager le même `partyId`, notamment lorsqu’un joueur
+quitte puis revient en file.
 
 ## Démarrer le mini-jeu
 
@@ -188,6 +194,22 @@ Après la préparation finale :
 
 Ne pas envoyer GAME_STARTED avant GAME_STARTING. Chaque notification doit être envoyée une
 seule fois pour une session.
+
+## Annuler la partie
+
+Si le mini-jeu ne peut plus continuer, il doit signaler explicitement l’annulation :
+
+    cloud.reportGameCancelled(sessionId, "not enough teams")
+            .exceptionally(error -> {
+                getLogger().warning("Unable to report CANCELLED: " + error.getMessage());
+                return null;
+            });
+
+`GAME_CANCELLED` est accepté pendant le transfert, l’attente, le démarrage ou une partie déjà
+lancée. EnderCloud ferme immédiatement les transferts entrants, retire l’instance du registre
+Velocity et transfère activement les joueurs présents vers les hubs disponibles. L’évacuation est
+réessayée tant que l’instance contient des joueurs. `CANCELLED_DRAIN_TIMEOUT_MS`, égal à 10 secondes
+par défaut, constitue la deadline de sécurité avant l’arrêt forcé du serveur.
 
 ## Terminer la partie
 
@@ -224,13 +246,14 @@ Le heartbeat permet à EnderCloud de corriger les états après une déconnexion
 
 ## Backfill et changement de revision
 
-Tant qu’une session est en TRANSFERRING ou WAITING et que son délai n’est pas dépassé,
-l’orchestrateur peut ajouter une party à une équipe disponible.
+Tant qu’une session est en FORMING, WAITING_FOR_INSTANCE, TRANSFERRING ou WAITING,
+l’orchestrateur peut lui ajouter un ticket compatible, y compris après la deadline normale.
+Seul `GAME_STARTING` ferme définitivement le backfill.
 
 Le plugin doit :
 
 1. relire l’assignation quand sa revision augmente ;
-2. ajouter les nouveaux joueurs à leur teamIndex ;
+2. recalculer son affectation finale à partir des parties et profils reçus ;
 3. appliquer le même protocole de préparation ;
 4. ne jamais déplacer un joueur déjà assigné ;
 5. refuser les arrivées dès que le jeu est STARTING ou RUNNING.
@@ -252,6 +275,24 @@ Exemple SkyWars Solo :
       team_count: 12
       team_size: 1
       waiting_timeout: 45s
+      candidate_window: 20
+      instance_wait_timeout: 45s
+      maximum_waiting_timeout: 135s
+      partial_start:
+        minimum_players_per_team: 0
+        maximum_team_spread: 1
+
+Exemple BedWars 4v4v4v4 à démarrage partiel :
+
+    matchmaking:
+      minimum_players: 8
+      maximum_players: 16
+      team_count: 4
+      team_size: 4
+      waiting_timeout: 60s
+      partial_start:
+        minimum_players_per_team: 1
+        maximum_team_spread: 2
 
 Exemple de variante :
 
@@ -271,12 +312,13 @@ supérieure à team_size est refusée à l’inscription.
 | File d’attente | Oui | Utilise enqueue / leaveQueue |
 | Création d’instance | Oui | Non |
 | Transfert Velocity | Oui | Non |
-| Assignation d’équipe | Oui | Lit teamIndex |
+| Profils d’équipe réalisables | Oui | Choisit l’affectation finale |
 | Téléportation dans la map | Non | Oui |
 | Kits et inventaires | Non | Oui |
 | Détection de victoire | Non | Oui |
 | Calcul des résultats | Non | Oui |
 | Stockage des résultats | Oui | Publie GAME_FINISHED |
+| Annulation et évacuation | Oui | Publie GAME_CANCELLED |
 | Présence des joueurs | Bridge Paper | Réagit aux événements Bukkit |
 
 ## Erreurs fréquentes
@@ -287,6 +329,7 @@ supérieure à team_size est refusée à l’inscription.
 - démarrer avant que les joueurs soient connectés ;
 - appeler une API asynchrone en bloquant le thread principal ;
 - publier GAME_STARTED sans GAME_STARTING ;
+- arrêter directement le conteneur au lieu de publier GAME_CANCELLED ;
 - continuer une ancienne session après un changement de sessionId ;
 - republier les heartbeats déjà envoyés par le bridge.
 
@@ -297,7 +340,7 @@ supérieure à team_size est refusée à l’inscription.
 - Les variables ENDERCLOUD_INSTANCE_ID et ENDERCLOUD_ORCHESTRATOR_URL sont disponibles.
 - Le plugin récupère EnderCloudPaperApi via ServicesManager.
 - L’inscription et l’annulation de file ont été testées.
-- Les équipes sont calculées à partir de teamIndex.
+- Les parties restent indivisibles et l’affectation finale respecte un profil réalisable.
 - Les nouvelles revisions sont prises en compte.
-- GAME_STARTING, GAME_STARTED et GAME_FINISHED ne sont envoyés qu’une fois.
+- GAME_STARTING, GAME_STARTED, GAME_CANCELLED et GAME_FINISHED sont idempotents.
 - Les erreurs réseau sont journalisées sans bloquer Paper.

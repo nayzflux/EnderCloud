@@ -161,20 +161,20 @@ describe("mockInstance and mockSession", () => {
     }
   });
 
-  test("session teams add up to the active player count", () => {
+  test("session tickets add up to the active player count", () => {
     const snapshot = mockCluster(now);
     for (const group of snapshot.groups) {
       for (const session of group.sessions) {
         const detail = mockSession(session.id, now)!;
-        const players = detail.teams.reduce(
-          (total, team) => total + team.players.length,
+        const players = detail.tickets.reduce(
+          (total, ticket) => total + ticket.players.length,
           0,
         );
         expect(players).toBe(session.activePlayerCount);
-        const connected = detail.teams.reduce(
-          (total, team) =>
+        const connected = detail.tickets.reduce(
+          (total, ticket) =>
             total +
-            team.players.filter((player) => player.state === "CONNECTED").length,
+            ticket.players.filter((player) => player.state === "CONNECTED").length,
           0,
         );
         expect(connected).toBe(session.connectedPlayerCount);

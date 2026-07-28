@@ -55,6 +55,11 @@ export const serverGroups = pgTable(
     teamCount: integer("team_count"),
     teamSize: integer("team_size"),
     waitingTimeoutMs: integer("waiting_timeout_ms"),
+    candidateWindow: integer("candidate_window"),
+    instanceWaitTimeoutMs: integer("instance_wait_timeout_ms"),
+    maximumWaitingTimeoutMs: integer("maximum_waiting_timeout_ms"),
+    minimumPlayersPerTeam: integer("minimum_players_per_team"),
+    maximumTeamSpread: integer("maximum_team_spread"),
     minimumInstances: integer("minimum_instances").notNull().default(0),
     maximumInstances: integer("maximum_instances").notNull(),
     minimumWarmInstances: integer("minimum_warm_instances").notNull().default(0),
@@ -71,6 +76,15 @@ export const serverGroups = pgTable(
     check(
       "server_groups_warm_capacity_check",
       sql`${table.maximumWarmInstances} >= ${table.minimumWarmInstances}`,
+    ),
+    check(
+      "server_groups_matchmaking_policy_check",
+      sql`${table.type} <> 'minigame' OR (
+        ${table.candidateWindow} > 0
+        AND ${table.maximumWaitingTimeoutMs} >= ${table.waitingTimeoutMs}
+        AND ${table.minimumPlayersPerTeam} BETWEEN 0 AND ${table.teamSize}
+        AND ${table.maximumTeamSpread} BETWEEN 0 AND ${table.teamSize}
+      )`,
     ),
   ],
 );
@@ -107,7 +121,8 @@ export const gameSessions = pgTable(
     state: sessionStateEnum("state").notNull(),
     assignmentRevision: integer("assignment_revision").notNull().default(1),
     assignmentAcknowledgedAt: timestamp("assignment_acknowledged_at", { withTimezone: true }),
-    waitingDeadline: timestamp("waiting_deadline", { withTimezone: true }).notNull(),
+    waitingDeadline: timestamp("waiting_deadline", { withTimezone: true }),
+    maximumWaitingDeadline: timestamp("maximum_waiting_deadline", { withTimezone: true }),
     transferStartedAt: timestamp("transfer_started_at", { withTimezone: true }),
     retryCount: integer("retry_count").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -173,12 +188,15 @@ export const queueEntries = pgTable(
       .notNull()
       .references(() => serverGroups.id),
     partyId: text("party_id").notNull(),
+    sessionId: text("session_id").references(() => gameSessions.id, { onDelete: "set null" }),
     state: queueEntryStateEnum("state").notNull().default("QUEUED"),
+    transferStartedAt: timestamp("transfer_started_at", { withTimezone: true }),
     joinedAt: timestamp("joined_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     index("queue_entries_matchmaking_idx").on(table.groupId, table.state, table.joinedAt),
+    index("queue_entries_session_idx").on(table.sessionId),
     uniqueIndex("queue_entries_active_party_unique")
       .on(table.groupId, table.partyId)
       .where(sql`${table.state} = 'QUEUED'`),
@@ -207,7 +225,9 @@ export const sessionPlayers = pgTable(
       .references(() => gameSessions.id, { onDelete: "cascade" }),
     playerId: uuid("player_id").notNull(),
     partyId: text("party_id").notNull(),
-    teamIndex: integer("team_index").notNull(),
+    queueEntryId: text("queue_entry_id").references(() => queueEntries.id, {
+      onDelete: "set null",
+    }),
     state: sessionPlayerStateEnum("state").notNull().default("SELECTED"),
     selectedAt: timestamp("selected_at", { withTimezone: true }).defaultNow().notNull(),
     transferringAt: timestamp("transferring_at", { withTimezone: true }),
@@ -217,6 +237,7 @@ export const sessionPlayers = pgTable(
   (table) => [
     primaryKey({ columns: [table.sessionId, table.playerId] }),
     index("session_players_player_idx").on(table.playerId),
+    index("session_players_queue_entry_idx").on(table.queueEntryId),
   ],
 );
 

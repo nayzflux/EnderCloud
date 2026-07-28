@@ -25,6 +25,11 @@ const paperEventSchema = t.Union([
   t.Object({ type: t.Literal("GAME_STARTING"), sessionId: internalId }),
   t.Object({ type: t.Literal("GAME_STARTED"), sessionId: internalId }),
   t.Object({
+    type: t.Literal("GAME_CANCELLED"),
+    sessionId: internalId,
+    reason: t.Optional(t.String({ maxLength: 512 })),
+  }),
+  t.Object({
     type: t.Literal("GAME_FINISHED"),
     sessionId: internalId,
     results: t.Optional(t.Unknown()),
@@ -67,7 +72,7 @@ export function createApp(dependencies: ApiDependencies) {
         set.status = 400;
         return { error: "VALIDATION_ERROR", message, requestId };
       }
-      if (/unavailable|larger|already|distinct/i.test(message)) {
+      if (/unavailable|larger|already|distinct|not lock eligible/i.test(message)) {
         set.status = 409;
         return { error: "CONFLICT", message, requestId };
       }
@@ -159,7 +164,7 @@ export function createApp(dependencies: ApiDependencies) {
             params: t.Object({ sessionId: internalId }),
             detail: {
               tags: ["Dashboard"],
-              summary: "Read teams and transfers for a game session",
+              summary: "Read tickets, feasible profiles and transfers for a game session",
             },
           },
         )

@@ -173,6 +173,11 @@ const blueprints: readonly GroupBlueprint[] = [
       teamCount: 12,
       teamSize: 1,
       waitingTimeoutMs: 45_000,
+      candidateWindow: 20,
+      instanceWaitTimeoutMs: 45_000,
+      maximumWaitingTimeoutMs: 135_000,
+      minimumPlayersPerTeam: 0,
+      maximumTeamSpread: 1,
     },
     routing: null,
     variants: [
@@ -256,6 +261,11 @@ const blueprints: readonly GroupBlueprint[] = [
       teamCount: 8,
       teamSize: 2,
       waitingTimeoutMs: 60_000,
+      candidateWindow: 20,
+      instanceWaitTimeoutMs: 60_000,
+      maximumWaitingTimeoutMs: 180_000,
+      minimumPlayersPerTeam: 1,
+      maximumTeamSpread: 1,
     },
     routing: null,
     variants: [
@@ -314,6 +324,11 @@ const blueprints: readonly GroupBlueprint[] = [
       teamCount: 4,
       teamSize: 3,
       waitingTimeoutMs: 90_000,
+      candidateWindow: 20,
+      instanceWaitTimeoutMs: 90_000,
+      maximumWaitingTimeoutMs: 270_000,
+      minimumPlayersPerTeam: 1,
+      maximumTeamSpread: 2,
     },
     routing: null,
     variants: [
@@ -360,7 +375,11 @@ interface MockInstanceRecord {
 
 interface MockSessionRecord {
   readonly session: DashboardSession & { readonly groupId: string };
-  readonly teams: DashboardSessionDetail["teams"];
+  readonly tickets: DashboardSessionDetail["tickets"];
+  readonly expectedProfiles: DashboardSessionDetail["expectedProfiles"];
+  readonly connectedProfiles: DashboardSessionDetail["connectedProfiles"];
+  readonly recommendedExpectedProfile: DashboardSessionDetail["recommendedExpectedProfile"];
+  readonly recommendedConnectedProfile: DashboardSessionDetail["recommendedConnectedProfile"];
   readonly transfers: DashboardSessionDetail["transfers"];
 }
 
@@ -450,6 +469,7 @@ function buildWorld(now: number): MockWorld {
               ? ago(now, spec.session.ageSeconds - 4)
               : null,
           waitingDeadline: ago(now, spec.session.ageSeconds - 45),
+          maximumWaitingDeadline: ago(now, spec.session.ageSeconds - 135),
           retryCount: spec.session.state === "TRANSFERRING" ? 1 : 0,
           activePlayerCount: spec.session.players,
           connectedPlayerCount: spec.session.connected,
@@ -505,6 +525,7 @@ function buildWorld(now: number): MockWorld {
         assignmentRevision: 0,
         assignmentAcknowledgedAt: null,
         waitingDeadline: ago(now, spec.ageSeconds - 45),
+        maximumWaitingDeadline: null,
         retryCount: between(random, 0, 2),
         activePlayerCount: spec.players,
         connectedPlayerCount: spec.connected,
@@ -740,9 +761,11 @@ function buildSessionRecord(
   spec: SessionBlueprint,
 ): MockSessionRecord {
   const teamSize = blueprint.matchmaking?.teamSize ?? 1;
-  const teamCount = Math.max(1, Math.ceil(spec.players / teamSize));
-  const teams: {
-    teamIndex: number;
+  const ticketCount = Math.max(1, Math.ceil(spec.players / teamSize));
+  const tickets: {
+    ticketId: string;
+    partyId: string;
+    transferStartedAt: string | null;
     players: {
       playerId: string;
       partyId: string;
@@ -756,8 +779,9 @@ function buildSessionRecord(
 
   let assigned = 0;
   let connectedBudget = spec.connected;
-  for (let teamIndex = 0; teamIndex < teamCount; teamIndex += 1) {
-    const players: (typeof teams)[number]["players"] = [];
+  for (let ticketIndex = 0; ticketIndex < ticketCount; ticketIndex += 1) {
+    const players: (typeof tickets)[number]["players"] = [];
+    const partyId = uuid(random);
     for (
       let slot = 0;
       slot < teamSize && assigned < spec.players;
@@ -772,7 +796,7 @@ function buildSessionRecord(
           : "TRANSFERRING";
       players.push({
         playerId: uuid(random),
-        partyId: uuid(random),
+        partyId,
         state,
         selectedAt: ago(now, spec.ageSeconds),
         transferringAt: state === "SELECTED" ? null : ago(now, spec.ageSeconds - 3),
@@ -780,7 +804,15 @@ function buildSessionRecord(
         leftAt: null,
       });
     }
-    if (players.length > 0) teams.push({ teamIndex, players });
+    if (players.length > 0) {
+      tickets.push({
+        ticketId: internalId(random),
+        partyId,
+        transferStartedAt:
+          spec.state === "WAITING_FOR_INSTANCE" ? null : ago(now, spec.ageSeconds - 3),
+        players,
+      });
+    }
   }
 
   const transfers = session.instanceId
@@ -800,7 +832,22 @@ function buildSessionRecord(
       })
     : [];
 
-  return { session, teams, transfers };
+  const configuredTeams = blueprint.matchmaking?.teamCount ?? 1;
+  const expectedProfile = Array.from({ length: configuredTeams }, (_, index) =>
+    tickets[index]?.players.length ?? 0
+  ).sort((left, right) => left - right);
+  const connectedProfile = Array.from({ length: configuredTeams }, (_, index) =>
+    tickets[index]?.players.filter((player) => player.state === "CONNECTED").length ?? 0
+  ).sort((left, right) => left - right);
+  return {
+    session,
+    tickets,
+    expectedProfiles: [expectedProfile],
+    connectedProfiles: [connectedProfile],
+    recommendedExpectedProfile: expectedProfile,
+    recommendedConnectedProfile: connectedProfile,
+    transfers,
+  };
 }
 
 export function mockCluster(now = Date.now()): DashboardClusterSnapshot {
@@ -869,7 +916,11 @@ export function mockSession(
     schemaVersion: 1,
     generatedAt: world.generatedAt,
     session: record.session,
-    teams: record.teams,
+    tickets: record.tickets,
+    expectedProfiles: record.expectedProfiles,
+    connectedProfiles: record.connectedProfiles,
+    recommendedExpectedProfile: record.recommendedExpectedProfile,
+    recommendedConnectedProfile: record.recommendedConnectedProfile,
     transfers: record.transfers,
   };
 }

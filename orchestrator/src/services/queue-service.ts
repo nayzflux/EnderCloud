@@ -1,7 +1,12 @@
 import type { Database } from "../db/client.ts";
 import { serverGroups, queueEntries, queueEntryPlayers, sessionPlayers, gameSessions } from "../db/schema.ts";
-import { eq, and, inArray, notInArray, sql } from "drizzle-orm";
+import { desc, eq, and, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import { nanoid } from "../id.ts";
+import {
+  computeFeasibleProfiles,
+  isProfileEligible,
+  selectRecommendedProfile,
+} from "../domain/matchmaking.ts";
 
 export interface EnqueueRequest {
   readonly groupId: string;
@@ -36,19 +41,60 @@ export class QueueService {
         throw new Error("The party is larger than a team");
       }
       const existing = await tx
-        .select({ id: queueEntries.id, state: queueEntries.state })
+        .select({
+          id: queueEntries.id,
+          state: queueEntries.state,
+          sessionId: queueEntries.sessionId,
+        })
         .from(queueEntries)
+        .leftJoin(gameSessions, eq(gameSessions.id, queueEntries.sessionId))
         .where(
           and(
             eq(queueEntries.groupId, request.groupId),
             eq(queueEntries.partyId, request.partyId),
-            eq(queueEntries.state, "QUEUED")
+            or(
+              eq(queueEntries.state, "QUEUED"),
+              and(
+                eq(queueEntries.state, "SELECTED"),
+                notInArray(gameSessions.state, ["FINISHED", "CANCELLED", "FAILED"]),
+              ),
+            ),
           )
         )
+        .orderBy(
+          sql`CASE WHEN ${queueEntries.state} = 'QUEUED' THEN 0 ELSE 1 END`,
+          desc(queueEntries.joinedAt),
+        )
         .limit(1);
-      // Repeated enqueue calls from the proxy are idempotent for the same active party.
-      if (existing[0]) {
-        return { entryId: existing[0].id, state: existing[0].state };
+      const existingEntry = existing[0];
+      // A queued ticket is always an idempotent retry. A selected ticket is
+      // idempotent only while the exact requested membership is still active.
+      if (existingEntry?.state === "QUEUED") {
+        return { entryId: existingEntry.id, state: existingEntry.state };
+      }
+      if (existingEntry?.state === "SELECTED" && existingEntry.sessionId) {
+        const activeMembers = await tx.select({ playerId: sessionPlayers.playerId })
+          .from(sessionPlayers)
+          .where(
+            and(
+              eq(sessionPlayers.sessionId, existingEntry.sessionId),
+              or(
+                eq(sessionPlayers.queueEntryId, existingEntry.id),
+                and(
+                  isNull(sessionPlayers.queueEntryId),
+                  eq(sessionPlayers.partyId, request.partyId),
+                ),
+              ),
+              sql`${sessionPlayers.state} <> 'LEFT'`,
+            ),
+          );
+        const activeIds = new Set(activeMembers.map((member) => member.playerId));
+        if (
+          activeIds.size === request.players.length &&
+          request.players.every((playerId) => activeIds.has(playerId))
+        ) {
+          return { entryId: existingEntry.id, state: existingEntry.state };
+        }
       }
       // Check every member because a party is rejected as a whole when any player is busy.
       for (const playerId of request.players) {
@@ -96,46 +142,80 @@ export class QueueService {
     });
   }
 
-  // Withdraw an entire party while it is still queued.
+  // Withdraw an entire party until its first transfer command establishes the individual boundary.
   public async leaveParty(groupId: string, partyId: string): Promise<boolean> {
-    const rows = await this.db
-      .update(queueEntries)
-      .set({ state: "LEFT", updatedAt: sql`now()` })
-      .where(
-        and(
-          eq(queueEntries.groupId, groupId),
-          eq(queueEntries.partyId, partyId),
-          eq(queueEntries.state, "QUEUED")
+    return this.db.transaction(async (tx) => {
+      const entries = await tx.select({
+        id: queueEntries.id,
+        state: queueEntries.state,
+        sessionId: queueEntries.sessionId,
+        transferStartedAt: queueEntries.transferStartedAt,
+      })
+        .from(queueEntries)
+        .leftJoin(gameSessions, eq(gameSessions.id, queueEntries.sessionId))
+        .where(
+          and(
+            eq(queueEntries.groupId, groupId),
+            eq(queueEntries.partyId, partyId),
+            or(
+              eq(queueEntries.state, "QUEUED"),
+              and(
+                eq(queueEntries.state, "SELECTED"),
+                notInArray(gameSessions.state, ["FINISHED", "CANCELLED", "FAILED"]),
+              ),
+            ),
+          ),
         )
-      )
-      .returning({ id: queueEntries.id });
-    return rows.length > 0;
+        .orderBy(sql`CASE WHEN ${queueEntries.state} = 'QUEUED' THEN 0 ELSE 1 END`)
+        .limit(1)
+        .for("update", { of: queueEntries });
+      const entry = entries[0];
+      if (!entry || entry.transferStartedAt) return false;
+      await this.cancelTicket(tx, entry.id, entry.sessionId, partyId);
+      return true;
+    });
   }
 
   // Remove a disconnected player from whichever active matchmaking stage owns it.
   public async networkDisconnected(playerId: string): Promise<void> {
     await this.db.transaction(async (tx) => {
       const queued = await tx
-        .select({ queue_entry_id: queueEntryPlayers.queueEntryId })
+        .select({
+          queue_entry_id: queueEntryPlayers.queueEntryId,
+          party_id: queueEntries.partyId,
+          state: queueEntries.state,
+          session_id: queueEntries.sessionId,
+          transfer_started_at: queueEntries.transferStartedAt,
+        })
         .from(queueEntryPlayers)
         .innerJoin(queueEntries, eq(queueEntries.id, queueEntryPlayers.queueEntryId))
+        .leftJoin(gameSessions, eq(gameSessions.id, queueEntries.sessionId))
         .where(
           and(
             eq(queueEntryPlayers.playerId, playerId),
-            eq(queueEntries.state, "QUEUED")
+            or(
+              eq(queueEntries.state, "QUEUED"),
+              and(
+                eq(queueEntries.state, "SELECTED"),
+                notInArray(gameSessions.state, ["FINISHED", "CANCELLED", "FAILED"]),
+              ),
+            ),
           )
         )
+        .orderBy(sql`CASE WHEN ${queueEntries.state} = 'QUEUED' THEN 0 ELSE 1 END`)
         .limit(1)
         .for("update", { of: queueEntries });
-      // A queued player represents the whole party, so disconnecting cancels that party entry.
-      if (queued[0]) {
-        await tx
-          .update(queueEntries)
-          .set({ state: "LEFT", updatedAt: sql`now()` })
-          .where(eq(queueEntries.id, queued[0].queue_entry_id as string));
+      // Before a command exists the ticket remains atomic; afterwards only this player leaves.
+      if (queued[0] && !queued[0].transfer_started_at) {
+        await this.cancelTicket(
+          tx,
+          queued[0].queue_entry_id as string,
+          queued[0].session_id,
+          queued[0].party_id,
+        );
         return;
       }
-      await tx
+      const changed = await tx
         .update(sessionPlayers)
         .set({ state: "LEFT", leftAt: sql`now()` })
         .where(
@@ -149,7 +229,100 @@ export class QueueService {
                 .where(notInArray(gameSessions.state, ["FINISHED", "CANCELLED", "FAILED"]))
             )
           )
-        );
+        )
+        .returning({ sessionId: sessionPlayers.sessionId });
+      if (changed[0]) {
+        await tx.update(gameSessions)
+          .set({
+            assignmentRevision: sql`${gameSessions.assignmentRevision} + 1`,
+            assignmentAcknowledgedAt: null,
+            updatedAt: sql`now()`,
+          })
+          .where(eq(gameSessions.id, changed[0].sessionId));
+      }
     });
+  }
+
+  private async cancelTicket(
+    tx: any,
+    entryId: string,
+    sessionId: string | null,
+    partyId: string,
+  ): Promise<void> {
+    await tx.update(queueEntries)
+      .set({ state: "LEFT", updatedAt: sql`now()` })
+      .where(eq(queueEntries.id, entryId));
+    if (!sessionId) return;
+    const changed = await tx.update(sessionPlayers)
+      .set({ state: "LEFT", leftAt: sql`now()` })
+      .where(
+        and(
+          eq(sessionPlayers.sessionId, sessionId),
+          or(
+            eq(sessionPlayers.queueEntryId, entryId),
+            and(
+              isNull(sessionPlayers.queueEntryId),
+              eq(sessionPlayers.partyId, partyId),
+            ),
+          ),
+          sql`${sessionPlayers.state} <> 'LEFT'`,
+        ),
+      )
+      .returning({ playerId: sessionPlayers.playerId });
+    if (changed.length === 0) return;
+
+    const sessionRows = await tx.select({
+      state: gameSessions.state,
+      groupId: gameSessions.groupId,
+      minimumPlayers: serverGroups.minimumPlayers,
+      teamCount: serverGroups.teamCount,
+      teamSize: serverGroups.teamSize,
+      minimumPlayersPerTeam: serverGroups.minimumPlayersPerTeam,
+      maximumTeamSpread: serverGroups.maximumTeamSpread,
+    })
+      .from(gameSessions)
+      .innerJoin(serverGroups, eq(serverGroups.id, gameSessions.groupId))
+      .where(eq(gameSessions.id, sessionId))
+      .for("update", { of: gameSessions });
+    const session = sessionRows[0];
+    if (!session) return;
+
+    const sizes = (await tx.execute(sql`
+      SELECT count(*)::integer AS size
+      FROM session_players
+      WHERE session_id = ${sessionId} AND state <> 'LEFT'
+      GROUP BY COALESCE(queue_entry_id, 'legacy:' || party_id)
+    `)) as unknown as { size: number }[];
+    const ticketSizes = sizes.map((row) => Number(row.size));
+    const playerCount = ticketSizes.reduce((sum, size) => sum + size, 0);
+    const profiles = computeFeasibleProfiles(
+      ticketSizes,
+      session.teamCount ?? 1,
+      session.teamSize ?? 1,
+    );
+    const eligible =
+      playerCount >= (session.minimumPlayers ?? 1) &&
+      isProfileEligible(
+        selectRecommendedProfile(profiles),
+        session.minimumPlayersPerTeam ?? 0,
+        session.maximumTeamSpread ?? session.teamSize ?? 1,
+      );
+    await tx.update(gameSessions)
+      .set({
+        state:
+          playerCount === 0
+            ? "CANCELLED"
+            : session.state === "WAITING_FOR_INSTANCE" && !eligible
+              ? "FORMING"
+              : session.state,
+        waitingDeadline:
+          session.state === "WAITING_FOR_INSTANCE" && !eligible ? null : undefined,
+        maximumWaitingDeadline:
+          session.state === "WAITING_FOR_INSTANCE" && !eligible ? null : undefined,
+        assignmentRevision: sql`${gameSessions.assignmentRevision} + 1`,
+        assignmentAcknowledgedAt: null,
+        updatedAt: sql`now()`,
+      })
+      .where(eq(gameSessions.id, sessionId));
   }
 }

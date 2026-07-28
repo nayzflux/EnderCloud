@@ -1,13 +1,14 @@
-package fr.endercloud.core.http;
+package fr.nayz.endercloud.core.http;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
-import fr.endercloud.core.json.JsonCodec;
-import fr.endercloud.core.model.PaperEvent;
-import fr.endercloud.core.model.QueueRequest;
-import fr.endercloud.core.model.QueueResult;
-import fr.endercloud.core.model.ServerSnapshot;
-import fr.endercloud.core.model.SessionAssignment;
+
+import fr.nayz.endercloud.core.model.PaperEvent;
+import fr.nayz.endercloud.core.model.QueueRequest;
+import fr.nayz.endercloud.core.model.QueueResult;
+import fr.nayz.endercloud.core.model.ServerSnapshot;
+import fr.nayz.endercloud.core.model.SessionAssignment;
+import fr.nayz.endercloud.core.json.JsonCodec;
 
 import java.io.IOException;
 import java.net.URI;

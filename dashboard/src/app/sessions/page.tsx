@@ -150,10 +150,13 @@ export default function SessionsPage() {
         align: "right",
         cell: ({ session }) => (
           <span className="font-mono text-xs text-muted-foreground tabular">
-            {formatCountdown(session.waitingDeadline)}
+            {session.waitingDeadline
+              ? formatCountdown(session.waitingDeadline)
+              : "Not eligible"}
           </span>
         ),
-        sortValue: ({ session }) => Date.parse(session.waitingDeadline),
+        sortValue: ({ session }) =>
+          session.waitingDeadline ? Date.parse(session.waitingDeadline) : Number.MAX_SAFE_INTEGER,
       },
       {
         id: "age",

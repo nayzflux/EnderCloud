@@ -1,4 +1,4 @@
-package fr.endercloud.core.api;
+package fr.nayz.endercloud.core.api;
 
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;

@@ -66,11 +66,36 @@ matchmaking:
   team_count: 12
   team_size: 1
   waiting_timeout: 45s
+  candidate_window: 20
+  instance_wait_timeout: 45s
+  maximum_waiting_timeout: 135s
+  partial_start:
+    minimum_players_per_team: 0
+    maximum_team_spread: 1
 ```
 
-`minimum_players` starts a session, while `maximum_players` caps its size. The cap cannot exceed
-`team_count * team_size`; a party larger than `team_size` is rejected. `waiting_timeout` controls
-how long a session waits for an available instance.
+The first ticket creates a `FORMING` session. Once `minimum_players` and the partial-start profile
+constraints are satisfied, EnderCloud reserves an instance; only the game plugin's
+`GAME_STARTING` event locks the session. `candidate_window` bounds the FIFO work per tick,
+`instance_wait_timeout` covers capacity acquisition, and `maximum_waiting_timeout` bounds an
+ineligible on-server lobby. Their defaults are respectively `20`, `waiting_timeout`, and three
+times `waiting_timeout`.
+
+The cap cannot exceed `team_count * team_size`; a party larger than `team_size` is rejected.
+`minimum_players_per_team` defaults to `0` and `maximum_team_spread` defaults to `team_size`.
+For a partial 4v4v4v4 mode with at least one player per team and a spread of at most two, use:
+
+```yaml
+matchmaking:
+  minimum_players: 8
+  maximum_players: 16
+  team_count: 4
+  team_size: 4
+  waiting_timeout: 60s
+  partial_start:
+    minimum_players_per_team: 1
+    maximum_team_spread: 2
+```
 
 ## Adding or changing a group
 

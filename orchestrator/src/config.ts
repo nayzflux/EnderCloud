@@ -34,6 +34,7 @@ export interface AppConfig {
   readonly matchmakingIntervalMs: number;
   readonly reconcileIntervalMs: number;
   readonly transferTimeoutMs: number;
+  readonly cancelledDrainTimeoutMs: number;
   readonly maxInstanceRetries: number;
   readonly logLevel: string;
 }
@@ -61,6 +62,7 @@ export function loadConfig(): AppConfig {
     matchmakingIntervalMs: integer("MATCHMAKING_INTERVAL_MS", 1_000, 100),
     reconcileIntervalMs: integer("RECONCILE_INTERVAL_MS", 15_000, 1_000),
     transferTimeoutMs: integer("TRANSFER_TIMEOUT_MS", 20_000, 1_000),
+    cancelledDrainTimeoutMs: integer("CANCELLED_DRAIN_TIMEOUT_MS", 10_000, 1_000),
     maxInstanceRetries: integer("MAX_INSTANCE_RETRIES", 2, 0),
     logLevel: process.env.LOG_LEVEL ?? "info",
   };

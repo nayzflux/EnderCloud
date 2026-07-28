@@ -44,7 +44,8 @@ export interface DashboardSession {
   readonly state: SessionState;
   readonly assignmentRevision: number;
   readonly assignmentAcknowledgedAt: string | null;
-  readonly waitingDeadline: string;
+  readonly waitingDeadline: string | null;
+  readonly maximumWaitingDeadline: string | null;
   readonly retryCount: number;
   readonly activePlayerCount: number;
   readonly connectedPlayerCount: number;
@@ -80,6 +81,11 @@ export interface DashboardGroup {
     readonly teamCount: number;
     readonly teamSize: number;
     readonly waitingTimeoutMs: number;
+    readonly candidateWindow: number;
+    readonly instanceWaitTimeoutMs: number;
+    readonly maximumWaitingTimeoutMs: number;
+    readonly minimumPlayersPerTeam: number;
+    readonly maximumTeamSpread: number;
   } | null;
   readonly routing: {
     readonly maximumPlayersPerInstance: number;
@@ -167,8 +173,10 @@ export interface DashboardSessionDetail {
   readonly session: DashboardSession & {
     readonly groupId: string;
   };
-  readonly teams: readonly {
-    readonly teamIndex: number;
+  readonly tickets: readonly {
+    readonly ticketId: string;
+    readonly partyId: string;
+    readonly transferStartedAt: string | null;
     readonly players: readonly {
       readonly playerId: string;
       readonly partyId: string;
@@ -179,6 +187,10 @@ export interface DashboardSessionDetail {
       readonly leftAt: string | null;
     }[];
   }[];
+  readonly expectedProfiles: readonly (readonly number[])[];
+  readonly connectedProfiles: readonly (readonly number[])[];
+  readonly recommendedExpectedProfile: readonly number[] | null;
+  readonly recommendedConnectedProfile: readonly number[] | null;
   readonly transfers: readonly {
     readonly id: string;
     readonly instanceId: string;

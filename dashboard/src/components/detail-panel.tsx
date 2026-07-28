@@ -466,10 +466,10 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
           className="mx-4 mt-3 w-[calc(100%-2rem)] shrink-0 justify-start overflow-x-auto"
         >
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="teams">
-            Teams
+          <TabsTrigger value="tickets">
+            Tickets
             <span className="text-muted-foreground tabular">
-              {detail.teams.length}
+              {detail.tickets.length}
             </span>
           </TabsTrigger>
           <TabsTrigger value="transfers">
@@ -494,9 +494,9 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
                 </p>
               </div>
               <div className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">Teams</p>
+                <p className="text-xs text-muted-foreground">Tickets</p>
                 <p className="font-heading text-xl font-semibold tabular">
-                  {session.teamCount}
+                  {detail.tickets.length}
                 </p>
               </div>
             </div>
@@ -525,7 +525,32 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
                   {formatDateTime(session.assignmentAcknowledgedAt)}
                 </KeyValue>
                 <KeyValue label="Waiting deadline">
-                  {`${formatDateTime(session.waitingDeadline)} · ${formatCountdown(session.waitingDeadline)}`}
+                  {session.waitingDeadline
+                    ? `${formatDateTime(session.waitingDeadline)} · ${formatCountdown(session.waitingDeadline)}`
+                    : "Starts after the session becomes eligible"}
+                </KeyValue>
+                <KeyValue label="Maximum lobby deadline">
+                  {session.maximumWaitingDeadline
+                    ? `${formatDateTime(session.maximumWaitingDeadline)} · ${formatCountdown(session.maximumWaitingDeadline)}`
+                    : "Not assigned yet"}
+                </KeyValue>
+              </KeyValueGrid>
+            </section>
+
+            <section className="flex flex-col gap-3">
+              <SectionTitle>Feasible profiles</SectionTitle>
+              <KeyValueGrid>
+                <KeyValue label="Expected recommendation">
+                  {detail.recommendedExpectedProfile?.join(" · ") ?? "None"}
+                </KeyValue>
+                <KeyValue label="Connected recommendation">
+                  {detail.recommendedConnectedProfile?.join(" · ") ?? "None"}
+                </KeyValue>
+                <KeyValue label="Expected possibilities">
+                  {detail.expectedProfiles.length}
+                </KeyValue>
+                <KeyValue label="Connected possibilities">
+                  {detail.connectedProfiles.length}
                 </KeyValue>
               </KeyValueGrid>
             </section>
@@ -549,27 +574,25 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
             </section>
           </TabsContent>
 
-          <TabsContent value="teams" className="space-y-3 p-4">
-            {detail.teams.length === 0 ? (
-              <EmptyLine>No player has been assigned to a team yet.</EmptyLine>
+          <TabsContent value="tickets" className="flex flex-col gap-3 p-4">
+            {detail.tickets.length === 0 ? (
+              <EmptyLine>No ticket has been assigned yet.</EmptyLine>
             ) : (
-              <div className="space-y-3">
-                {detail.teams.map((team) => (
+              <div className="flex flex-col gap-3">
+                {detail.tickets.map((ticket) => (
                   <article
-                    key={team.teamIndex}
+                    key={ticket.ticketId}
                     className="overflow-hidden rounded-lg border"
                   >
                     <header className="flex items-center justify-between gap-3 border-b bg-muted/40 px-3 py-2">
-                      <span className="text-sm font-medium">
-                        Team {team.teamIndex + 1}
-                      </span>
+                      <CopyableId value={ticket.partyId} label="party id" />
                       <Badge variant="outline">
-                        {team.players.length} player
-                        {team.players.length === 1 ? "" : "s"}
+                        {ticket.players.length} player
+                        {ticket.players.length === 1 ? "" : "s"}
                       </Badge>
                     </header>
                     <ul className="divide-y">
-                      {team.players.map((player) => (
+                      {ticket.players.map((player) => (
                         <li
                           key={player.playerId}
                           className="flex items-center justify-between gap-3 px-3 py-2"

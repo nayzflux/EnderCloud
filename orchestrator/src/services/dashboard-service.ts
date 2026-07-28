@@ -33,6 +33,10 @@ import type {
   SessionState,
   VariantRuntimeSpec,
 } from "../domain/types.ts";
+import {
+  computeFeasibleProfiles,
+  selectRecommendedProfile,
+} from "../domain/matchmaking.ts";
 
 type DatabaseTimestamp = Date | string;
 
@@ -45,6 +49,11 @@ export interface GroupRow {
   team_count: number | null;
   team_size: number | null;
   waiting_timeout_ms: number | null;
+  candidate_window?: number | null;
+  instance_wait_timeout_ms?: number | null;
+  maximum_waiting_timeout_ms?: number | null;
+  minimum_players_per_team?: number | null;
+  maximum_team_spread?: number | null;
   minimum_instances: number;
   maximum_instances: number;
   minimum_warm_instances: number;
@@ -90,7 +99,8 @@ export interface SessionRow {
   state: SessionState;
   assignment_revision: number;
   assignment_acknowledged_at: DatabaseTimestamp | null;
-  waiting_deadline: DatabaseTimestamp;
+  waiting_deadline: DatabaseTimestamp | null;
+  maximum_waiting_deadline?: DatabaseTimestamp | null;
   retry_count: number;
   active_player_count: number;
   connected_player_count: number;
@@ -161,7 +171,8 @@ function toSession(row: SessionRow): DashboardSession {
     state: row.state,
     assignmentRevision: row.assignment_revision,
     assignmentAcknowledgedAt: iso(row.assignment_acknowledged_at),
-    waitingDeadline: requiredIso(row.waiting_deadline),
+    waitingDeadline: iso(row.waiting_deadline),
+    maximumWaitingDeadline: iso(row.maximum_waiting_deadline ?? null),
     retryCount: row.retry_count,
     activePlayerCount: row.active_player_count,
     connectedPlayerCount: row.connected_player_count,
@@ -263,6 +274,13 @@ export function assembleClusterSnapshot(
               teamCount: group.team_count,
               teamSize: group.team_size,
               waitingTimeoutMs: group.waiting_timeout_ms,
+              candidateWindow: group.candidate_window ?? 20,
+              instanceWaitTimeoutMs:
+                group.instance_wait_timeout_ms ?? group.waiting_timeout_ms,
+              maximumWaitingTimeoutMs:
+                group.maximum_waiting_timeout_ms ?? group.waiting_timeout_ms * 3,
+              minimumPlayersPerTeam: group.minimum_players_per_team ?? 0,
+              maximumTeamSpread: group.maximum_team_spread ?? group.team_size,
             }
           : null,
       routing:
@@ -539,11 +557,11 @@ export class DashboardService {
       const session = sessions[0];
       if (!session) return null;
 
-      const [players, transfers] = await Promise.all([
+      const [players, ticketRows, policyRows, transfers] = await Promise.all([
         tx.select({
           player_id: sessionPlayers.playerId,
           party_id: sessionPlayers.partyId,
-          team_index: sessionPlayers.teamIndex,
+          queue_entry_id: sessionPlayers.queueEntryId,
           state: sessionPlayers.state,
           selected_at: sessionPlayers.selectedAt,
           transferring_at: sessionPlayers.transferringAt,
@@ -552,7 +570,22 @@ export class DashboardService {
         })
         .from(sessionPlayers)
         .where(eq(sessionPlayers.sessionId, sessionId))
-        .orderBy(asc(sessionPlayers.teamIndex), asc(sessionPlayers.selectedAt), asc(sessionPlayers.playerId)),
+        .orderBy(asc(sessionPlayers.partyId), asc(sessionPlayers.selectedAt), asc(sessionPlayers.playerId)),
+
+        tx.select({
+          id: queueEntries.id,
+          party_id: queueEntries.partyId,
+          transfer_started_at: queueEntries.transferStartedAt,
+        })
+        .from(queueEntries)
+        .where(eq(queueEntries.sessionId, sessionId)),
+
+        tx.select({
+          team_count: serverGroups.teamCount,
+          team_size: serverGroups.teamSize,
+        })
+        .from(serverGroups)
+        .where(eq(serverGroups.id, session.group_id)),
         
         tx.select({
           id: transferCommands.id,
@@ -570,10 +603,17 @@ export class DashboardService {
         .limit(20),
       ]);
 
-      const byTeam = new Map<number, (DashboardSessionDetail["teams"][number]["players"][number])[]>();
+      const byTicket = new Map<string, {
+        partyId: string;
+        players: (DashboardSessionDetail["tickets"][number]["players"][number])[];
+      }>();
       for (const player of players) {
-        const team = byTeam.get(player.team_index) ?? [];
-        team.push({
+        const ticketId = player.queue_entry_id ?? `legacy:${player.party_id}`;
+        const ticket = byTicket.get(ticketId) ?? {
+          partyId: player.party_id,
+          players: [],
+        };
+        ticket.players.push({
           playerId: player.player_id,
           partyId: player.party_id,
           state: player.state,
@@ -582,15 +622,43 @@ export class DashboardService {
           connectedAt: iso(player.connected_at),
           leftAt: iso(player.left_at),
         });
-        byTeam.set(player.team_index, team);
+        byTicket.set(ticketId, ticket);
       }
+      const policy = policyRows[0];
+      const expectedSizes = [...byTicket.values()].map(
+        (ticket) => ticket.players.filter((player) => player.state !== "LEFT").length,
+      ).filter((size) => size > 0);
+      const connectedSizes = [...byTicket.values()].map(
+        (ticket) => ticket.players.filter((player) => player.state === "CONNECTED").length,
+      ).filter((size) => size > 0);
+      const expectedProfiles = computeFeasibleProfiles(
+        expectedSizes,
+        policy?.team_count ?? 1,
+        policy?.team_size ?? 1,
+      );
+      const connectedProfiles = computeFeasibleProfiles(
+        connectedSizes,
+        policy?.team_count ?? 1,
+        policy?.team_size ?? 1,
+      );
+      const transferByTicket = new Map(
+        ticketRows.map((row) => [row.id, row.transfer_started_at]),
+      );
       return {
         schemaVersion: 1,
         generatedAt: new Date().toISOString(),
         session: { ...toSession(session), groupId: session.group_id },
-        teams: [...byTeam.entries()]
-          .sort(([left], [right]) => left - right)
-          .map(([teamIndex, teamPlayers]) => ({ teamIndex, players: teamPlayers })),
+        tickets: [...byTicket.entries()]
+          .map(([ticketId, ticket]) => ({
+            ticketId,
+            partyId: ticket.partyId,
+            transferStartedAt: iso(transferByTicket.get(ticketId) ?? null),
+            players: ticket.players,
+          })),
+        expectedProfiles,
+        connectedProfiles,
+        recommendedExpectedProfile: selectRecommendedProfile(expectedProfiles),
+        recommendedConnectedProfile: selectRecommendedProfile(connectedProfiles),
         transfers: transfers.map((transfer) => ({
           id: transfer.id,
           instanceId: transfer.instance_id,
@@ -617,6 +685,11 @@ export class DashboardService {
       team_count: serverGroups.teamCount,
       team_size: serverGroups.teamSize,
       waiting_timeout_ms: serverGroups.waitingTimeoutMs,
+      candidate_window: serverGroups.candidateWindow,
+      instance_wait_timeout_ms: serverGroups.instanceWaitTimeoutMs,
+      maximum_waiting_timeout_ms: serverGroups.maximumWaitingTimeoutMs,
+      minimum_players_per_team: serverGroups.minimumPlayersPerTeam,
+      maximum_team_spread: serverGroups.maximumTeamSpread,
       minimum_instances: serverGroups.minimumInstances,
       maximum_instances: serverGroups.maximumInstances,
       minimum_warm_instances: serverGroups.minimumWarmInstances,
@@ -671,16 +744,18 @@ export class DashboardService {
       assignment_revision: gameSessions.assignmentRevision,
       assignment_acknowledged_at: gameSessions.assignmentAcknowledgedAt,
       waiting_deadline: gameSessions.waitingDeadline,
+      maximum_waiting_deadline: gameSessions.maximumWaitingDeadline,
       retry_count: gameSessions.retryCount,
       active_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} <> 'LEFT')::int`,
       connected_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} = 'CONNECTED')::int`,
-      team_count: sql<number>`count(DISTINCT ${sessionPlayers.teamIndex}) FILTER (WHERE ${sessionPlayers.state} <> 'LEFT')::int`,
+      team_count: serverGroups.teamCount,
       created_at: gameSessions.createdAt,
       started_at: gameSessions.startedAt,
       finished_at: gameSessions.finishedAt,
       updated_at: gameSessions.updatedAt,
     })
     .from(gameSessions)
+    .innerJoin(serverGroups, eq(serverGroups.id, gameSessions.groupId))
     .leftJoin(sessionPlayers, eq(sessionPlayers.sessionId, gameSessions.id))
     .where(
       or(
@@ -691,7 +766,7 @@ export class DashboardService {
          )`
       )
     )
-    .groupBy(gameSessions.id)
+    .groupBy(gameSessions.id, serverGroups.id)
     .orderBy(asc(gameSessions.groupId), asc(gameSessions.createdAt), asc(gameSessions.id));
 
     const queues = await tx.select({
@@ -726,19 +801,21 @@ export class DashboardService {
       assignment_revision: gameSessions.assignmentRevision,
       assignment_acknowledged_at: gameSessions.assignmentAcknowledgedAt,
       waiting_deadline: gameSessions.waitingDeadline,
+      maximum_waiting_deadline: gameSessions.maximumWaitingDeadline,
       retry_count: gameSessions.retryCount,
       active_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} <> 'LEFT')::int`,
       connected_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} = 'CONNECTED')::int`,
-      team_count: sql<number>`count(DISTINCT ${sessionPlayers.teamIndex}) FILTER (WHERE ${sessionPlayers.state} <> 'LEFT')::int`,
+      team_count: serverGroups.teamCount,
       created_at: gameSessions.createdAt,
       started_at: gameSessions.startedAt,
       finished_at: gameSessions.finishedAt,
       updated_at: gameSessions.updatedAt,
     })
     .from(gameSessions)
+    .innerJoin(serverGroups, eq(serverGroups.id, gameSessions.groupId))
     .leftJoin(sessionPlayers, eq(sessionPlayers.sessionId, gameSessions.id))
     .where(eq(gameSessions.id, sessionId))
-    .groupBy(gameSessions.id);
+    .groupBy(gameSessions.id, serverGroups.id);
 
     return sessions as SessionRow[];
   }

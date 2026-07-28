@@ -29,6 +29,20 @@
       "when": 1785142800000,
       "tag": "0003_transfer_reliability",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1785232800000,
+      "tag": "0004_matchmaking_profiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1785236400000,
+      "tag": "0005_session_player_tickets",
+      "breakpoints": true
     }
   ]
 }

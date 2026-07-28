@@ -1,9 +1,14 @@
 import type { AppConfig } from "../config.ts";
 import type { Database } from "../db/client.ts";
-import { sql, and, eq, inArray, isNotNull, lt, ne, notInArray, or } from "drizzle-orm";
+import { sql, and, eq, inArray, isNotNull, lt, ne, notInArray } from "drizzle-orm";
 import { gameSessions, instancePlayers, serverGroups, serverInstances, sessionPlayers, transferCommands } from "../db/schema.ts";
 import { shouldRetryFailedSession } from "../domain/session-recovery.ts";
 import type { SessionState } from "../domain/types.ts";
+import {
+  computeFeasibleProfiles,
+  isSessionLockEligible,
+  selectRecommendedProfile,
+} from "../domain/matchmaking.ts";
 import type { Logger } from "../logger.ts";
 import type { InstanceController } from "./instance-controller.ts";
 import type { TransferService } from "./transfer-service.ts";
@@ -17,6 +22,11 @@ interface SessionRow {
   active_players: number;
   connected_players: number;
   deadline_reached: boolean;
+  maximum_deadline_reached: boolean;
+  team_count: number;
+  team_size: number;
+  minimum_players_per_team: number;
+  maximum_team_spread: number;
 }
 
 export class SessionController {
@@ -61,7 +71,7 @@ export class SessionController {
 
   // Mark players as left when their transfer acknowledgement never arrives.
   private async expireTransfers(): Promise<void> {
-    await this.db.update(sessionPlayers)
+    const changed = await this.db.update(sessionPlayers)
       .set({ state: "LEFT", leftAt: sql`now()` })
       .where(and(
         eq(sessionPlayers.state, "TRANSFERRING"),
@@ -73,7 +83,17 @@ export class SessionController {
             .from(gameSessions)
             .where(inArray(gameSessions.state, ["TRANSFERRING", "WAITING"]))
         )
-      ));
+      ))
+      .returning({ sessionId: sessionPlayers.sessionId });
+    for (const sessionId of new Set(changed.map((row) => row.sessionId))) {
+      await this.db.update(gameSessions)
+        .set({
+          assignmentRevision: sql`${gameSessions.assignmentRevision} + 1`,
+          assignmentAcknowledgedAt: null,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(gameSessions.id, sessionId));
+    }
   }
 
   // Start, keep waiting, or cancel sessions based on arrivals and deadlines.
@@ -86,7 +106,12 @@ export class SessionController {
       maximum_players: serverGroups.maximumPlayers,
       active_players: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} <> 'LEFT')::int`,
       connected_players: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} = 'CONNECTED')::int`,
-      deadline_reached: sql<boolean>`${gameSessions.waitingDeadline} <= now()`,
+      deadline_reached: sql<boolean>`COALESCE(${gameSessions.waitingDeadline} <= now(), false)`,
+      maximum_deadline_reached: sql<boolean>`COALESCE(${gameSessions.maximumWaitingDeadline} <= now(), false)`,
+      team_count: serverGroups.teamCount,
+      team_size: serverGroups.teamSize,
+      minimum_players_per_team: serverGroups.minimumPlayersPerTeam,
+      maximum_team_spread: serverGroups.maximumTeamSpread,
     })
     .from(gameSessions)
     .innerJoin(serverGroups, eq(serverGroups.id, gameSessions.groupId))
@@ -104,32 +129,13 @@ export class SessionController {
         }
         continue;
       }
-      // Start immediately when full, or at the deadline once the minimum viable count arrived.
-      if (
-        session.connected_players >= session.maximum_players ||
-        (session.deadline_reached &&
-          session.connected_players >= session.minimum_players)
-      ) {
-        await this.db.update(gameSessions)
-          .set({ state: "STARTING", updatedAt: sql`now()` })
-          .where(and(
-            eq(gameSessions.id, session.id),
-            inArray(gameSessions.state, ["TRANSFERRING", "WAITING"])
-          ));
-        await this.db.update(transferCommands)
-          .set({ state: "COMPLETED", completedAt: sql`now()` })
-          .where(and(
-            eq(transferCommands.sessionId, session.id),
-            eq(transferCommands.state, "PENDING")
-          ));
-      } else if (
-        // Below-minimum sessions cannot start safely after the waiting window closes.
-        session.deadline_reached &&
-        session.connected_players < session.minimum_players
-      ) {
-        this.logger.info(
-          `Session ${session.id} deadline reached without minimum players: session CANCELLED`,
-        );
+      const lockEligible = await this.isConnectedProfileEligible(session);
+      // Only the plugin may lock. The maximum lobby deadline cancels solely if no legal start exists.
+      if (session.maximum_deadline_reached && !lockEligible) {
+        this.logger.info("Session maximum lobby deadline reached without an eligible profile", {
+          sessionId: session.id,
+          connectedPlayers: session.connected_players,
+        });
         await this.cancel(session.id, session.instance_id);
       } else if (
         // Once every still-active selection arrived, the lobby is waiting on game start rather than transfers.
@@ -145,6 +151,30 @@ export class SessionController {
           ));
       }
     }
+  }
+
+  private async isConnectedProfileEligible(session: SessionRow): Promise<boolean> {
+    if (session.connected_players < session.minimum_players) return false;
+    const rows = (await this.db.execute(sql`
+      SELECT count(*)::integer AS size
+      FROM session_players
+      WHERE session_id = ${session.id} AND state = 'CONNECTED'
+      GROUP BY COALESCE(queue_entry_id, 'legacy:' || party_id)
+    `)) as unknown as { size: number }[];
+    const profiles = computeFeasibleProfiles(
+      rows.map((row) => Number(row.size)),
+      session.team_count,
+      session.team_size,
+    );
+    return isSessionLockEligible(
+      session.connected_players,
+      session.minimum_players,
+      session.maximum_players,
+      session.deadline_reached,
+      selectRecommendedProfile(profiles),
+      session.minimum_players_per_team,
+      session.maximum_team_spread,
+    );
   }
 
   // Retry safe pre-start failures or fail sessions that can no longer be reassigned.
@@ -195,8 +225,9 @@ export class SessionController {
               instanceId: null,
               transferStartedAt: null,
               waitingDeadline: sql`now() + (
-                (SELECT waiting_timeout_ms FROM server_groups WHERE id = ${gameSessions.groupId}) * interval '1 millisecond'
+                (SELECT instance_wait_timeout_ms FROM server_groups WHERE id = ${gameSessions.groupId}) * interval '1 millisecond'
               )`,
+              maximumWaitingDeadline: null,
               retryCount: sql`${gameSessions.retryCount} + 1`,
               updatedAt: sql`now()`
             })
@@ -225,31 +256,40 @@ export class SessionController {
     }
   }
 
-  // Evacuate hubs when needed and delete instances whose drain is complete.
+  // Actively evacuate cancelled minigames, then delete every drain that is complete.
   private async finishDrainingInstances(): Promise<void> {
-    const due = await this.db.select({
+    const draining = await this.db.select({
       id: serverInstances.id,
       group_id: serverInstances.groupId,
       type: serverGroups.type,
       player_count: serverInstances.playerCount,
+      session_state: gameSessions.state,
+      due: sql<boolean>`(
+        ${serverInstances.playerCount} = 0
+        OR ${serverInstances.drainDeadline} <= now()
+      )`,
     })
     .from(serverInstances)
     .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
-    .where(and(
-      eq(serverInstances.lifecycleState, "DRAINING"),
-      or(
-        eq(serverInstances.playerCount, 0),
-        sql`${serverInstances.drainDeadline} <= now()`
-      )
-    )) as unknown as 
+    .leftJoin(gameSessions, eq(gameSessions.id, serverInstances.sessionId))
+    .where(eq(serverInstances.lifecycleState, "DRAINING")) as unknown as
       {
         id: string;
         group_id: string;
         type: "hub" | "minigame";
         player_count: number;
+        session_state: SessionState | null;
+        due: boolean;
       }[];
-    // Drain candidates are already due; hubs require evacuation before deletion.
-    for (const instance of due) {
+    for (const instance of draining) {
+      if (
+        instance.type === "minigame" &&
+        instance.session_state === "CANCELLED" &&
+        instance.player_count > 0
+      ) {
+        await this.instances.evacuateCancelledMinigame(instance.id);
+      }
+      if (!instance.due) continue;
       if (instance.type === "hub" && instance.player_count > 0) {
         await this.evacuateHub(instance.id, instance.group_id);
       }
@@ -314,18 +354,32 @@ export class SessionController {
     sessionId: string,
     instanceId: string | null,
   ): Promise<void> {
-    await this.db.update(gameSessions)
-      .set({ state: "CANCELLED", updatedAt: sql`now()` })
-      .where(and(
-        eq(gameSessions.id, sessionId),
-        inArray(gameSessions.state, ["WAITING_FOR_INSTANCE", "TRANSFERRING", "WAITING"])
-      ));
-    await this.db.update(transferCommands)
-      .set({ state: "CANCELLED", completedAt: sql`now()` })
-      .where(and(
-        eq(transferCommands.sessionId, sessionId),
-        eq(transferCommands.state, "PENDING")
-      ));
-    if (instanceId) await this.instances.beginDrain(instanceId);
+    const cancelled = await this.db.transaction(async (tx: any) => {
+      const rows = await tx.update(gameSessions)
+        .set({
+          state: "CANCELLED",
+          finishedAt: sql`COALESCE(${gameSessions.finishedAt}, now())`,
+          updatedAt: sql`now()`,
+        })
+        .where(and(
+          eq(gameSessions.id, sessionId),
+          inArray(gameSessions.state, ["FORMING", "WAITING_FOR_INSTANCE", "TRANSFERRING", "WAITING"])
+        ))
+        .returning({ id: gameSessions.id });
+      if (rows.length === 0) return false;
+      await tx.update(transferCommands)
+        .set({ state: "CANCELLED", completedAt: sql`now()` })
+        .where(and(
+          eq(transferCommands.sessionId, sessionId),
+          eq(transferCommands.state, "PENDING")
+        ));
+      return true;
+    });
+    if (cancelled && instanceId) {
+      await this.instances.beginDrain(
+        instanceId,
+        this.config.cancelledDrainTimeoutMs,
+      );
+    }
   }
 }

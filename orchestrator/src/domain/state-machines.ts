@@ -13,11 +13,11 @@ const lifecycleTransitions: Readonly<Record<LifecycleState, readonly LifecycleSt
 
 const sessionTransitions: Readonly<Record<SessionState, readonly SessionState[]>> = {
   FORMING: ["WAITING_FOR_INSTANCE", "TRANSFERRING", "CANCELLED"],
-  WAITING_FOR_INSTANCE: ["TRANSFERRING", "CANCELLED", "FAILED"],
+  WAITING_FOR_INSTANCE: ["FORMING", "TRANSFERRING", "CANCELLED", "FAILED"],
   TRANSFERRING: ["WAITING", "STARTING", "CANCELLED", "FAILED"],
   WAITING: ["STARTING", "CANCELLED", "FAILED"],
-  STARTING: ["RUNNING", "FAILED"],
-  RUNNING: ["FINISHED", "FAILED"],
+  STARTING: ["RUNNING", "CANCELLED", "FAILED"],
+  RUNNING: ["FINISHED", "CANCELLED", "FAILED"],
   FINISHED: [],
   CANCELLED: [],
   FAILED: [],

@@ -1,27 +1,52 @@
+import { and, asc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
-import { sql, eq, and, ne, inArray, isNotNull } from "drizzle-orm";
 import {
-  serverGroups,
+  gameSessions,
   queueEntries,
   queueEntryPlayers,
+  serverGroups,
   serverInstances,
-  gameSessions,
   sessionPlayers,
 } from "../db/schema.ts";
-import type postgres from "postgres";
-import { packParties } from "../domain/matchmaking.ts";
-import type { QueueParty, TeamAssignment } from "../domain/types.ts";
-import type { Logger } from "../logger.ts";
+import {
+  computeFeasibleProfiles,
+  isProfileEligible,
+  isSessionLockEligible,
+  rankSessionCandidates,
+  selectRecommendedProfile,
+} from "../domain/matchmaking.ts";
+import type { QueueParty, SessionState } from "../domain/types.ts";
 import { nanoid } from "../id.ts";
+import type { Logger } from "../logger.ts";
 import type { TransferService } from "./transfer-service.ts";
 
 interface GroupRow {
   id: string;
-  minimum_players: number;
-  maximum_players: number;
-  team_count: number;
-  team_size: number;
-  waiting_timeout_ms: number;
+  minimumPlayers: number;
+  maximumPlayers: number;
+  teamCount: number;
+  teamSize: number;
+  waitingTimeoutMs: number;
+  candidateWindow: number;
+  instanceWaitTimeoutMs: number;
+  maximumWaitingTimeoutMs: number;
+  minimumPlayersPerTeam: number;
+  maximumTeamSpread: number;
+}
+
+interface SessionCandidate {
+  id: string;
+  state: Extract<
+    SessionState,
+    "FORMING" | "WAITING_FOR_INSTANCE" | "TRANSFERRING" | "WAITING"
+  >;
+  instanceId: string | null;
+  endpoint: string | null;
+  createdAt: Date;
+  ticketSizes: number[];
+  connectedTicketSizes: number[];
+  waitingDeadline: Date | null;
+  maximumWaitingDeadline: Date | null;
 }
 
 interface QueueRow {
@@ -45,44 +70,38 @@ export class Matchmaker {
     private readonly logger: Logger,
   ) {}
 
-  // Assign waiting sessions, backfill active lobbies, then form new sessions.
   public async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
     try {
-      const groups = (await this.db
+      const groups = await this.db
         .select({
           id: serverGroups.id,
-          minimum_players: serverGroups.minimumPlayers,
-          maximum_players: serverGroups.maximumPlayers,
-          team_count: serverGroups.teamCount,
-          team_size: serverGroups.teamSize,
-          waiting_timeout_ms: serverGroups.waitingTimeoutMs,
+          minimumPlayers: serverGroups.minimumPlayers,
+          maximumPlayers: serverGroups.maximumPlayers,
+          teamCount: serverGroups.teamCount,
+          teamSize: serverGroups.teamSize,
+          waitingTimeoutMs: serverGroups.waitingTimeoutMs,
+          candidateWindow: serverGroups.candidateWindow,
+          instanceWaitTimeoutMs: serverGroups.instanceWaitTimeoutMs,
+          maximumWaitingTimeoutMs: serverGroups.maximumWaitingTimeoutMs,
+          minimumPlayersPerTeam: serverGroups.minimumPlayersPerTeam,
+          maximumTeamSpread: serverGroups.maximumTeamSpread,
         })
         .from(serverGroups)
         .where(
           and(
             eq(serverGroups.type, "minigame"),
             eq(serverGroups.enabled, true),
+            isNotNull(serverGroups.minimumPlayers),
           ),
-        )) as unknown as GroupRow[];
-      // Process groups independently so a failure in one game mode does not stop others.
-      for (const group of groups) {
+        );
+
+      for (const raw of groups) {
+        const group = this.normalizeGroup(raw);
+        if (!group) continue;
         try {
-          // Consume all currently available warm instances for already-formed sessions first.
-          while (await this.assignWaitingSession(group)) {
-            // Assign every available warm instance before forming more sessions.
-          }
-          // Fill sessions that already own an instance before consuming queue entries for new sessions.
-          await this.backfill(group);
-          // The hard cap keeps one busy group from monopolizing the scheduler tick.
-          for (
-            let formed = 0;
-            formed < 32 && (await this.formSession(group));
-            formed += 1
-          ) {
-            // Drain the currently matchable queue without monopolising the scheduler forever.
-          }
+          await this.processGroup(group);
         } catch (error) {
           this.logger.error("Matchmaking group tick failed", {
             groupId: group.id,
@@ -97,19 +116,49 @@ export class Matchmaker {
     }
   }
 
-  // Select queued parties, reserve a warm instance, and persist a new session.
-  private async formSession(group: GroupRow): Promise<boolean> {
-    return this.db.transaction(async (tx: any) => {
-      // Row locks plus SKIP LOCKED allow multiple orchestrator workers to form
-      // sessions concurrently without selecting the same queued party twice.
+  // One PostgreSQL advisory lock serializes every logical worker for this mode.
+  private async processGroup(group: GroupRow): Promise<void> {
+    await this.db.transaction(async (tx: any) => {
+      const locks = (await tx.execute(sql`
+        SELECT pg_try_advisory_xact_lock(hashtextextended(${group.id}, 0)) AS locked
+      `)) as unknown as { locked: boolean }[];
+      if (!locks[0]?.locked) return;
+
+      const sessions = (await this.loadSessions(tx, group.id)).filter((session) =>
+        this.acceptsTicketsAtCurrentDeadline(session, group)
+      );
+      // Capacity is assigned before queue placement so a waiting session resumes promptly.
+      for (const session of sessions) {
+        if (session.state === "WAITING_FOR_INSTANCE") {
+          if (this.isExpectedStartEligible(session, group)) {
+            await this.tryAssignInstance(tx, group, session);
+          } else {
+            session.state = "FORMING";
+            session.waitingDeadline = null;
+            await tx.update(gameSessions)
+              .set({
+                state: "FORMING",
+                waitingDeadline: null,
+                maximumWaitingDeadline: null,
+                updatedAt: sql`now()`,
+              })
+              .where(
+                and(
+                  eq(gameSessions.id, session.id),
+                  eq(gameSessions.state, "WAITING_FOR_INSTANCE"),
+                ),
+              );
+          }
+        }
+      }
+
       const queue = (await tx.execute(sql`
         WITH locked_entries AS (
           SELECT q.id, q.party_id, q.joined_at
           FROM queue_entries q
           WHERE q.group_id = ${group.id} AND q.state = 'QUEUED'
-          -- Oldest parties are considered first for queue fairness.
-          ORDER BY q.joined_at
-          -- Locked rows are skipped so concurrent workers never select the same party.
+          ORDER BY q.joined_at, q.id
+          LIMIT ${group.candidateWindow}
           FOR UPDATE SKIP LOCKED
         )
         SELECT q.id AS entry_id, q.party_id, q.joined_at,
@@ -117,354 +166,462 @@ export class Matchmaker {
         FROM locked_entries q
         JOIN queue_entry_players qp ON qp.queue_entry_id = q.id
         GROUP BY q.id, q.party_id, q.joined_at
-        ORDER BY q.joined_at
+        ORDER BY q.joined_at, q.id
       `)) as unknown as QueueRow[];
 
-      const parties = this.toParties(queue);
-      const packed = packParties(
-        parties,
-        group.team_count,
-        group.team_size,
-        group.maximum_players,
-      );
-      // Do not consume queue entries until a valid minimum-sized match can be committed.
-      if (packed.playerCount < group.minimum_players) return false;
+      for (const party of this.toParties(queue)) {
+        let session = this.chooseSession(sessions, party, group);
+        if (!session) {
+          session = {
+            id: nanoid(),
+            state: "FORMING",
+            instanceId: null,
+            endpoint: null,
+            createdAt: new Date(),
+            ticketSizes: [],
+            connectedTicketSizes: [],
+            waitingDeadline: null,
+            maximumWaitingDeadline: null,
+          };
+          await tx.insert(gameSessions).values({
+            id: session.id,
+            groupId: group.id,
+            state: "FORMING",
+            waitingDeadline: null,
+            maximumWaitingDeadline: null,
+          });
+          sessions.push(session);
+        }
 
-      const sessionId = nanoid();
-      const reservations = (await tx
-        .select({
-          id: serverInstances.id,
-          endpoint: serverInstances.endpoint,
-        })
-        .from(serverInstances)
-        .where(
-          and(
-            eq(serverInstances.groupId, group.id),
-            eq(serverInstances.lifecycleState, "RUNNING"),
-            eq(serverInstances.availabilityState, "OPEN"),
-            isNotNull(serverInstances.endpoint),
-          ),
-        )
-        // Prefer the oldest warm instance to rotate the pool predictably.
-        .orderBy(serverInstances.runningAt)
-        // Lock the reservation candidate so only this tx can claim it.
-        .limit(1)
-        .for("update", { skipLocked: true })) as unknown as Reservation[];
-      const reservation = reservations[0];
-      // Session formation is allowed without capacity; it can wait while autoscaling catches up.
-      const state = reservation ? "TRANSFERRING" : "WAITING_FOR_INSTANCE";
+        await this.attachParty(tx, session, party);
+        session.ticketSizes.push(party.playerIds.length);
 
-      await tx.insert(gameSessions).values({
-        id: sessionId,
-        groupId: group.id,
-        instanceId: reservation?.id ?? null,
-        state: state,
-        waitingDeadline: sql`now() + (${group.waiting_timeout_ms} * interval '1 millisecond')`,
-      });
-
-      if (reservation) {
-        // Reserve the instance in the same tx as the session to prevent double assignment.
-        await tx
-          .update(serverInstances)
-          .set({
-            availabilityState: "RESERVED",
-            sessionId: sessionId,
-            updatedAt: sql`now()`,
-          })
-          .where(
-            and(
-              eq(serverInstances.id, reservation.id),
-              eq(serverInstances.lifecycleState, "RUNNING"),
-              eq(serverInstances.availabilityState, "OPEN"),
-            ),
-          );
+        if (session.instanceId && session.endpoint) {
+          await this.beginTicketTransfer(tx, session, party);
+        } else if (
+          session.state === "FORMING" &&
+          this.isExpectedStartEligible(session, group)
+        ) {
+          await this.dispatchSession(tx, group, session);
+        }
       }
-      await this.persistSelection(
-        tx,
-        sessionId,
-        packed.teams,
-        packed.selected,
-        Boolean(reservation),
-      );
-      if (reservation) {
-        await this.transfers.enqueue(
-          tx,
-          {
-            instanceId: reservation.id,
-            endpoint: reservation.endpoint,
-            players: packed.selected.flatMap((party) => [...party.playerIds]),
-          },
-          sessionId,
-        );
-        await tx
-          .update(gameSessions)
-          .set({ transferStartedAt: sql`now()` })
-          .where(eq(gameSessions.id, sessionId));
-      }
-      return true;
     });
   }
 
-  // Attach the oldest waiting session to the next available warm instance.
-  private async assignWaitingSession(group: GroupRow): Promise<boolean> {
-    return this.db.transaction(async (tx: any) => {
-      const sessions = (await tx
-        .select({ id: gameSessions.id })
-        .from(gameSessions)
-        .where(
-          and(
-            eq(gameSessions.groupId, group.id),
-            eq(gameSessions.state, "WAITING_FOR_INSTANCE"),
-            sql`${gameSessions.waitingDeadline} > now()`,
-          ),
-        )
-        .orderBy(gameSessions.createdAt)
-        .limit(1)
-        .for("update", { skipLocked: true })) as unknown as { id: string }[];
-      const session = sessions[0];
-      if (!session) return false;
-      const reservations = (await tx
-        .select({
-          id: serverInstances.id,
-          endpoint: serverInstances.endpoint,
-        })
-        .from(serverInstances)
-        .where(
-          and(
-            eq(serverInstances.groupId, group.id),
-            eq(serverInstances.lifecycleState, "RUNNING"),
-            eq(serverInstances.availabilityState, "OPEN"),
-            isNotNull(serverInstances.endpoint),
-          ),
-        )
-        .orderBy(serverInstances.runningAt)
-        .limit(1)
-        .for("update", { skipLocked: true })) as unknown as Reservation[];
-      const reservation = reservations[0];
-      if (!reservation) return false;
+  private normalizeGroup(raw: {
+    id: string;
+    minimumPlayers: number | null;
+    maximumPlayers: number | null;
+    teamCount: number | null;
+    teamSize: number | null;
+    waitingTimeoutMs: number | null;
+    candidateWindow: number | null;
+    instanceWaitTimeoutMs: number | null;
+    maximumWaitingTimeoutMs: number | null;
+    minimumPlayersPerTeam: number | null;
+    maximumTeamSpread: number | null;
+  }): GroupRow | null {
+    if (
+      raw.minimumPlayers == null ||
+      raw.maximumPlayers == null ||
+      raw.teamCount == null ||
+      raw.teamSize == null ||
+      raw.waitingTimeoutMs == null
+    ) {
+      this.logger.error("Skipping minigame group with incomplete policy", {
+        groupId: raw.id,
+      });
+      return null;
+    }
+    return {
+      id: raw.id,
+      minimumPlayers: raw.minimumPlayers,
+      maximumPlayers: raw.maximumPlayers,
+      teamCount: raw.teamCount,
+      teamSize: raw.teamSize,
+      waitingTimeoutMs: raw.waitingTimeoutMs,
+      candidateWindow: raw.candidateWindow ?? 20,
+      instanceWaitTimeoutMs: raw.instanceWaitTimeoutMs ?? raw.waitingTimeoutMs,
+      maximumWaitingTimeoutMs:
+        raw.maximumWaitingTimeoutMs ?? raw.waitingTimeoutMs * 3,
+      minimumPlayersPerTeam: raw.minimumPlayersPerTeam ?? 0,
+      maximumTeamSpread: raw.maximumTeamSpread ?? raw.teamSize,
+    };
+  }
 
-      await tx
-        .update(serverInstances)
+  private async loadSessions(tx: any, groupId: string): Promise<SessionCandidate[]> {
+    const rows = (await tx
+      .select({
+        id: gameSessions.id,
+        state: gameSessions.state,
+        instance_id: gameSessions.instanceId,
+        endpoint: serverInstances.endpoint,
+        created_at: gameSessions.createdAt,
+        waiting_deadline: gameSessions.waitingDeadline,
+        maximum_waiting_deadline: gameSessions.maximumWaitingDeadline,
+      })
+      .from(gameSessions)
+      .leftJoin(serverInstances, eq(serverInstances.id, gameSessions.instanceId))
+      .where(
+        and(
+          eq(gameSessions.groupId, groupId),
+          inArray(gameSessions.state, [
+            "FORMING",
+            "WAITING_FOR_INSTANCE",
+            "TRANSFERRING",
+            "WAITING",
+          ]),
+        ),
+      )
+      .orderBy(asc(gameSessions.createdAt), asc(gameSessions.id))
+      .for("update", { of: gameSessions })) as unknown as {
+      id: string;
+      state: SessionCandidate["state"];
+      instance_id: string | null;
+      endpoint: string | null;
+      created_at: Date;
+      waiting_deadline: Date | null;
+      maximum_waiting_deadline: Date | null;
+    }[];
+    const sizes = rows.length === 0
+      ? []
+      : (await tx
+          .select({
+            session_id: sessionPlayers.sessionId,
+            ticket_id: sql<string>`COALESCE(${sessionPlayers.queueEntryId}, 'legacy:' || ${sessionPlayers.partyId})`,
+            player_count: sql<number>`count(*)::integer`,
+            connected_player_count: sql<number>`count(*) FILTER (WHERE ${sessionPlayers.state} = 'CONNECTED')::integer`,
+          })
+          .from(sessionPlayers)
+          .where(
+            and(
+              inArray(sessionPlayers.sessionId, rows.map((row) => row.id)),
+              ne(sessionPlayers.state, "LEFT"),
+            ),
+          )
+          .groupBy(
+            sessionPlayers.sessionId,
+            sql`COALESCE(${sessionPlayers.queueEntryId}, 'legacy:' || ${sessionPlayers.partyId})`,
+          )
+          .orderBy(asc(sessionPlayers.sessionId))) as unknown as {
+            session_id: string;
+            ticket_id: string;
+            player_count: number;
+            connected_player_count: number;
+          }[];
+    return rows.map((row) => ({
+      id: row.id,
+      state: row.state,
+      instanceId: row.instance_id,
+      endpoint: row.endpoint,
+      createdAt: new Date(row.created_at),
+      ticketSizes: sizes
+        .filter((size) => size.session_id === row.id)
+        .map((size) => Number(size.player_count)),
+      connectedTicketSizes: sizes
+        .filter((size) => size.session_id === row.id && Number(size.connected_player_count) > 0)
+        .map((size) => Number(size.connected_player_count)),
+      waitingDeadline: row.waiting_deadline ? new Date(row.waiting_deadline) : null,
+      maximumWaitingDeadline: row.maximum_waiting_deadline
+        ? new Date(row.maximum_waiting_deadline)
+        : null,
+    }));
+  }
+
+  private acceptsTicketsAtCurrentDeadline(
+    session: SessionCandidate,
+    group: GroupRow,
+  ): boolean {
+    if (
+      !session.maximumWaitingDeadline ||
+      session.maximumWaitingDeadline.getTime() > Date.now()
+    ) {
+      return true;
+    }
+    const connectedCount = session.connectedTicketSizes.reduce(
+      (sum, size) => sum + size,
+      0,
+    );
+    const profiles = computeFeasibleProfiles(
+      session.connectedTicketSizes,
+      group.teamCount,
+      group.teamSize,
+    );
+    return isSessionLockEligible(
+      connectedCount,
+      group.minimumPlayers,
+      group.maximumPlayers,
+      Boolean(
+        session.waitingDeadline &&
+        session.waitingDeadline.getTime() <= Date.now()
+      ),
+      selectRecommendedProfile(profiles),
+      group.minimumPlayersPerTeam,
+      group.maximumTeamSpread,
+    );
+  }
+
+  private chooseSession(
+    sessions: readonly SessionCandidate[],
+    party: QueueParty,
+    group: GroupRow,
+  ): SessionCandidate | undefined {
+    const ranked = rankSessionCandidates(
+      sessions.map((session) => ({
+        sessionId: session.id,
+        createdAt: session.createdAt,
+        ticketSizes: session.ticketSizes,
+      })),
+      party.playerIds.length,
+      group.teamCount,
+      group.teamSize,
+      group.maximumPlayers,
+    );
+    const selectedId = ranked[0]?.sessionId;
+    return sessions.find((session) => session.id === selectedId);
+  }
+
+  private async attachParty(
+    tx: any,
+    session: SessionCandidate,
+    party: QueueParty,
+  ): Promise<void> {
+    const updated = await tx
+      .update(queueEntries)
+      .set({
+        state: "SELECTED",
+        sessionId: session.id,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(eq(queueEntries.id, party.entryId), eq(queueEntries.state, "QUEUED")),
+      )
+      .returning({ id: queueEntries.id });
+    if (updated.length === 0) return;
+
+    for (const playerId of party.playerIds) {
+      const inserted = await tx.insert(sessionPlayers).values({
+        sessionId: session.id,
+        playerId,
+        partyId: party.partyId,
+        queueEntryId: party.entryId,
+        state: "SELECTED",
+      }).onConflictDoNothing({
+        target: [sessionPlayers.sessionId, sessionPlayers.playerId],
+      }).returning({ playerId: sessionPlayers.playerId });
+      if (inserted.length === 0) {
+        const reactivated = await tx.update(sessionPlayers)
+          .set({
+            partyId: party.partyId,
+            queueEntryId: party.entryId,
+            state: "SELECTED",
+            selectedAt: sql`now()`,
+            transferringAt: null,
+            connectedAt: null,
+            leftAt: null,
+          })
+          .where(
+            and(
+              eq(sessionPlayers.sessionId, session.id),
+              eq(sessionPlayers.playerId, playerId),
+              eq(sessionPlayers.state, "LEFT"),
+            ),
+          )
+          .returning({ playerId: sessionPlayers.playerId });
+        if (reactivated.length === 0) {
+          throw new Error(`Player ${playerId} is already active in session ${session.id}`);
+        }
+      }
+    }
+    await tx.update(gameSessions)
+      .set({
+        assignmentRevision: sql`${gameSessions.assignmentRevision} + 1`,
+        assignmentAcknowledgedAt: null,
+        updatedAt: sql`now()`,
+      })
+      .where(eq(gameSessions.id, session.id));
+  }
+
+  private isExpectedStartEligible(
+    session: SessionCandidate,
+    group: GroupRow,
+  ): boolean {
+    const playerCount = session.ticketSizes.reduce((sum, size) => sum + size, 0);
+    if (playerCount < group.minimumPlayers) return false;
+    const profiles = computeFeasibleProfiles(
+      session.ticketSizes,
+      group.teamCount,
+      group.teamSize,
+    );
+    return isProfileEligible(
+      selectRecommendedProfile(profiles),
+      group.minimumPlayersPerTeam,
+      group.maximumTeamSpread,
+    );
+  }
+
+  private async dispatchSession(
+    tx: any,
+    group: GroupRow,
+    session: SessionCandidate,
+  ): Promise<void> {
+    const reservation = await this.reserveInstance(tx, group.id, session.id);
+    if (!reservation) {
+      session.state = "WAITING_FOR_INSTANCE";
+      await tx.update(gameSessions)
         .set({
-          availabilityState: "RESERVED",
-          sessionId: session.id,
+          state: "WAITING_FOR_INSTANCE",
+          waitingDeadline: sql`now() + (${group.instanceWaitTimeoutMs} * interval '1 millisecond')`,
+          maximumWaitingDeadline: null,
           updatedAt: sql`now()`,
         })
-        .where(eq(serverInstances.id, reservation.id));
+        .where(and(eq(gameSessions.id, session.id), eq(gameSessions.state, "FORMING")));
+      return;
+    }
+    session.instanceId = reservation.id;
+    session.endpoint = reservation.endpoint;
+    session.state = "TRANSFERRING";
+    await this.startSessionTransfers(tx, group, session, reservation);
+  }
 
-      await tx
-        .update(gameSessions)
-        .set({
-          instanceId: reservation.id,
-          state: "TRANSFERRING",
-          transferStartedAt: sql`now()`,
-          waitingDeadline: sql`now() + (${group.waiting_timeout_ms} * interval '1 millisecond')`,
-          updatedAt: sql`now()`,
-        })
-        .where(eq(gameSessions.id, session.id));
+  private async tryAssignInstance(
+    tx: any,
+    group: GroupRow,
+    session: SessionCandidate,
+  ): Promise<boolean> {
+    const reservation = await this.reserveInstance(tx, group.id, session.id);
+    if (!reservation) return false;
+    session.instanceId = reservation.id;
+    session.endpoint = reservation.endpoint;
+    session.state = "TRANSFERRING";
+    await this.startSessionTransfers(tx, group, session, reservation);
+    return true;
+  }
 
-      await tx
-        .update(sessionPlayers)
-        .set({
-          state: "TRANSFERRING",
-          transferringAt: sql`now()`,
-        })
-        .where(
-          and(
-            eq(sessionPlayers.sessionId, session.id),
-            eq(sessionPlayers.state, "SELECTED"),
-          ),
-        );
+  private async reserveInstance(
+    tx: any,
+    groupId: string,
+    sessionId: string,
+  ): Promise<Reservation | null> {
+    const reservations = (await tx
+      .select({ id: serverInstances.id, endpoint: serverInstances.endpoint })
+      .from(serverInstances)
+      .where(
+        and(
+          eq(serverInstances.groupId, groupId),
+          eq(serverInstances.lifecycleState, "RUNNING"),
+          eq(serverInstances.availabilityState, "OPEN"),
+          isNotNull(serverInstances.endpoint),
+        ),
+      )
+      .orderBy(asc(serverInstances.runningAt), asc(serverInstances.id))
+      .limit(1)
+      .for("update", { skipLocked: true })) as unknown as Reservation[];
+    const reservation = reservations[0];
+    if (!reservation) return null;
+    const claimed = await tx.update(serverInstances)
+      .set({
+        availabilityState: "RESERVED",
+        sessionId,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(serverInstances.id, reservation.id),
+          eq(serverInstances.availabilityState, "OPEN"),
+          eq(serverInstances.lifecycleState, "RUNNING"),
+        ),
+      )
+      .returning({ id: serverInstances.id });
+    return claimed.length > 0 ? reservation : null;
+  }
 
-      const players = (await tx
-        .select({ player_id: sessionPlayers.playerId })
-        .from(sessionPlayers)
-        .where(
-          and(
-            eq(sessionPlayers.sessionId, session.id),
-            ne(sessionPlayers.state, "LEFT"),
-          ),
-        )) as unknown as { player_id: string }[];
-
+  private async startSessionTransfers(
+    tx: any,
+    group: GroupRow,
+    session: SessionCandidate,
+    reservation: Reservation,
+  ): Promise<void> {
+    await tx.update(gameSessions)
+      .set({
+        instanceId: reservation.id,
+        state: "TRANSFERRING",
+        transferStartedAt: sql`now()`,
+        waitingDeadline: sql`now() + (${group.waitingTimeoutMs} * interval '1 millisecond')`,
+        maximumWaitingDeadline: sql`now() + (${group.maximumWaitingTimeoutMs} * interval '1 millisecond')`,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(gameSessions.id, session.id),
+          inArray(gameSessions.state, ["FORMING", "WAITING_FOR_INSTANCE"]),
+        ),
+      );
+    await tx.update(queueEntries)
+      .set({ transferStartedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(queueEntries.sessionId, session.id),
+          eq(queueEntries.state, "SELECTED"),
+          sql`${queueEntries.transferStartedAt} IS NULL`,
+        ),
+      );
+    await tx.update(sessionPlayers)
+      .set({ state: "TRANSFERRING", transferringAt: sql`now()` })
+      .where(
+        and(
+          eq(sessionPlayers.sessionId, session.id),
+          eq(sessionPlayers.state, "SELECTED"),
+        ),
+      );
+    const players = await tx.select({ playerId: sessionPlayers.playerId })
+      .from(sessionPlayers)
+      .where(
+        and(
+          eq(sessionPlayers.sessionId, session.id),
+          ne(sessionPlayers.state, "LEFT"),
+        ),
+      );
+    if (players.length > 0) {
       await this.transfers.enqueue(
         tx,
         {
           instanceId: reservation.id,
           endpoint: reservation.endpoint,
-          players: players.map((player) => player.player_id),
+          players: players.map((player: { playerId: string }) => player.playerId),
         },
         session.id,
       );
-      return true;
-    });
+    }
   }
 
-  // Try to fill open pre-start sessions with newly queued parties.
-  private async backfill(group: GroupRow): Promise<void> {
-    const candidates = (await this.db
-      .select({ id: gameSessions.id })
-      .from(gameSessions)
+  private async beginTicketTransfer(
+    tx: any,
+    session: SessionCandidate,
+    party: QueueParty,
+  ): Promise<void> {
+    if (!session.instanceId || !session.endpoint) return;
+    await tx.update(queueEntries)
+      .set({ transferStartedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(eq(queueEntries.id, party.entryId));
+    await tx.update(sessionPlayers)
+      .set({ state: "TRANSFERRING", transferringAt: sql`now()` })
       .where(
         and(
-          eq(gameSessions.groupId, group.id),
-          inArray(gameSessions.state, ["TRANSFERRING", "WAITING"]),
-          sql`${gameSessions.waitingDeadline} > now()`,
+          eq(sessionPlayers.sessionId, session.id),
+          eq(sessionPlayers.partyId, party.partyId),
+          eq(sessionPlayers.state, "SELECTED"),
         ),
-      )
-      .orderBy(gameSessions.createdAt)) as unknown as { id: string }[];
-    // Oldest sessions receive backfill candidates first.
-    for (const candidate of candidates) {
-      await this.backfillSession(group, candidate.id);
-    }
-  }
-
-  // Extend one existing assignment without moving players already selected.
-  private async backfillSession(
-    group: GroupRow,
-    sessionId: string,
-  ): Promise<boolean> {
-    return this.db.transaction(async (tx: any) => {
-      // Drizzle ORM does not support "FOR UPDATE OF table" cleanly with joins in builder yet,
-      // so we use raw SQL for this precise lock to avoid locking server_instances unnecessarily.
-      const sessions = (await tx.execute(sql`
-        SELECT s.id, s.instance_id, i.endpoint
-        FROM game_sessions s
-        JOIN server_instances i ON i.id = s.instance_id
-        WHERE s.id = ${sessionId}
-          AND s.group_id = ${group.id}
-          AND s.state IN ('TRANSFERRING', 'WAITING')
-          AND s.waiting_deadline > now()
-          AND i.lifecycle_state = 'RUNNING'
-          AND i.endpoint IS NOT NULL
-        FOR UPDATE OF s SKIP LOCKED
-      `)) as unknown as {
-        id: string;
-        instance_id: string;
-        endpoint: string;
-      }[];
-      const session = sessions[0];
-      if (!session) return false;
-
-      const existing = (await tx
-        .select({
-          player_id: sessionPlayers.playerId,
-          party_id: sessionPlayers.partyId,
-          team_index: sessionPlayers.teamIndex,
-        })
-        .from(sessionPlayers)
-        .where(
-          and(
-            eq(sessionPlayers.sessionId, session.id),
-            ne(sessionPlayers.state, "LEFT"),
-          ),
-        )
-        .orderBy(sessionPlayers.selectedAt)) as unknown as {
-        player_id: string;
-        party_id: string;
-        team_index: number;
-      }[];
-
-      if (existing.length >= group.maximum_players) return false;
-      const initialTeams = this.toInitialTeams(existing, group.team_count);
-
-      const queue = (await tx.execute(sql`
-        WITH locked_entries AS (
-          SELECT q.id, q.party_id, q.joined_at
-          FROM queue_entries q
-          WHERE q.group_id = ${group.id} AND q.state = 'QUEUED'
-          ORDER BY q.joined_at
-          FOR UPDATE SKIP LOCKED
-        )
-        SELECT q.id AS entry_id, q.party_id, q.joined_at,
-               array_agg(qp.player_id ORDER BY qp.player_id)::text[] AS player_ids
-        FROM locked_entries q
-        JOIN queue_entry_players qp ON qp.queue_entry_id = q.id
-        GROUP BY q.id, q.party_id, q.joined_at
-        ORDER BY q.joined_at
-      `)) as unknown as QueueRow[];
-
-      const packed = packParties(
-        this.toParties(queue),
-        group.team_count,
-        group.team_size,
-        group.maximum_players,
-        initialTeams,
       );
-      if (packed.selected.length === 0) return false;
-      await this.persistSelection(
-        tx,
-        session.id,
-        packed.teams,
-        packed.selected,
-        true,
-      );
-
-      await tx
-        .update(gameSessions)
-        .set({
-          assignmentRevision: sql`${gameSessions.assignmentRevision} + 1`,
-          assignmentAcknowledgedAt: null,
-          updatedAt: sql`now()`,
-        })
-        .where(eq(gameSessions.id, session.id));
-
-      await this.transfers.enqueue(
-        tx,
-        {
-          instanceId: session.instance_id,
-          endpoint: session.endpoint,
-          players: packed.selected.flatMap((party) => [...party.playerIds]),
-        },
-        session.id,
-      );
-      return true;
-    });
-  }
-
-  // Move selected queue entries into their durable session team assignments.
-  private async persistSelection(
-    tx: any,
-    sessionId: string,
-    teams: readonly TeamAssignment[],
-    selected: readonly QueueParty[],
-    transferring: boolean,
-  ): Promise<void> {
-    const selectedIds = new Set(selected.map((party) => party.entryId));
-    // Persist team by team so each player receives the exact packing result.
-    for (const team of teams) {
-      for (const party of team.parties) {
-        if (!selectedIds.has(party.entryId)) continue;
-
-        await tx
-          .update(queueEntries)
-          .set({
-            state: "SELECTED",
-            updatedAt: sql`now()`,
-          })
-          .where(
-            and(
-              eq(queueEntries.id, party.entryId),
-              eq(queueEntries.state, "QUEUED"),
-            ),
-          );
-
-        for (const playerId of party.playerIds) {
-          await tx
-            .insert(sessionPlayers)
-            .values({
-              sessionId: sessionId,
-              playerId: playerId,
-              partyId: party.partyId,
-              teamIndex: team.teamIndex,
-              state: transferring ? "TRANSFERRING" : "SELECTED",
-              transferringAt: transferring ? sql`now()` : null,
-            })
-            .onConflictDoNothing({
-              target: [sessionPlayers.sessionId, sessionPlayers.playerId],
-            });
-        }
-      }
-    }
+    await this.transfers.enqueue(
+      tx,
+      {
+        instanceId: session.instanceId,
+        endpoint: session.endpoint,
+        players: party.playerIds,
+      },
+      session.id,
+    );
   }
 
   private toParties(rows: readonly QueueRow[]): QueueParty[] {
@@ -474,39 +631,5 @@ export class Matchmaker {
       joinedAt: new Date(row.joined_at),
       playerIds: row.player_ids,
     }));
-  }
-
-  // Reconstruct team occupancy before attempting a backfill pack.
-  private toInitialTeams(
-    players: readonly {
-      player_id: string;
-      party_id: string;
-      team_index: number;
-    }[],
-    teamCount: number,
-  ): TeamAssignment[] {
-    return Array.from({ length: teamCount }, (_, teamIndex) => {
-      const teamPlayers = players.filter(
-        (player) => player.team_index === teamIndex,
-      );
-      const byParty = new Map<string, string[]>();
-      // Regroup players by party because the packing algorithm treats parties atomically.
-      for (const player of teamPlayers) {
-        const party = byParty.get(player.party_id) ?? [];
-        party.push(player.player_id);
-        byParty.set(player.party_id, party);
-      }
-      const parties = [...byParty.entries()].map(([partyId, playerIds]) => ({
-        entryId: `existing:${partyId}`,
-        partyId,
-        playerIds,
-        joinedAt: new Date(0),
-      }));
-      return {
-        teamIndex,
-        parties,
-        playerIds: teamPlayers.map((player) => player.player_id),
-      };
-    });
   }
 }

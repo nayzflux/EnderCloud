@@ -3,11 +3,17 @@
   "groupId": "skywars-solo",
   "state": "WAITING",
   "revision": 2,
+  "expectedPlayerCount": 1,
+  "connectedPlayerCount": 1,
+  "acceptingTickets": true,
+  "lockEligible": false,
+  "feasibleProfiles": [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]],
+  "recommendedProfile": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
   "players": [
     {
       "playerId": "02a1c31e-4748-4106-932d-a780413d7b9a",
       "partyId": "party-1",
-      "teamIndex": 0,
+      "ticketId": "queue-ticket-1",
       "state": "CONNECTED"
     }
   ]

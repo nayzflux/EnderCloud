@@ -109,9 +109,11 @@ EnderCloudPaperApi cloud = Bukkit.getServicesManager()
     .load(EnderCloudPaperApi.class);
 ```
 
-Use it to enqueue an atomic party, leave a queue, read the current team assignment and report
-`GAME_STARTING`, `GAME_STARTED` or `GAME_FINISHED`. EnderCloud deliberately adds no player
-commands and no game-specific behavior.
+Use it to enqueue an atomic party, leave a queue, read the current anonymous team profiles and report
+`GAME_STARTING`, `GAME_STARTED`, `GAME_CANCELLED` or `GAME_FINISHED`. A cancellation immediately
+unregisters the minigame, durably transfers its connected players to available hubs and enforces the
+short `CANCELLED_DRAIN_TIMEOUT_MS` safety deadline. EnderCloud deliberately adds no player commands
+and no game-specific behavior.
 
 The Velocity plugin instance implements `EnderCloudVelocityApi`. Another Velocity plugin can
 retrieve the `endercloud` plugin container, obtain its instance, cast it to that interface and

@@ -39,18 +39,19 @@ const bus = new RedisEventBus(config.redisUrl, logger);
 await bus.connect();
 const executor = new LocalDockerExecutor(config, logger);
 const variants = new VariantSelector(db);
+const transfers = new TransferService(db, bus, config, logger);
 const instances = new InstanceController(
   db,
   executor,
   variants,
   bus,
+  transfers,
   config,
   logger,
 );
 const queues = new QueueService(db);
 const dashboard = new DashboardService(db);
 const capacity = new CapacityController(db, instances, logger);
-const transfers = new TransferService(db, bus, config, logger);
 const matchmaker = new Matchmaker(db, transfers, logger);
 const sessions = new SessionController(db, instances, transfers, config, logger);
 const reconciler = new Reconciler(db, executor, instances, logger);

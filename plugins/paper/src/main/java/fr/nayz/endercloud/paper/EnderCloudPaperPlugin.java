@@ -1,11 +1,5 @@
 package fr.nayz.endercloud.paper;
 
-import fr.endercloud.core.api.EnderCloudPaperApi;
-import fr.endercloud.core.http.EnderCloudClient;
-import fr.endercloud.core.model.PaperEvent;
-import fr.endercloud.core.model.QueueRequest;
-import fr.endercloud.core.model.QueueResult;
-import fr.endercloud.core.model.SessionAssignment;
 import org.bukkit.Bukkit;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -14,6 +8,13 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
+
+import fr.nayz.endercloud.core.api.EnderCloudPaperApi;
+import fr.nayz.endercloud.core.http.EnderCloudClient;
+import fr.nayz.endercloud.core.model.PaperEvent;
+import fr.nayz.endercloud.core.model.QueueRequest;
+import fr.nayz.endercloud.core.model.QueueResult;
+import fr.nayz.endercloud.core.model.SessionAssignment;
 
 import java.net.URI;
 import java.util.List;
@@ -122,6 +123,14 @@ public final class EnderCloudPaperPlugin extends JavaPlugin
     @Override
     public CompletableFuture<Void> reportGameStarted(String sessionId) {
         return orchestrator.publishEvent(instanceId, PaperEvent.gameStarted(sessionId));
+    }
+
+    @Override
+    public CompletableFuture<Void> reportGameCancelled(String sessionId, String reason) {
+        return orchestrator.publishEvent(
+                instanceId,
+                PaperEvent.gameCancelled(sessionId, reason)
+        );
     }
 
     @Override

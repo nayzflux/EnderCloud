@@ -181,6 +181,19 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
                 <KeyValue label="Waiting timeout">
                   {formatDuration(group.matchmaking.waitingTimeoutMs)}
                 </KeyValue>
+                <KeyValue label="Instance wait">
+                  {formatDuration(group.matchmaking.instanceWaitTimeoutMs)}
+                </KeyValue>
+                <KeyValue label="Maximum lobby">
+                  {formatDuration(group.matchmaking.maximumWaitingTimeoutMs)}
+                </KeyValue>
+                <KeyValue label="Candidate window">
+                  {group.matchmaking.candidateWindow} tickets
+                </KeyValue>
+                <KeyValue label="Partial start">
+                  min {group.matchmaking.minimumPlayersPerTeam}/team · spread{" "}
+                  {group.matchmaking.maximumTeamSpread}
+                </KeyValue>
               </KeyValueGrid>
             ) : group.routing ? (
               <KeyValueGrid>

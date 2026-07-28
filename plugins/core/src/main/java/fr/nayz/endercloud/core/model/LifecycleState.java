@@ -1,4 +1,4 @@
-package fr.endercloud.core.model;
+package fr.nayz.endercloud.core.model;
 
 public enum LifecycleState {
     CREATING,

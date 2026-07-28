@@ -49,6 +49,11 @@ export interface MatchmakingPolicy {
   readonly teamCount: number;
   readonly teamSize: number;
   readonly waitingTimeoutMs: number;
+  readonly candidateWindow: number;
+  readonly instanceWaitTimeoutMs: number;
+  readonly maximumWaitingTimeoutMs: number;
+  readonly minimumPlayersPerTeam: number;
+  readonly maximumTeamSpread: number;
 }
 
 export interface LifecyclePolicy {
@@ -93,12 +98,6 @@ export interface QueueParty {
   readonly joinedAt: Date;
 }
 
-export interface TeamAssignment {
-  readonly teamIndex: number;
-  readonly parties: readonly QueueParty[];
-  readonly playerIds: readonly string[];
-}
-
 export interface RedisEnvelope<T = unknown> {
   readonly schemaVersion: 1;
   readonly eventId: string;
@@ -126,4 +125,5 @@ export type PaperEvent =
   | { readonly type: "HEARTBEAT"; readonly playerIds: readonly string[] }
   | { readonly type: "GAME_STARTING"; readonly sessionId: string }
   | { readonly type: "GAME_STARTED"; readonly sessionId: string }
+  | { readonly type: "GAME_CANCELLED"; readonly sessionId: string; readonly reason?: string }
   | { readonly type: "GAME_FINISHED"; readonly sessionId: string; readonly results?: unknown };

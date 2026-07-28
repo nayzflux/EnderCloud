@@ -42,6 +42,8 @@ export class RedisEventBus {
     readonly instanceId: string;
     readonly endpoint: string;
     readonly players: readonly string[];
+    readonly sourceInstanceId?: string;
+    readonly reason?: "SESSION_CANCELLED";
     readonly commandId?: string;
   }): Promise<void> {
     await this.publish(TRANSFER_CHANNEL, "TRANSFER_PLAYERS", payload);

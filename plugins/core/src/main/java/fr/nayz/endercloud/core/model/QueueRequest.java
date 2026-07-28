@@ -1,4 +1,4 @@
-package fr.endercloud.core.model;
+package fr.nayz.endercloud.core.model;
 
 import java.util.List;
 import java.util.Objects;

@@ -1,4 +1,4 @@
-package fr.endercloud.core.json;
+package fr.nayz.endercloud.core.json;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;

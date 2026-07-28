@@ -27,7 +27,7 @@ const mockTransfers = {
   tick: mock(async () => {}),
 } as unknown as TransferService;
 
-let container: StartedPostgreSqlContainer;
+let container: StartedPostgreSqlContainer | undefined;
 let sql: ReturnType<typeof createDatabase>["sql"];
 let db: ReturnType<typeof createDatabase>["db"];
 let matchmaker: Matchmaker;
@@ -39,8 +39,10 @@ async function cleanDb() {
 
 describe("Mega Simulation End-to-End Matchmaking", () => {
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:15-alpine").start();
-    const uri = container.getConnectionUri();
+    const uri = process.env.TEST_DATABASE_URL ?? await (async () => {
+      container = await new PostgreSqlContainer("postgres:15-alpine").start();
+      return container.getConnectionUri();
+    })();
     
     await migrateDatabase(uri);
     
@@ -58,8 +60,8 @@ describe("Mega Simulation End-to-End Matchmaking", () => {
   });
 
   afterAll(async () => {
-    await sql.end();
-    await container.stop();
+    if (sql) await sql.end();
+    if (container) await container.stop();
   });
 
   test("Simulates a stress test with 50 players, backfill, disconnections, and autoscaling", async () => {
@@ -177,7 +179,9 @@ describe("Mega Simulation End-to-End Matchmaking", () => {
     const waitingSessions = sessionsStep1.filter((s: any) => s.state === "WAITING_FOR_INSTANCE");
     expect(waitingSessions).toHaveLength(2);
     
-    expect(mockTransfers.enqueue).toHaveBeenCalledTimes(1); // Only for the warm instance
+    // The session reserves at the minimum (8), then the two remaining tickets are
+    // backfilled with their own durable transfer command.
+    expect(mockTransfers.enqueue).toHaveBeenCalledTimes(3);
     (mockTransfers.enqueue as any).mockClear();
     
     console.log("-> Start 4. Disconnection");

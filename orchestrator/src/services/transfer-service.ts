@@ -11,6 +11,8 @@ export interface TransferPayload {
   readonly instanceId: string;
   readonly endpoint: string;
   readonly players: readonly string[];
+  readonly sourceInstanceId?: string;
+  readonly reason?: "SESSION_CANCELLED";
   readonly commandId?: string;
 }
 
@@ -20,6 +22,8 @@ interface TransferCommandRow {
     instanceId: string;
     endpoint: string;
     players: string[];
+    sourceInstanceId?: string;
+    reason?: "SESSION_CANCELLED";
   };
 }
 
@@ -50,6 +54,8 @@ export class TransferService {
         instanceId: payload.instanceId,
         endpoint: payload.endpoint,
         players: payload.players,
+        ...(payload.sourceInstanceId ? { sourceInstanceId: payload.sourceInstanceId } : {}),
+        ...(payload.reason ? { reason: payload.reason } : {}),
       },
       expiresAt: sql`now() + (${this.config.transferTimeoutMs} * interval '1 millisecond')`
     });

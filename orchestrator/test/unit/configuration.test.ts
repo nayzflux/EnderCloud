@@ -36,6 +36,55 @@ describe("configuration", () => {
       "group.yml",
     );
     expect(group.matchmaking?.maximumPlayers).toBe(12);
+    expect(group.matchmaking).toMatchObject({
+      candidateWindow: 20,
+      instanceWaitTimeoutMs: 45_000,
+      maximumWaitingTimeoutMs: 135_000,
+      minimumPlayersPerTeam: 0,
+      maximumTeamSpread: 1,
+    });
+  });
+
+  test("parses partial-start balancing policy", () => {
+    const group = parseGroup(
+      {
+        id: "bedwars-4v4v4v4",
+        type: "minigame",
+        matchmaking: {
+          minimum_players: 8,
+          maximum_players: 16,
+          team_count: 4,
+          team_size: 4,
+          waiting_timeout: "60s",
+          instance_wait_timeout: "30s",
+          maximum_waiting_timeout: "4m",
+          candidate_window: 32,
+          partial_start: {
+            minimum_players_per_team: 1,
+            maximum_team_spread: 2,
+          },
+        },
+        capacity: {
+          minimum_instances: 0,
+          maximum_instances: 20,
+          minimum_warm_instances: 0,
+          maximum_warm_instances: 4,
+        },
+        lifecycle: {
+          startup_timeout: "90s",
+          draining_timeout: "15m",
+          shutdown_timeout: "20s",
+        },
+      },
+      "bedwars.yml",
+    );
+    expect(group.matchmaking).toMatchObject({
+      candidateWindow: 32,
+      instanceWaitTimeoutMs: 30_000,
+      maximumWaitingTimeoutMs: 240_000,
+      minimumPlayersPerTeam: 1,
+      maximumTeamSpread: 2,
+    });
   });
 
   test("rejects latest images", () => {

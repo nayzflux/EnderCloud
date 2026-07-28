@@ -9,6 +9,7 @@ import {
   sessionPlayers,
   instancePlayers,
   events,
+  transferCommands,
 } from "../db/schema.ts";
 import { eq, and, sql, desc, inArray, isNotNull } from "drizzle-orm";
 import type postgres from "postgres";
@@ -22,6 +23,12 @@ import type { Executor } from "../executor/executor.ts";
 import type { Logger } from "../logger.ts";
 import { nanoid } from "../id.ts";
 import type { VariantSelector } from "./variant-selector.ts";
+import {
+  computeFeasibleProfiles,
+  isSessionLockEligible,
+  selectRecommendedProfile,
+} from "../domain/matchmaking.ts";
+import type { TransferService } from "./transfer-service.ts";
 
 interface CreateRow {
   id: string;
@@ -44,6 +51,7 @@ export class InstanceController {
     private readonly executor: Executor,
     private readonly variants: VariantSelector,
     private readonly bus: RedisEventBus,
+    private readonly transfers: TransferService,
     private readonly config: AppConfig,
     private readonly logger: Logger,
   ) {}
@@ -201,6 +209,9 @@ export class InstanceController {
       case "GAME_STARTED":
         await this.setSessionState(instanceId, event.sessionId, "RUNNING");
         break;
+      case "GAME_CANCELLED":
+        await this.cancelSession(instanceId, event.sessionId, event.reason);
+        break;
       case "GAME_FINISHED":
         await this.finishSession(instanceId, event.sessionId, event.results);
         break;
@@ -254,13 +265,18 @@ export class InstanceController {
   }
 
   // Remove an eligible instance from routing and start its drain deadline.
-  public async beginDrain(instanceId: string): Promise<boolean> {
+  public async beginDrain(
+    instanceId: string,
+    timeoutMs?: number,
+  ): Promise<boolean> {
     const rows = await this.db
       .update(serverInstances)
       .set({
         lifecycleState: "DRAINING",
         drainingAt: sql`now()`,
-        drainDeadline: sql`now() + (${serverGroups.drainingTimeoutMs} * interval '1 millisecond')`,
+        drainDeadline: timeoutMs === undefined
+          ? sql`now() + (${serverGroups.drainingTimeoutMs} * interval '1 millisecond')`
+          : sql`now() + (${timeoutMs} * interval '1 millisecond')`,
         updatedAt: sql`now()`,
       })
       .from(serverGroups)
@@ -283,9 +299,111 @@ export class InstanceController {
     if (rows.length > 0) {
       // Remove routing before waiting for players to leave, preventing new joins during drain.
       await this.bus.publishRegistry("SERVER_UNREGISTERED", { instanceId });
+      await this.evacuateCancelledMinigame(instanceId);
       return true;
     }
     return false;
+  }
+
+  // Actively move every player out of a cancelled minigame, retrying safely until it is empty.
+  public async evacuateCancelledMinigame(sourceInstanceId: string): Promise<number> {
+    const moved = await this.db.transaction(async (tx: any) => {
+      // A global evacuation lock prevents simultaneous cancellations from overbooking hub capacity.
+      await tx.execute(sql`
+        SELECT pg_advisory_xact_lock(hashtext('endercloud:cancelled-minigame-drain'))
+      `);
+      const source = await tx.select({ id: serverInstances.id })
+        .from(serverInstances)
+        .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
+        .innerJoin(gameSessions, eq(gameSessions.id, serverInstances.sessionId))
+        .where(and(
+          eq(serverInstances.id, sourceInstanceId),
+          eq(serverInstances.lifecycleState, "DRAINING"),
+          eq(serverGroups.type, "minigame"),
+          eq(gameSessions.state, "CANCELLED"),
+        ))
+        .limit(1);
+      if (!source[0]) return 0;
+
+      const players = await tx.select({ player_id: instancePlayers.playerId })
+        .from(instancePlayers)
+        .where(and(
+          eq(instancePlayers.instanceId, sourceInstanceId),
+          sql`NOT EXISTS (
+            SELECT 1
+            FROM transfer_commands pending,
+                 jsonb_array_elements_text(pending.payload->'players') AS expected(player_id)
+            WHERE pending.state = 'PENDING'
+              AND pending.payload->>'sourceInstanceId' = ${sourceInstanceId}
+              AND expected.player_id = ${instancePlayers.playerId}::text
+          )`,
+          sql`NOT EXISTS (
+            SELECT 1
+            FROM instance_players destination_player
+            JOIN server_instances destination
+              ON destination.id = destination_player.instance_id
+            JOIN server_groups destination_group
+              ON destination_group.id = destination.group_id
+            WHERE destination_player.player_id = ${instancePlayers.playerId}
+              AND destination_group.type = 'hub'
+              AND destination.lifecycle_state = 'RUNNING'
+          )`,
+        ))
+        .orderBy(instancePlayers.connectedAt);
+      if (players.length === 0) return 0;
+
+      const targets = await tx.select({
+        id: serverInstances.id,
+        endpoint: serverInstances.endpoint,
+        available: sql<number>`GREATEST(
+          0,
+          ${serverGroups.maximumPlayersPerInstance} - ${serverInstances.playerCount} -
+          COALESCE((
+            SELECT sum(jsonb_array_length(pending.payload->'players'))::int
+            FROM transfer_commands pending
+            WHERE pending.instance_id = ${serverInstances.id}
+              AND pending.state = 'PENDING'
+          ), 0)
+        )::int`,
+      })
+        .from(serverInstances)
+        .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
+        .where(and(
+          eq(serverGroups.type, "hub"),
+          eq(serverGroups.enabled, true),
+          eq(serverInstances.lifecycleState, "RUNNING"),
+          eq(serverInstances.availabilityState, "OPEN"),
+          isNotNull(serverInstances.endpoint),
+        ))
+        .orderBy(serverInstances.playerCount, serverInstances.runningAt);
+
+      let offset = 0;
+      for (const target of targets) {
+        const capacity = Number(target.available);
+        if (capacity <= 0 || !target.endpoint) continue;
+        const selected = players
+          .slice(offset, offset + capacity)
+          .map((player: { player_id: string }) => player.player_id);
+        if (selected.length === 0) break;
+        await this.transfers.enqueue(tx, {
+          instanceId: target.id,
+          endpoint: target.endpoint,
+          players: selected,
+          sourceInstanceId,
+          reason: "SESSION_CANCELLED",
+        });
+        offset += selected.length;
+        if (offset >= players.length) break;
+      }
+      return offset;
+    });
+    if (moved > 0) {
+      this.logger.info("Cancelled minigame evacuation scheduled", {
+        instanceId: sourceInstanceId,
+        playerCount: moved,
+      });
+    }
+    return moved;
   }
 
   // Converge a terminal instance to STOPPED and clean its runtime resources.
@@ -381,9 +499,18 @@ export class InstanceController {
         group_id: gameSessions.groupId,
         state: gameSessions.state,
         assignment_revision: gameSessions.assignmentRevision,
+        waiting_deadline: gameSessions.waitingDeadline,
+        maximum_waiting_deadline: gameSessions.maximumWaitingDeadline,
+        minimum_players: serverGroups.minimumPlayers,
+        maximum_players: serverGroups.maximumPlayers,
+        team_count: serverGroups.teamCount,
+        team_size: serverGroups.teamSize,
+        minimum_players_per_team: serverGroups.minimumPlayersPerTeam,
+        maximum_team_spread: serverGroups.maximumTeamSpread,
       })
       .from(gameSessions)
       .innerJoin(serverInstances, eq(serverInstances.sessionId, gameSessions.id))
+      .innerJoin(serverGroups, eq(serverGroups.id, gameSessions.groupId))
       .where(eq(serverInstances.id, instanceId));
     const session = sessions[0];
     if (!session) return null;
@@ -391,21 +518,58 @@ export class InstanceController {
       .select({
         player_id: sessionPlayers.playerId,
         party_id: sessionPlayers.partyId,
-        team_index: sessionPlayers.teamIndex,
+        queue_entry_id: sessionPlayers.queueEntryId,
         state: sessionPlayers.state,
       })
       .from(sessionPlayers)
       .where(eq(sessionPlayers.sessionId, session.session_id))
-      .orderBy(sessionPlayers.teamIndex, sessionPlayers.selectedAt);
+      .orderBy(sessionPlayers.selectedAt, sessionPlayers.playerId);
+    const connectedTicketSizes = new Map<string, number>();
+    for (const player of players) {
+      if (player.state === "CONNECTED") {
+        connectedTicketSizes.set(
+          player.queue_entry_id ?? `legacy:${player.party_id}`,
+          (connectedTicketSizes.get(
+            player.queue_entry_id ?? `legacy:${player.party_id}`,
+          ) ?? 0) + 1,
+        );
+      }
+    }
+    const feasibleProfiles = computeFeasibleProfiles(
+      [...connectedTicketSizes.values()],
+      session.team_count ?? 1,
+      session.team_size ?? 1,
+    );
+    const recommendedProfile = selectRecommendedProfile(feasibleProfiles);
+    const expectedPlayerCount = players.filter((player) => player.state !== "LEFT").length;
+    const connectedPlayerCount = players.filter((player) => player.state === "CONNECTED").length;
+    const lockEligible = this.evaluateLockEligibility(
+      connectedPlayerCount,
+      recommendedProfile,
+      session,
+    );
     return {
       sessionId: session.session_id,
       groupId: session.group_id,
       state: session.state,
       revision: session.assignment_revision,
+      expectedPlayerCount,
+      connectedPlayerCount,
+      acceptingTickets: ["FORMING", "WAITING_FOR_INSTANCE", "TRANSFERRING", "WAITING"]
+        .includes(session.state) &&
+        expectedPlayerCount < (session.maximum_players ?? Number.MAX_SAFE_INTEGER) &&
+        (
+          !session.maximum_waiting_deadline ||
+          session.maximum_waiting_deadline.getTime() > Date.now() ||
+          lockEligible
+        ),
+      lockEligible,
+      feasibleProfiles,
+      recommendedProfile,
       players: players.map((player) => ({
         playerId: player.player_id,
         partyId: player.party_id,
-        teamIndex: player.team_index,
+        ticketId: player.queue_entry_id ?? `legacy:${player.party_id}`,
         state: player.state,
       })),
     };
@@ -461,7 +625,7 @@ export class InstanceController {
         })
         .where(eq(serverInstances.id, instanceId));
       if (effectiveSessionId) {
-        await tx
+        const changed = await tx
           .update(sessionPlayers)
           .set({
             state: "CONNECTED",
@@ -477,7 +641,9 @@ export class InstanceController {
               inArray(gameSessions.state, ["TRANSFERRING", "WAITING"]),
               inArray(sessionPlayers.state, ["SELECTED", "TRANSFERRING", "LEFT"])
             )
-          );
+          )
+          .returning({ playerId: sessionPlayers.playerId });
+        if (changed.length > 0) await this.bumpAssignmentRevision(tx, effectiveSessionId);
       }
     });
   }
@@ -511,7 +677,7 @@ export class InstanceController {
         })
         .where(eq(serverInstances.id, instanceId));
       if (effectiveSessionId) {
-        await tx
+        const changed = await tx
           .update(sessionPlayers)
           .set({
             state: "LEFT",
@@ -523,7 +689,9 @@ export class InstanceController {
               eq(sessionPlayers.playerId, playerId),
               sql`${sessionPlayers.state} <> 'LEFT'`
             )
-          );
+          )
+          .returning({ playerId: sessionPlayers.playerId });
+        if (changed.length > 0) await this.bumpAssignmentRevision(tx, effectiveSessionId);
       }
     });
   }
@@ -532,6 +700,7 @@ export class InstanceController {
   private async heartbeat(instanceId: string, playerIds: readonly string[]): Promise<void> {
     await this.db.transaction(async (tx) => {
       const effectiveSessionId = await this.validateEventSession(tx, instanceId);
+      let assignmentChanged = false;
       // Refresh every reported player before removing stale rows, making the heartbeat authoritative.
       for (const playerId of playerIds) {
         await tx
@@ -545,7 +714,7 @@ export class InstanceController {
             set: { lastSeenAt: sql`now()` },
           });
         if (effectiveSessionId) {
-          await tx
+          const changed = await tx
             .update(sessionPlayers)
             .set({
               state: "CONNECTED",
@@ -561,7 +730,9 @@ export class InstanceController {
                 inArray(gameSessions.state, ["TRANSFERRING", "WAITING"]),
                 inArray(sessionPlayers.state, ["SELECTED", "TRANSFERRING", "LEFT"])
               )
-            );
+            )
+            .returning({ playerId: sessionPlayers.playerId });
+          assignmentChanged ||= changed.length > 0;
         }
       }
       await tx
@@ -574,7 +745,7 @@ export class InstanceController {
         );
       if (effectiveSessionId) {
         // Mirror heartbeat removals into session state so transfer completion can account for departures.
-        await tx
+        const departed = await tx
           .update(sessionPlayers)
           .set({
             state: "LEFT",
@@ -591,7 +762,9 @@ export class InstanceController {
                 AND ip.player_id = ${sessionPlayers.playerId}
             )`
             )
-          );
+          )
+          .returning({ playerId: sessionPlayers.playerId });
+        assignmentChanged ||= departed.length > 0;
       }
       await tx
         .update(serverInstances)
@@ -600,6 +773,9 @@ export class InstanceController {
           updatedAt: sql`now()`,
         })
         .where(eq(serverInstances.id, instanceId));
+      if (effectiveSessionId && assignmentChanged) {
+        await this.bumpAssignmentRevision(tx, effectiveSessionId);
+      }
     });
   }
 
@@ -609,29 +785,91 @@ export class InstanceController {
     sessionId: string,
     state: "STARTING" | "RUNNING",
   ): Promise<void> {
-    const rows = await this.db
-      .update(gameSessions)
-      .set({
-        state: state,
-        startedAt: sql`CASE WHEN ${state} = 'RUNNING' THEN COALESCE(${gameSessions.startedAt}, now()) ELSE ${gameSessions.startedAt} END`,
-        updatedAt: sql`now()`,
+    const transitioned = await this.db.transaction(async (tx) => {
+      const current = await tx.select({
+        state: gameSessions.state,
+        waiting_deadline: gameSessions.waitingDeadline,
+        minimum_players: serverGroups.minimumPlayers,
+        maximum_players: serverGroups.maximumPlayers,
+        team_count: serverGroups.teamCount,
+        team_size: serverGroups.teamSize,
+        minimum_players_per_team: serverGroups.minimumPlayersPerTeam,
+        maximum_team_spread: serverGroups.maximumTeamSpread,
       })
-      .from(serverInstances)
-      .where(
-        and(
-          eq(gameSessions.id, sessionId),
-          eq(serverInstances.id, instanceId),
+        .from(gameSessions)
+        .innerJoin(serverInstances, and(
+          eq(serverInstances.id, gameSessions.instanceId),
           eq(serverInstances.sessionId, gameSessions.id),
-          eq(gameSessions.instanceId, serverInstances.id),
-          sql`(
-          (${state} = 'STARTING' AND ${gameSessions.state} IN ('TRANSFERRING', 'WAITING'))
-          OR (${state} = 'RUNNING' AND ${gameSessions.state} = 'STARTING')
-        )`
-        )
-      )
-      .returning({ id: gameSessions.id });
-    // The conditional UPDATE is the concurrency-safe transition path.
-    if (rows.length > 0) return;
+        ))
+        .innerJoin(serverGroups, eq(serverGroups.id, gameSessions.groupId))
+        .where(and(eq(gameSessions.id, sessionId), eq(serverInstances.id, instanceId)))
+        .for("update", { of: gameSessions });
+      const session = current[0];
+      if (!session) return false;
+      if (session.state === state) return true;
+
+      if (state === "STARTING") {
+        if (!["TRANSFERRING", "WAITING"].includes(session.state)) return false;
+        const connected = await tx.select({
+          partyId: sessionPlayers.partyId,
+          ticketId: sessionPlayers.queueEntryId,
+        })
+          .from(sessionPlayers)
+          .where(and(
+            eq(sessionPlayers.sessionId, sessionId),
+            eq(sessionPlayers.state, "CONNECTED"),
+          ));
+        const sizes = new Map<string, number>();
+        for (const player of connected) {
+          const ticketId = player.ticketId ?? `legacy:${player.partyId}`;
+          sizes.set(ticketId, (sizes.get(ticketId) ?? 0) + 1);
+        }
+        const profiles = computeFeasibleProfiles(
+          [...sizes.values()],
+          session.team_count ?? 1,
+          session.team_size ?? 1,
+        );
+        if (!this.evaluateLockEligibility(
+          connected.length,
+          selectRecommendedProfile(profiles),
+          session,
+        )) {
+          throw new Error(`Session ${sessionId} is not lock eligible`);
+        }
+        await tx.update(gameSessions)
+          .set({ state: "STARTING", updatedAt: sql`now()` })
+          .where(eq(gameSessions.id, sessionId));
+        const removed = await tx.update(sessionPlayers)
+          .set({ state: "LEFT", leftAt: sql`now()` })
+          .where(and(
+            eq(sessionPlayers.sessionId, sessionId),
+            inArray(sessionPlayers.state, ["SELECTED", "TRANSFERRING"]),
+          ))
+          .returning({ playerId: sessionPlayers.playerId });
+        if (removed.length > 0) {
+          await this.bumpAssignmentRevision(tx, sessionId);
+        }
+        await tx.update(transferCommands)
+          .set({ state: "CANCELLED", completedAt: sql`now()` })
+          .where(and(
+            eq(transferCommands.sessionId, sessionId),
+            eq(transferCommands.state, "PENDING"),
+          ));
+        return true;
+      }
+      if (state === "RUNNING" && session.state === "STARTING") {
+        await tx.update(gameSessions)
+          .set({
+            state: "RUNNING",
+            startedAt: sql`COALESCE(${gameSessions.startedAt}, now())`,
+            updatedAt: sql`now()`,
+          })
+          .where(eq(gameSessions.id, sessionId));
+        return true;
+      }
+      return false;
+    });
+    if (transitioned) return;
     const current = await this.db
       .select({ state: gameSessions.state })
       .from(gameSessions)
@@ -651,6 +889,113 @@ export class InstanceController {
     // Duplicate plugin events are idempotent, while skipped or foreign transitions are rejected.
     if (current[0]?.state === state) return;
     throw this.invalidSessionEvent(instanceId, sessionId);
+  }
+
+  private evaluateLockEligibility(
+    connectedPlayerCount: number,
+    recommendedProfile: readonly number[] | null,
+    session: {
+      waiting_deadline: Date | null;
+      minimum_players: number | null;
+      maximum_players: number | null;
+      minimum_players_per_team: number | null;
+      maximum_team_spread: number | null;
+      team_size: number | null;
+    },
+  ): boolean {
+    return isSessionLockEligible(
+      connectedPlayerCount,
+      session.minimum_players ?? 1,
+      session.maximum_players ?? Number.MAX_SAFE_INTEGER,
+      Boolean(
+        session.waiting_deadline &&
+        session.waiting_deadline.getTime() <= Date.now()
+      ),
+      recommendedProfile,
+      session.minimum_players_per_team ?? 0,
+      session.maximum_team_spread ?? session.team_size ?? 1,
+    );
+  }
+
+  private async bumpAssignmentRevision(tx: any, sessionId: string): Promise<void> {
+    await tx.update(gameSessions)
+      .set({
+        assignmentRevision: sql`${gameSessions.assignmentRevision} + 1`,
+        assignmentAcknowledgedAt: null,
+        updatedAt: sql`now()`,
+      })
+      .where(eq(gameSessions.id, sessionId));
+  }
+
+  // Accept an authoritative cancellation from the minigame and begin rapid evacuation.
+  private async cancelSession(
+    instanceId: string,
+    sessionId: string,
+    reason?: string,
+  ): Promise<void> {
+    const transitioned = await this.db.transaction(async (tx: any) => {
+      const rows = await tx.update(gameSessions)
+        .set({
+          state: "CANCELLED",
+          finishedAt: sql`COALESCE(${gameSessions.finishedAt}, now())`,
+          updatedAt: sql`now()`,
+        })
+        .from(serverInstances)
+        .where(and(
+          eq(gameSessions.id, sessionId),
+          eq(gameSessions.instanceId, instanceId),
+          eq(serverInstances.id, instanceId),
+          eq(serverInstances.sessionId, sessionId),
+          inArray(gameSessions.state, [
+            "TRANSFERRING",
+            "WAITING",
+            "STARTING",
+            "RUNNING",
+          ]),
+        ))
+        .returning({ id: gameSessions.id });
+      if (rows.length === 0) return false;
+      await tx.update(transferCommands)
+        .set({ state: "CANCELLED", completedAt: sql`now()` })
+        .where(and(
+          eq(transferCommands.sessionId, sessionId),
+          eq(transferCommands.state, "PENDING"),
+        ));
+      const removed = await tx.update(sessionPlayers)
+        .set({ state: "LEFT", leftAt: sql`now()` })
+        .where(and(
+          eq(sessionPlayers.sessionId, sessionId),
+          inArray(sessionPlayers.state, ["SELECTED", "TRANSFERRING"]),
+        ))
+        .returning({ playerId: sessionPlayers.playerId });
+      if (removed.length > 0) await this.bumpAssignmentRevision(tx, sessionId);
+      return true;
+    });
+    if (!transitioned) {
+      const current = await this.db.select({ state: gameSessions.state })
+        .from(gameSessions)
+        .innerJoin(serverInstances, and(
+          eq(serverInstances.id, gameSessions.instanceId),
+          eq(serverInstances.sessionId, gameSessions.id),
+        ))
+        .where(and(
+          eq(gameSessions.id, sessionId),
+          eq(serverInstances.id, instanceId),
+        ));
+      if (current[0]?.state !== "CANCELLED") {
+        throw this.invalidSessionEvent(instanceId, sessionId);
+      }
+    } else {
+      await this.recordEvent("session", sessionId, "GAME_CANCELLED", {
+        reason: reason ?? null,
+      });
+    }
+    const draining = await this.beginDrain(
+      instanceId,
+      this.config.cancelledDrainTimeoutMs,
+    );
+    // A duplicate event may arrive after the lifecycle already entered DRAINING.
+    if (!draining) await this.evacuateCancelledMinigame(instanceId);
   }
 
   // Persist game completion results and drain the consumed instance.

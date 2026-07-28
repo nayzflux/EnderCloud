@@ -1,4 +1,4 @@
-package fr.endercloud.core.model;
+package fr.nayz.endercloud.core.model;
 
 import com.fasterxml.jackson.databind.JsonNode;
 

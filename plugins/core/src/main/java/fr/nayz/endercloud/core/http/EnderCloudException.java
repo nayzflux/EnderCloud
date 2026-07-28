@@ -1,4 +1,4 @@
-package fr.endercloud.core.http;
+package fr.nayz.endercloud.core.http;
 
 public final class EnderCloudException extends RuntimeException {
     private final int statusCode;
