@@ -1,4 +1,6 @@
-import type { SqlClient } from "../db/client.ts";
+import type { Database } from "../db/client.ts";
+import { sql, eq, and } from "drizzle-orm";
+import { serverVariants, serverInstances } from "../db/schema.ts";
 import type { VariantRuntimeSpec } from "../domain/types.ts";
 import { selectVariant } from "../domain/variant-selection.ts";
 
@@ -12,22 +14,32 @@ interface VariantRow {
 }
 
 export class VariantSelector {
-  public constructor(private readonly sql: SqlClient) {}
+  public constructor(private readonly db: Database) {}
 
   // Select the best enabled variant using current weighted representation.
   public async select(groupId: string): Promise<VariantRow> {
-    const rows = await this.sql<VariantRow[]>`
-      SELECT
-        v.id, v.group_id, v.template_path, v.selection_weight, v.runtime_spec,
-        count(i.id) FILTER (
-          WHERE i.lifecycle_state IN ('CREATING', 'STARTING', 'RUNNING')
-            AND i.availability_state = 'OPEN'
-        )::int AS warm_count
-      FROM server_variants v
-      LEFT JOIN server_instances i ON i.variant_id = v.id
-      WHERE v.group_id = ${groupId} AND v.enabled = true
-      GROUP BY v.id
-    `;
+    const rows = await this.db
+      .select({
+        id: serverVariants.id,
+        group_id: serverVariants.groupId,
+        template_path: serverVariants.templatePath,
+        selection_weight: serverVariants.selectionWeight,
+        runtime_spec: serverVariants.runtimeSpec,
+        warm_count: sql<number>`count(${serverInstances.id}) FILTER (
+          WHERE ${serverInstances.lifecycleState} IN ('CREATING', 'STARTING', 'RUNNING')
+            AND ${serverInstances.availabilityState} = 'OPEN'
+        )::int`.mapWith(Number),
+      })
+      .from(serverVariants)
+      .leftJoin(serverInstances, eq(serverInstances.variantId, serverVariants.id))
+      .where(
+        and(
+          eq(serverVariants.groupId, groupId),
+          eq(serverVariants.enabled, true),
+        ),
+      )
+      .groupBy(serverVariants.id) as unknown as VariantRow[];
+
     const selected = selectVariant(
       rows.map((row) => ({
         id: row.id,

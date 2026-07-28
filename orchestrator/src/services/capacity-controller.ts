@@ -1,4 +1,6 @@
-import type { SqlClient } from "../db/client.ts";
+import type { Database } from "../db/client.ts";
+import { serverGroups, serverInstances } from "../db/schema.ts";
+import { and, eq, notInArray, asc, sql } from "drizzle-orm";
 import { decideCapacity } from "../domain/capacity.ts";
 import type { AvailabilityState, LifecycleState } from "../domain/types.ts";
 import type { Logger } from "../logger.ts";
@@ -23,7 +25,7 @@ export class CapacityController {
   private running = false;
 
   public constructor(
-    private readonly sql: SqlClient,
+    private readonly db: Database,
     private readonly instances: InstanceController,
     private readonly logger: Logger,
   ) {}
@@ -33,29 +35,33 @@ export class CapacityController {
     if (this.running) return;
     this.running = true;
     try {
-      const groups = await this.sql<GroupRow[]>`
-        SELECT id, enabled, minimum_instances, maximum_instances,
-               minimum_warm_instances, maximum_warm_instances
-        FROM server_groups
-      `;
+      const groups = await this.db.select().from(serverGroups);
       // Reconcile groups independently so one broken configuration does not block every pool.
       for (const group of groups) {
         try {
-          const current = await this.sql<InstanceRow[]>`
-            SELECT id, lifecycle_state, availability_state
-            FROM server_instances
-            WHERE group_id = ${group.id}
-              AND lifecycle_state NOT IN ('STOPPED', 'FAILED')
-            -- Old running instances come first so scale-down removes stable, predictable candidates.
-            -- Pending instances sort last because they are not eligible for draining.
-            ORDER BY running_at NULLS LAST, created_at
-          `;
+          const current = await this.db
+            .select({
+              id: serverInstances.id,
+              lifecycle_state: serverInstances.lifecycleState,
+              availability_state: serverInstances.availabilityState,
+            })
+            .from(serverInstances)
+            .where(
+              and(
+                eq(serverInstances.groupId, group.id),
+                notInArray(serverInstances.lifecycleState, ['STOPPED', 'FAILED'])
+              )
+            )
+            .orderBy(
+              sql`${serverInstances.runningAt} ASC NULLS LAST`,
+              asc(serverInstances.createdAt)
+            );
           const decision = decideCapacity(
             {
-              minimumInstances: group.minimum_instances,
-              maximumInstances: group.maximum_instances,
-              minimumWarmInstances: group.minimum_warm_instances,
-              maximumWarmInstances: group.maximum_warm_instances,
+              minimumInstances: group.minimumInstances,
+              maximumInstances: group.maximumInstances,
+              minimumWarmInstances: group.minimumWarmInstances,
+              maximumWarmInstances: group.maximumWarmInstances,
             },
             current.map((instance) => ({
               lifecycle: instance.lifecycle_state,

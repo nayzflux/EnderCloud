@@ -1,5 +1,19 @@
 import type postgres from "postgres";
-import type { SqlClient } from "../db/client.ts";
+import type { Database } from "../db/client.ts";
+import { sql, eq, ne, and, isNotNull, inArray, desc, asc, or, notInArray } from "drizzle-orm";
+import {
+  serverGroups,
+  serverVariants,
+  serverInstances,
+  gameSessions,
+  queueEntries,
+  queueEntryPlayers,
+  instancePlayers,
+  commands,
+  events,
+  sessionPlayers,
+  transferCommands,
+} from "../db/schema.ts";
 import type {
   DashboardClusterSnapshot,
   DashboardGroup,
@@ -175,7 +189,6 @@ export function assembleClusterSnapshot(
   const sessionsByGroup = new Map<string, DashboardSession[]>();
   const queuesByGroup = new Map<string, DashboardQueueSummary>();
 
-  // Pre-index child rows by group to avoid repeatedly scanning whole result sets.
   for (const variant of rows.variants) {
     const groupVariants = variantsByGroup.get(variant.group_id) ?? [];
     groupVariants.push(toVariant(variant));
@@ -199,10 +212,8 @@ export function assembleClusterSnapshot(
     });
   }
 
-  // Build each group from its indexed children and derive operational counters in one pass.
   const groups: DashboardGroup[] = rows.groups.map((group) => {
     const instances = instancesByGroup.get(group.id) ?? [];
-    // STOPPED and FAILED rows remain useful historically but do not consume active capacity.
     const activeInstances = instances.filter(
       (instance) =>
         instance.lifecycleState !== "STOPPED" && instance.lifecycleState !== "FAILED",
@@ -270,7 +281,6 @@ export function assembleClusterSnapshot(
     };
   });
 
-  // Flatten only after group construction so global summary values reuse group-derived data.
   const allInstances = groups.flatMap((group) => group.instances);
   const allSessions = groups.flatMap((group) => group.sessions);
   return {
@@ -320,66 +330,62 @@ export function assembleClusterSnapshot(
   };
 }
 
-// Clamp dashboard pagination limits to a safe range.
 export function normalizeDashboardLimit(value: number | undefined): number {
   if (!Number.isFinite(value)) return 50;
   return Math.max(1, Math.min(200, Math.trunc(value ?? 50)));
 }
 
 export class DashboardService {
-  public constructor(private readonly sql: SqlClient) {}
+  public constructor(private readonly db: Database) {}
 
-  // Return the complete cluster snapshot consumed by the dashboard.
   public async getCluster(): Promise<DashboardClusterSnapshot> {
-    const rows = await this.sql.begin(
-      "read only isolation level repeatable read",
-      async (transaction) => this.readClusterRows(transaction),
-    );
+    const rows = await this.db.transaction(async (tx) => {
+      await tx.execute(sql`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`);
+      return this.readClusterRows(tx);
+    });
     return assembleClusterSnapshot(rows);
   }
 
-  // Return a bounded queue view with parties and player membership.
   public async getQueue(
     groupId: string,
     requestedLimit?: number,
   ): Promise<DashboardQueueDetail | null> {
     const limit = normalizeDashboardLimit(requestedLimit);
-    // Repeatable-read keeps totals and paginated entries from describing different queue moments.
-    return this.sql.begin("read only isolation level repeatable read", async (transaction) => {
-      const groups = await transaction<{ id: string }[]>`
-        SELECT id FROM server_groups WHERE id = ${groupId}
-      `;
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`);
+      
+      const groups = await tx.select({ id: serverGroups.id })
+        .from(serverGroups)
+        .where(eq(serverGroups.id, groupId));
       if (!groups[0]) return null;
-      const totals = await transaction<{ party_count: number; player_count: number }[]>`
-        SELECT
-          count(DISTINCT q.id)::int AS party_count,
-          count(qp.player_id)::int AS player_count
-        FROM queue_entries q
-        LEFT JOIN queue_entry_players qp ON qp.queue_entry_id = q.id
-        WHERE q.group_id = ${groupId} AND q.state = 'QUEUED'
-      `;
-      const entries = await transaction<
-        {
-          id: string;
-          party_id: string;
-          joined_at: DatabaseTimestamp;
-          players: string[];
-        }[]
-      >`
-        SELECT
-          q.id, q.party_id, q.joined_at,
-          coalesce(
-            array_agg(qp.player_id::text ORDER BY qp.player_id)
-              FILTER (WHERE qp.player_id IS NOT NULL),
-            ARRAY[]::text[]
-          ) AS players
-        FROM queue_entries q
-        LEFT JOIN queue_entry_players qp ON qp.queue_entry_id = q.id
-        WHERE q.group_id = ${groupId} AND q.state = 'QUEUED'
-        GROUP BY q.id
-        ORDER BY q.joined_at, q.id
-        LIMIT ${limit}
-      `;
+
+      const totals = await tx.select({
+        party_count: sql<number>`count(DISTINCT ${queueEntries.id})::int`,
+        player_count: sql<number>`count(${queueEntryPlayers.playerId})::int`
+      })
+      .from(queueEntries)
+      .leftJoin(queueEntryPlayers, eq(queueEntryPlayers.queueEntryId, queueEntries.id))
+      .where(and(
+        eq(queueEntries.groupId, groupId),
+        eq(queueEntries.state, 'QUEUED')
+      ));
+
+      const entries = await tx.select({
+        id: queueEntries.id,
+        party_id: queueEntries.partyId,
+        joined_at: queueEntries.joinedAt,
+        players: sql<string[]>`coalesce(array_agg(${queueEntryPlayers.playerId}::text ORDER BY ${queueEntryPlayers.playerId}) FILTER (WHERE ${queueEntryPlayers.playerId} IS NOT NULL), ARRAY[]::text[])`
+      })
+      .from(queueEntries)
+      .leftJoin(queueEntryPlayers, eq(queueEntryPlayers.queueEntryId, queueEntries.id))
+      .where(and(
+        eq(queueEntries.groupId, groupId),
+        eq(queueEntries.state, 'QUEUED')
+      ))
+      .groupBy(queueEntries.id)
+      .orderBy(asc(queueEntries.joinedAt), asc(queueEntries.id))
+      .limit(limit);
+
       const totalParties = totals[0]?.party_count ?? 0;
       return {
         schemaVersion: 1,
@@ -398,88 +404,89 @@ export class DashboardService {
     });
   }
 
-  // Load one instance together with its runtime, session, and event details.
   public async getInstance(instanceId: string): Promise<DashboardInstanceDetail | null> {
-    return this.sql.begin("read only isolation level repeatable read", async (transaction) => {
-      const instances = await transaction<
-        (InstanceRow & {
-          group_type: GroupType;
-          container_id: string | null;
-          runtime_path: string | null;
-          stopped_at: DatabaseTimestamp | null;
-          checksum: string;
-          variant_enabled: boolean;
-          revision: number;
-          selection_weight: number;
-          runtime_spec: VariantRuntimeSpec;
-        })[]
-      >`
-        SELECT
-          i.id, i.group_id, i.variant_id, i.session_id, i.lifecycle_state,
-          i.availability_state, i.endpoint, i.player_count,
-          coalesce(g.maximum_players_per_instance, g.maximum_players, 0)::int
-            AS maximum_players,
-          i.container_id, i.runtime_path, i.created_at, i.starting_at, i.running_at,
-          i.draining_at, i.drain_deadline, i.stopped_at, i.updated_at,
-          g.type AS group_type, v.enabled AS variant_enabled, v.revision,
-          v.selection_weight, v.runtime_spec, v.checksum
-        FROM server_instances i
-        JOIN server_groups g ON g.id = i.group_id
-        JOIN server_variants v ON v.id = i.variant_id
-        WHERE i.id = ${instanceId}
-      `;
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`);
+      
+      const instances = await tx.select({
+        id: serverInstances.id,
+        group_id: serverInstances.groupId,
+        variant_id: serverInstances.variantId,
+        session_id: serverInstances.sessionId,
+        lifecycle_state: serverInstances.lifecycleState,
+        availability_state: serverInstances.availabilityState,
+        endpoint: serverInstances.endpoint,
+        player_count: serverInstances.playerCount,
+        maximum_players: sql<number>`coalesce(${serverGroups.maximumPlayersPerInstance}, ${serverGroups.maximumPlayers}, 0)::int`,
+        created_at: serverInstances.createdAt,
+        starting_at: serverInstances.startingAt,
+        running_at: serverInstances.runningAt,
+        draining_at: serverInstances.drainingAt,
+        drain_deadline: serverInstances.drainDeadline,
+        updated_at: serverInstances.updatedAt,
+        
+        group_type: serverGroups.type,
+        container_id: serverInstances.containerId,
+        runtime_path: serverInstances.runtimePath,
+        stopped_at: serverInstances.stoppedAt,
+        checksum: serverVariants.checksum,
+        variant_enabled: serverVariants.enabled,
+        revision: serverVariants.revision,
+        selection_weight: serverVariants.selectionWeight,
+        runtime_spec: serverVariants.runtimeSpec,
+      })
+      .from(serverInstances)
+      .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
+      .innerJoin(serverVariants, eq(serverVariants.id, serverInstances.variantId))
+      .where(eq(serverInstances.id, instanceId));
+      
       const instance = instances[0];
       if (!instance) return null;
-      // Detail collections are independent and can be fetched concurrently inside one snapshot.
-      const [players, commands, events, sessions] = await Promise.all([
-        transaction<
-          {
-            player_id: string;
-            connected_at: DatabaseTimestamp;
-            last_seen_at: DatabaseTimestamp;
-          }[]
-        >`
-          SELECT player_id, connected_at, last_seen_at
-          FROM instance_players
-          WHERE instance_id = ${instanceId}
-          ORDER BY connected_at
-        `,
-        transaction<
-          {
-            id: string;
-            operation: string;
-            state: string;
-            attempts: number;
-            payload: unknown;
-            last_error: string | null;
-            created_at: DatabaseTimestamp;
-            completed_at: DatabaseTimestamp | null;
-          }[]
-        >`
-          SELECT id, operation, state, attempts, payload, last_error, created_at, completed_at
-          FROM commands
-          WHERE instance_id = ${instanceId}
-          ORDER BY created_at DESC
-          LIMIT 20
-        `,
-        transaction<
-          {
-            id: string;
-            type: string;
-            payload: unknown;
-            created_at: DatabaseTimestamp;
-          }[]
-        >`
-          SELECT id, type, payload, created_at
-          FROM events
-          WHERE aggregate_type = 'instance' AND aggregate_id = ${instanceId}
-          ORDER BY created_at DESC
-          LIMIT 20
-        `,
+
+      const [players, cmdRows, eventRows, sessions] = await Promise.all([
+        tx.select({
+          player_id: instancePlayers.playerId,
+          connected_at: instancePlayers.connectedAt,
+          last_seen_at: instancePlayers.lastSeenAt,
+        })
+        .from(instancePlayers)
+        .where(eq(instancePlayers.instanceId, instanceId))
+        .orderBy(asc(instancePlayers.connectedAt)),
+        
+        tx.select({
+          id: commands.id,
+          operation: commands.operation,
+          state: commands.state,
+          attempts: commands.attempts,
+          payload: commands.payload,
+          last_error: commands.lastError,
+          created_at: commands.createdAt,
+          completed_at: commands.completedAt,
+        })
+        .from(commands)
+        .where(eq(commands.instanceId, instanceId))
+        .orderBy(desc(commands.createdAt))
+        .limit(20),
+        
+        tx.select({
+          id: events.id,
+          type: events.type,
+          payload: events.payload,
+          created_at: events.createdAt,
+        })
+        .from(events)
+        .where(and(
+          eq(events.aggregateType, 'instance'),
+          eq(events.aggregateId, instanceId)
+        ))
+        .orderBy(desc(events.createdAt))
+        .limit(20),
+        
         instance.session_id
-          ? this.readSessionRows(transaction, instance.session_id)
+          ? this.readSessionRows(tx, instance.session_id)
           : Promise.resolve([]),
       ]);
+
       return {
         schemaVersion: 1,
         generatedAt: new Date().toISOString(),
@@ -496,7 +503,7 @@ export class DashboardService {
           enabled: instance.variant_enabled,
           revision: instance.revision,
           weight: instance.selection_weight,
-          runtime: instance.runtime_spec,
+          runtime: instance.runtime_spec as VariantRuntimeSpec,
           checksum: instance.checksum,
         },
         players: players.map((player) => ({
@@ -505,7 +512,7 @@ export class DashboardService {
           lastSeenAt: requiredIso(player.last_seen_at),
         })),
         session: sessions[0] ? toSession(sessions[0]) : null,
-        commands: commands.map((command) => ({
+        commands: cmdRows.map((command) => ({
           id: command.id,
           operation: command.operation,
           state: command.state,
@@ -515,7 +522,7 @@ export class DashboardService {
           createdAt: requiredIso(command.created_at),
           completedAt: iso(command.completed_at),
         })),
-        events: events.map((event) => ({
+        events: eventRows.map((event) => ({
           id: event.id,
           type: event.type,
           payload: event.payload,
@@ -525,54 +532,45 @@ export class DashboardService {
     });
   }
 
-  // Load one session together with its assignment and transfer history.
   public async getSession(sessionId: string): Promise<DashboardSessionDetail | null> {
-    return this.sql.begin("read only isolation level repeatable read", async (transaction) => {
-      const sessions = await this.readSessionRows(transaction, sessionId);
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`);
+      const sessions = await this.readSessionRows(tx, sessionId);
       const session = sessions[0];
       if (!session) return null;
-      // Assignment and transfer history share the same repeatable-read snapshot.
+
       const [players, transfers] = await Promise.all([
-        transaction<
-          {
-            player_id: string;
-            party_id: string;
-            team_index: number;
-            state: SessionPlayerState;
-            selected_at: DatabaseTimestamp;
-            transferring_at: DatabaseTimestamp | null;
-            connected_at: DatabaseTimestamp | null;
-            left_at: DatabaseTimestamp | null;
-          }[]
-        >`
-          SELECT player_id, party_id, team_index, state, selected_at,
-                 transferring_at, connected_at, left_at
-          FROM session_players
-          WHERE session_id = ${sessionId}
-          ORDER BY team_index, selected_at, player_id
-        `,
-        transaction<
-          {
-            id: string;
-            instance_id: string;
-            state: string;
-            attempts: number;
-            next_attempt_at: DatabaseTimestamp;
-            expires_at: DatabaseTimestamp;
-            created_at: DatabaseTimestamp;
-            completed_at: DatabaseTimestamp | null;
-          }[]
-        >`
-          SELECT id, instance_id, state, attempts, next_attempt_at,
-                 expires_at, created_at, completed_at
-          FROM transfer_commands
-          WHERE session_id = ${sessionId}
-          ORDER BY created_at DESC
-          LIMIT 20
-        `,
+        tx.select({
+          player_id: sessionPlayers.playerId,
+          party_id: sessionPlayers.partyId,
+          team_index: sessionPlayers.teamIndex,
+          state: sessionPlayers.state,
+          selected_at: sessionPlayers.selectedAt,
+          transferring_at: sessionPlayers.transferringAt,
+          connected_at: sessionPlayers.connectedAt,
+          left_at: sessionPlayers.leftAt,
+        })
+        .from(sessionPlayers)
+        .where(eq(sessionPlayers.sessionId, sessionId))
+        .orderBy(asc(sessionPlayers.teamIndex), asc(sessionPlayers.selectedAt), asc(sessionPlayers.playerId)),
+        
+        tx.select({
+          id: transferCommands.id,
+          instance_id: transferCommands.instanceId,
+          state: transferCommands.state,
+          attempts: transferCommands.attempts,
+          next_attempt_at: transferCommands.nextAttemptAt,
+          expires_at: transferCommands.expiresAt,
+          created_at: transferCommands.createdAt,
+          completed_at: transferCommands.completedAt,
+        })
+        .from(transferCommands)
+        .where(eq(transferCommands.sessionId, sessionId))
+        .orderBy(desc(transferCommands.createdAt))
+        .limit(20),
       ]);
+
       const byTeam = new Map<number, (DashboardSessionDetail["teams"][number]["players"][number])[]>();
-      // Regroup flat SQL rows into the team-oriented API shape expected by the dashboard.
       for (const player of players) {
         const team = byTeam.get(player.team_index) ?? [];
         team.push({
@@ -590,7 +588,6 @@ export class DashboardService {
         schemaVersion: 1,
         generatedAt: new Date().toISOString(),
         session: { ...toSession(session), groupId: session.group_id },
-        // Sort numeric team indexes because Map insertion order follows query rows, not the API contract.
         teams: [...byTeam.entries()]
           .sort(([left], [right]) => left - right)
           .map(([teamIndex, teamPlayers]) => ({ teamIndex, players: teamPlayers })),
@@ -608,86 +605,141 @@ export class DashboardService {
     });
   }
 
-  // Fetch the row sets needed to build a consistent cluster snapshot.
   private async readClusterRows(
-    transaction: postgres.TransactionSql,
+    tx: Extract<Parameters<Parameters<Database["transaction"]>[0]>[0], Function> | any,
   ): Promise<DashboardRows> {
-    const groups = await transaction<GroupRow[]>`
-      SELECT id, type, enabled, minimum_players, maximum_players, team_count, team_size,
-             waiting_timeout_ms, minimum_instances, maximum_instances,
-             minimum_warm_instances, maximum_warm_instances,
-             maximum_players_per_instance, target_players_per_instance,
-             startup_timeout_ms, draining_timeout_ms, shutdown_timeout_ms
-      FROM server_groups
-      ORDER BY type, id
-    `;
-    const variants = await transaction<VariantRow[]>`
-      SELECT id, group_id, enabled, revision, selection_weight, runtime_spec
-      FROM server_variants
-      ORDER BY group_id, id
-    `;
-    const instances = await transaction<InstanceRow[]>`
-      SELECT
-        i.id, i.group_id, i.variant_id, i.session_id, i.lifecycle_state,
-        i.availability_state, i.endpoint, i.player_count,
-        coalesce(g.maximum_players_per_instance, g.maximum_players, 0)::int
-          AS maximum_players,
-        i.created_at, i.starting_at, i.running_at, i.draining_at,
-        i.drain_deadline, i.updated_at
-      FROM server_instances i
-      JOIN server_groups g ON g.id = i.group_id
-      WHERE i.lifecycle_state <> 'STOPPED'
-      ORDER BY i.group_id, i.created_at, i.id
-    `;
-    const sessions = await transaction<SessionRow[]>`
-      SELECT
-        s.id, s.group_id, s.instance_id, s.state, s.assignment_revision,
-        s.assignment_acknowledged_at, s.waiting_deadline, s.retry_count,
-        count(sp.player_id) FILTER (WHERE sp.state <> 'LEFT')::int AS active_player_count,
-        count(sp.player_id) FILTER (WHERE sp.state = 'CONNECTED')::int AS connected_player_count,
-        count(DISTINCT sp.team_index) FILTER (WHERE sp.state <> 'LEFT')::int AS team_count,
-        s.created_at, s.started_at, s.finished_at, s.updated_at
-      FROM game_sessions s
-      LEFT JOIN session_players sp ON sp.session_id = s.id
-      WHERE s.state NOT IN ('FINISHED', 'CANCELLED', 'FAILED')
-         OR EXISTS (
+    const groups = await tx.select({
+      id: serverGroups.id,
+      type: serverGroups.type,
+      enabled: serverGroups.enabled,
+      minimum_players: serverGroups.minimumPlayers,
+      maximum_players: serverGroups.maximumPlayers,
+      team_count: serverGroups.teamCount,
+      team_size: serverGroups.teamSize,
+      waiting_timeout_ms: serverGroups.waitingTimeoutMs,
+      minimum_instances: serverGroups.minimumInstances,
+      maximum_instances: serverGroups.maximumInstances,
+      minimum_warm_instances: serverGroups.minimumWarmInstances,
+      maximum_warm_instances: serverGroups.maximumWarmInstances,
+      maximum_players_per_instance: serverGroups.maximumPlayersPerInstance,
+      target_players_per_instance: serverGroups.targetPlayersPerInstance,
+      startup_timeout_ms: serverGroups.startupTimeoutMs,
+      draining_timeout_ms: serverGroups.drainingTimeoutMs,
+      shutdown_timeout_ms: serverGroups.shutdownTimeoutMs,
+    })
+    .from(serverGroups)
+    .orderBy(asc(serverGroups.type), asc(serverGroups.id));
+
+    const variants = await tx.select({
+      id: serverVariants.id,
+      group_id: serverVariants.groupId,
+      enabled: serverVariants.enabled,
+      revision: serverVariants.revision,
+      selection_weight: serverVariants.selectionWeight,
+      runtime_spec: serverVariants.runtimeSpec,
+    })
+    .from(serverVariants)
+    .orderBy(asc(serverVariants.groupId), asc(serverVariants.id));
+
+    const instances = await tx.select({
+      id: serverInstances.id,
+      group_id: serverInstances.groupId,
+      variant_id: serverInstances.variantId,
+      session_id: serverInstances.sessionId,
+      lifecycle_state: serverInstances.lifecycleState,
+      availability_state: serverInstances.availabilityState,
+      endpoint: serverInstances.endpoint,
+      player_count: serverInstances.playerCount,
+      maximum_players: sql<number>`coalesce(${serverGroups.maximumPlayersPerInstance}, ${serverGroups.maximumPlayers}, 0)::int`,
+      created_at: serverInstances.createdAt,
+      starting_at: serverInstances.startingAt,
+      running_at: serverInstances.runningAt,
+      draining_at: serverInstances.drainingAt,
+      drain_deadline: serverInstances.drainDeadline,
+      updated_at: serverInstances.updatedAt,
+    })
+    .from(serverInstances)
+    .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
+    .where(ne(serverInstances.lifecycleState, 'STOPPED'))
+    .orderBy(asc(serverInstances.groupId), asc(serverInstances.createdAt), asc(serverInstances.id));
+
+    const sessions = await tx.select({
+      id: gameSessions.id,
+      group_id: gameSessions.groupId,
+      instance_id: gameSessions.instanceId,
+      state: gameSessions.state,
+      assignment_revision: gameSessions.assignmentRevision,
+      assignment_acknowledged_at: gameSessions.assignmentAcknowledgedAt,
+      waiting_deadline: gameSessions.waitingDeadline,
+      retry_count: gameSessions.retryCount,
+      active_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} <> 'LEFT')::int`,
+      connected_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} = 'CONNECTED')::int`,
+      team_count: sql<number>`count(DISTINCT ${sessionPlayers.teamIndex}) FILTER (WHERE ${sessionPlayers.state} <> 'LEFT')::int`,
+      created_at: gameSessions.createdAt,
+      started_at: gameSessions.startedAt,
+      finished_at: gameSessions.finishedAt,
+      updated_at: gameSessions.updatedAt,
+    })
+    .from(gameSessions)
+    .leftJoin(sessionPlayers, eq(sessionPlayers.sessionId, gameSessions.id))
+    .where(
+      or(
+        notInArray(gameSessions.state, ['FINISHED', 'CANCELLED', 'FAILED']),
+        sql`EXISTS (
            SELECT 1 FROM server_instances i
-           WHERE i.session_id = s.id AND i.lifecycle_state <> 'STOPPED'
-         )
-      GROUP BY s.id
-      ORDER BY s.group_id, s.created_at, s.id
-    `;
-    const queues = await transaction<QueueSummaryRow[]>`
-      SELECT
-        q.group_id,
-        count(DISTINCT q.id)::int AS party_count,
-        count(qp.player_id)::int AS player_count,
-        min(q.joined_at) AS oldest_joined_at
-      FROM queue_entries q
-      LEFT JOIN queue_entry_players qp ON qp.queue_entry_id = q.id
-      WHERE q.state = 'QUEUED'
-      GROUP BY q.group_id
-    `;
-    return { groups, variants, instances, sessions, queues };
+           WHERE i.session_id = ${gameSessions.id} AND i.lifecycle_state <> 'STOPPED'
+         )`
+      )
+    )
+    .groupBy(gameSessions.id)
+    .orderBy(asc(gameSessions.groupId), asc(gameSessions.createdAt), asc(gameSessions.id));
+
+    const queues = await tx.select({
+      group_id: queueEntries.groupId,
+      party_count: sql<number>`count(DISTINCT ${queueEntries.id})::int`,
+      player_count: sql<number>`count(${queueEntryPlayers.playerId})::int`,
+      oldest_joined_at: sql<DatabaseTimestamp | null>`min(${queueEntries.joinedAt})`,
+    })
+    .from(queueEntries)
+    .leftJoin(queueEntryPlayers, eq(queueEntryPlayers.queueEntryId, queueEntries.id))
+    .where(eq(queueEntries.state, 'QUEUED'))
+    .groupBy(queueEntries.groupId);
+
+    return { 
+      groups: groups as GroupRow[], 
+      variants: variants as unknown as VariantRow[], 
+      instances: instances as InstanceRow[], 
+      sessions: sessions as SessionRow[], 
+      queues: queues as QueueSummaryRow[] 
+    };
   }
 
-  // Fetch session summaries shared by cluster and detail endpoints.
   private async readSessionRows(
-    transaction: postgres.TransactionSql,
+    tx: Extract<Parameters<Parameters<Database["transaction"]>[0]>[0], Function> | any,
     sessionId: string,
   ): Promise<SessionRow[]> {
-    return transaction<SessionRow[]>`
-      SELECT
-        s.id, s.group_id, s.instance_id, s.state, s.assignment_revision,
-        s.assignment_acknowledged_at, s.waiting_deadline, s.retry_count,
-        count(sp.player_id) FILTER (WHERE sp.state <> 'LEFT')::int AS active_player_count,
-        count(sp.player_id) FILTER (WHERE sp.state = 'CONNECTED')::int AS connected_player_count,
-        count(DISTINCT sp.team_index) FILTER (WHERE sp.state <> 'LEFT')::int AS team_count,
-        s.created_at, s.started_at, s.finished_at, s.updated_at
-      FROM game_sessions s
-      LEFT JOIN session_players sp ON sp.session_id = s.id
-      WHERE s.id = ${sessionId}
-      GROUP BY s.id
-    `;
+    const sessions = await tx.select({
+      id: gameSessions.id,
+      group_id: gameSessions.groupId,
+      instance_id: gameSessions.instanceId,
+      state: gameSessions.state,
+      assignment_revision: gameSessions.assignmentRevision,
+      assignment_acknowledged_at: gameSessions.assignmentAcknowledgedAt,
+      waiting_deadline: gameSessions.waitingDeadline,
+      retry_count: gameSessions.retryCount,
+      active_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} <> 'LEFT')::int`,
+      connected_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} = 'CONNECTED')::int`,
+      team_count: sql<number>`count(DISTINCT ${sessionPlayers.teamIndex}) FILTER (WHERE ${sessionPlayers.state} <> 'LEFT')::int`,
+      created_at: gameSessions.createdAt,
+      started_at: gameSessions.startedAt,
+      finished_at: gameSessions.finishedAt,
+      updated_at: gameSessions.updatedAt,
+    })
+    .from(gameSessions)
+    .leftJoin(sessionPlayers, eq(sessionPlayers.sessionId, gameSessions.id))
+    .where(eq(gameSessions.id, sessionId))
+    .groupBy(gameSessions.id);
+
+    return sessions as SessionRow[];
   }
 }

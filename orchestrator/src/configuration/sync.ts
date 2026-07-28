@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { parse } from "yaml";
-import type { SqlClient } from "../db/client.ts";
-import { jsonParameter } from "../db/json.ts";
+import { sql } from "drizzle-orm";
+import type { Database } from "../db/client.ts";
+import { serverGroups, serverVariants } from "../db/schema.ts";
 import type {
   ServerGroupConfig,
   ServerVariantConfig,
@@ -276,76 +277,85 @@ export async function loadConfiguration(groupsRoot: string, templatesRoot: strin
 
 // Upsert the filesystem configuration into the database as one atomic snapshot.
 export async function synchronizeConfiguration(
-  sql: SqlClient,
+  db: Database,
   groupsRoot: string,
   templatesRoot: string,
   logger: Logger,
 ): Promise<void> {
   const configuration = await loadConfiguration(groupsRoot, templatesRoot);
   // Groups and variants are committed together so readers never observe a partial config refresh.
-  await sql.begin(async (transaction) => {
+  await db.transaction(async (tx) => {
     // Upsert preserves runtime rows that reference stable group identifiers.
     for (const group of configuration.groups) {
       const matchmaking = group.matchmaking;
       const routing = group.routing;
-      await transaction`
-        INSERT INTO server_groups (
-          id, type, enabled, minimum_players, maximum_players, team_count, team_size,
-          waiting_timeout_ms, minimum_instances, maximum_instances,
-          minimum_warm_instances, maximum_warm_instances,
-          maximum_players_per_instance, target_players_per_instance,
-          startup_timeout_ms, draining_timeout_ms, shutdown_timeout_ms, updated_at
-        ) VALUES (
-          ${group.id}, ${group.type}, ${group.enabled},
-          ${matchmaking?.minimumPlayers ?? null}, ${matchmaking?.maximumPlayers ?? null},
-          ${matchmaking?.teamCount ?? null}, ${matchmaking?.teamSize ?? null},
-          ${matchmaking?.waitingTimeoutMs ?? null},
-          ${group.capacity.minimumInstances}, ${group.capacity.maximumInstances},
-          ${group.capacity.minimumWarmInstances}, ${group.capacity.maximumWarmInstances},
-          ${routing?.maximumPlayersPerInstance ?? null},
-          ${routing?.targetPlayersPerInstance ?? null},
-          ${group.lifecycle.startupTimeoutMs}, ${group.lifecycle.drainingTimeoutMs},
-          ${group.lifecycle.shutdownTimeoutMs}, now()
-        )
-        ON CONFLICT (id) DO UPDATE SET
-          type = EXCLUDED.type, enabled = EXCLUDED.enabled,
-          minimum_players = EXCLUDED.minimum_players,
-          maximum_players = EXCLUDED.maximum_players,
-          team_count = EXCLUDED.team_count, team_size = EXCLUDED.team_size,
-          waiting_timeout_ms = EXCLUDED.waiting_timeout_ms,
-          minimum_instances = EXCLUDED.minimum_instances,
-          maximum_instances = EXCLUDED.maximum_instances,
-          minimum_warm_instances = EXCLUDED.minimum_warm_instances,
-          maximum_warm_instances = EXCLUDED.maximum_warm_instances,
-          maximum_players_per_instance = EXCLUDED.maximum_players_per_instance,
-          target_players_per_instance = EXCLUDED.target_players_per_instance,
-          startup_timeout_ms = EXCLUDED.startup_timeout_ms,
-          draining_timeout_ms = EXCLUDED.draining_timeout_ms,
-          shutdown_timeout_ms = EXCLUDED.shutdown_timeout_ms,
-          updated_at = now()
-      `;
+      await tx.insert(serverGroups).values({
+        id: group.id,
+        type: group.type,
+        enabled: group.enabled,
+        minimumPlayers: matchmaking?.minimumPlayers ?? null,
+        maximumPlayers: matchmaking?.maximumPlayers ?? null,
+        teamCount: matchmaking?.teamCount ?? null,
+        teamSize: matchmaking?.teamSize ?? null,
+        waitingTimeoutMs: matchmaking?.waitingTimeoutMs ?? null,
+        minimumInstances: group.capacity.minimumInstances,
+        maximumInstances: group.capacity.maximumInstances,
+        minimumWarmInstances: group.capacity.minimumWarmInstances,
+        maximumWarmInstances: group.capacity.maximumWarmInstances,
+        maximumPlayersPerInstance: routing?.maximumPlayersPerInstance ?? null,
+        targetPlayersPerInstance: routing?.targetPlayersPerInstance ?? null,
+        startupTimeoutMs: group.lifecycle.startupTimeoutMs,
+        drainingTimeoutMs: group.lifecycle.drainingTimeoutMs,
+        shutdownTimeoutMs: group.lifecycle.shutdownTimeoutMs,
+        updatedAt: sql`now()`,
+      }).onConflictDoUpdate({
+        target: serverGroups.id,
+        set: {
+          type: group.type,
+          enabled: group.enabled,
+          minimumPlayers: matchmaking?.minimumPlayers ?? null,
+          maximumPlayers: matchmaking?.maximumPlayers ?? null,
+          teamCount: matchmaking?.teamCount ?? null,
+          teamSize: matchmaking?.teamSize ?? null,
+          waitingTimeoutMs: matchmaking?.waitingTimeoutMs ?? null,
+          minimumInstances: group.capacity.minimumInstances,
+          maximumInstances: group.capacity.maximumInstances,
+          minimumWarmInstances: group.capacity.minimumWarmInstances,
+          maximumWarmInstances: group.capacity.maximumWarmInstances,
+          maximumPlayersPerInstance: routing?.maximumPlayersPerInstance ?? null,
+          targetPlayersPerInstance: routing?.targetPlayersPerInstance ?? null,
+          startupTimeoutMs: group.lifecycle.startupTimeoutMs,
+          drainingTimeoutMs: group.lifecycle.drainingTimeoutMs,
+          shutdownTimeoutMs: group.lifecycle.shutdownTimeoutMs,
+          updatedAt: sql`now()`,
+        }
+      });
     }
     // Variant metadata changes in place; existing instances keep their selected variant id.
     for (const variant of configuration.variants) {
-      await transaction`
-        INSERT INTO server_variants (
-          id, group_id, template_path, enabled, revision, selection_weight,
-          checksum, runtime_spec, updated_at
-        ) VALUES (
-          ${variant.id}, ${variant.group}, ${variant.templatePath}, ${variant.enabled},
-          ${variant.revision}, ${variant.weight}, ${variant.checksum},
-          ${jsonParameter(variant.runtime)}::jsonb, now()
-        )
-        ON CONFLICT (id) DO UPDATE SET
-          group_id = EXCLUDED.group_id,
-          template_path = EXCLUDED.template_path,
-          enabled = EXCLUDED.enabled,
-          revision = EXCLUDED.revision,
-          selection_weight = EXCLUDED.selection_weight,
-          checksum = EXCLUDED.checksum,
-          runtime_spec = EXCLUDED.runtime_spec,
-          updated_at = now()
-      `;
+      await tx.insert(serverVariants).values({
+        id: variant.id,
+        groupId: variant.group,
+        templatePath: variant.templatePath,
+        enabled: variant.enabled,
+        revision: variant.revision,
+        selectionWeight: variant.weight,
+        checksum: variant.checksum,
+        runtimeSpec: variant.runtime,
+        updatedAt: sql`now()`,
+      }).onConflictDoUpdate({
+        target: serverVariants.id,
+        set: {
+          groupId: variant.group,
+          templatePath: variant.templatePath,
+          enabled: variant.enabled,
+          revision: variant.revision,
+          selectionWeight: variant.weight,
+          checksum: variant.checksum,
+          runtimeSpec: variant.runtime,
+          updatedAt: sql`now()`,
+        }
+      });
     }
   });
   logger.info("Configuration synchronized", {

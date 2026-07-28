@@ -28,9 +28,9 @@ await mkdir(config.templatesRoot, { recursive: true });
 await mkdir(config.runtimeRoot, { recursive: true });
 await migrateDatabase(config.databaseUrl);
 
-const { sql } = createDatabase(config.databaseUrl);
+const { sql, db } = createDatabase(config.databaseUrl);
 await synchronizeConfiguration(
-  sql,
+  db,
   config.groupsRoot,
   config.templatesRoot,
   logger,
@@ -38,22 +38,22 @@ await synchronizeConfiguration(
 const bus = new RedisEventBus(config.redisUrl, logger);
 await bus.connect();
 const executor = new LocalDockerExecutor(config, logger);
-const variants = new VariantSelector(sql);
+const variants = new VariantSelector(db);
 const instances = new InstanceController(
-  sql,
+  db,
   executor,
   variants,
   bus,
   config,
   logger,
 );
-const queues = new QueueService(sql);
-const dashboard = new DashboardService(sql);
-const capacity = new CapacityController(sql, instances, logger);
-const transfers = new TransferService(sql, bus, config, logger);
-const matchmaker = new Matchmaker(sql, transfers, logger);
-const sessions = new SessionController(sql, instances, transfers, config, logger);
-const reconciler = new Reconciler(sql, executor, instances, logger);
+const queues = new QueueService(db);
+const dashboard = new DashboardService(db);
+const capacity = new CapacityController(db, instances, logger);
+const transfers = new TransferService(db, bus, config, logger);
+const matchmaker = new Matchmaker(db, transfers, logger);
+const sessions = new SessionController(db, instances, transfers, config, logger);
+const reconciler = new Reconciler(db, executor, instances, logger);
 
 // Converge database and runtime state once before readiness probes can succeed.
 await reconciler.tick();

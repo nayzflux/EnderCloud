@@ -1,5 +1,6 @@
-import type { SqlClient } from "../db/client.ts";
-import { jsonParameter } from "../db/json.ts";
+import type { Database } from "../db/client.ts";
+import { sql, eq, and, ne } from "drizzle-orm";
+import { serverInstances, serverGroups, events } from "../db/schema.ts";
 import type { LifecycleState } from "../domain/types.ts";
 import type { Executor } from "../executor/executor.ts";
 import type { Logger } from "../logger.ts";
@@ -16,7 +17,7 @@ export class Reconciler {
   private running = false;
 
   public constructor(
-    private readonly sql: SqlClient,
+    private readonly db: Database,
     private readonly executor: Executor,
     private readonly instances: InstanceController,
     private readonly logger: Logger,
@@ -29,19 +30,19 @@ export class Reconciler {
     try {
       // Read desired and actual state concurrently; neither query depends on the other.
       const [databaseInstances, runtimeInstances] = await Promise.all([
-        this.sql<InstanceRow[]>`
-          SELECT
-            i.id,
-            i.lifecycle_state,
-            (
-              i.lifecycle_state = 'STARTING'
-              AND COALESCE(i.starting_at, i.updated_at) +
-                (g.startup_timeout_ms * interval '1 millisecond') <= now()
-            ) AS startup_expired
-          FROM server_instances i
-          JOIN server_groups g ON g.id = i.group_id
-          WHERE i.lifecycle_state NOT IN ('STOPPED')
-        `,
+        this.db
+          .select({
+            id: serverInstances.id,
+            lifecycle_state: serverInstances.lifecycleState,
+            startup_expired: sql<boolean>`(
+              ${serverInstances.lifecycleState} = 'STARTING'
+              AND COALESCE(${serverInstances.startingAt}, ${serverInstances.updatedAt}) +
+                (${serverGroups.startupTimeoutMs} * interval '1 millisecond') <= now()
+            )`.as("startup_expired"),
+          })
+          .from(serverInstances)
+          .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
+          .where(ne(serverInstances.lifecycleState, "STOPPED")) as unknown as Promise<InstanceRow[]>,
         this.executor.listManagedInstances(),
       ]);
       // Index both snapshots once to avoid repeated linear searches inside reconciliation loops.
@@ -58,29 +59,37 @@ export class Reconciler {
             await this.instances.resumeCreate(database.id);
           } else if (database.lifecycle_state === "STARTING" && database.startup_expired) {
             // A server that never reports readiness is failed so capacity can replace it.
-            await this.sql`
-              UPDATE server_instances SET lifecycle_state = 'FAILED', updated_at = now()
-              WHERE id = ${database.id} AND lifecycle_state = 'STARTING'
-            `;
+            await this.db
+              .update(serverInstances)
+              .set({ lifecycleState: "FAILED", updatedAt: sql`now()` })
+              .where(
+                and(
+                  eq(serverInstances.id, database.id),
+                  eq(serverInstances.lifecycleState, "STARTING")
+                )
+              );
           } else if (
             // RUNNING/STARTING in the database requires a live container; disappearance is failure.
             (database.lifecycle_state === "RUNNING" ||
               database.lifecycle_state === "STARTING") &&
             (!runtime || !runtime.running)
           ) {
-            await this.sql`
-              UPDATE server_instances SET lifecycle_state = 'FAILED', updated_at = now()
-              WHERE id = ${database.id}
-            `;
+            await this.db
+              .update(serverInstances)
+              .set({ lifecycleState: "FAILED", updatedAt: sql`now()` })
+              .where(eq(serverInstances.id, database.id));
           } else if (database.lifecycle_state === "DRAINING") {
             // Drain waits for zero players, but the deadline guarantees eventual cleanup.
             if (!runtime || !runtime.running) {
               await this.instances.stopAndDelete(database.id);
             } else {
-              const rows = await this.sql<{ due: boolean; player_count: number }[]>`
-                SELECT (player_count = 0 OR drain_deadline <= now()) AS due, player_count
-                FROM server_instances WHERE id = ${database.id}
-              `;
+              const rows = (await this.db
+                .select({
+                  due: sql<boolean>`(${serverInstances.playerCount} = 0 OR ${serverInstances.drainDeadline} <= now())`.as("due"),
+                  player_count: serverInstances.playerCount,
+                })
+                .from(serverInstances)
+                .where(eq(serverInstances.id, database.id))) as { due: boolean; player_count: number }[];
               if (rows[0]?.due) await this.instances.stopAndDelete(database.id);
             }
           } else if (database.lifecycle_state === "STOPPING") {
@@ -103,13 +112,13 @@ export class Reconciler {
             instanceId: runtime.instanceId,
             containerId: runtime.containerId,
           });
-          await this.sql`
-            INSERT INTO events (id, aggregate_type, aggregate_id, type, payload)
-            VALUES (
-              ${nanoid()}, 'instance', ${runtime.instanceId}, 'ORPHAN_DISCOVERED',
-              ${jsonParameter(runtime)}::jsonb
-            )
-          `;
+          await this.db.insert(events).values({
+            id: nanoid(),
+            aggregateType: "instance",
+            aggregateId: runtime.instanceId,
+            type: "ORPHAN_DISCOVERED",
+            payload: runtime,
+          });
         }
       }
     } catch (error) {

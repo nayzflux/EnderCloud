@@ -1,7 +1,17 @@
 import type { AppConfig } from "../config.ts";
-import type { SqlClient } from "../db/client.ts";
+import type { Database } from "../db/client.ts";
+import {
+  serverInstances,
+  commands,
+  serverVariants,
+  serverGroups,
+  gameSessions,
+  sessionPlayers,
+  instancePlayers,
+  events,
+} from "../db/schema.ts";
+import { eq, and, sql, desc, inArray, isNotNull } from "drizzle-orm";
 import type postgres from "postgres";
-import { jsonParameter } from "../db/json.ts";
 import type {
   PaperEvent,
   ServerSnapshot,
@@ -30,7 +40,7 @@ interface StopRow {
 
 export class InstanceController {
   public constructor(
-    private readonly sql: SqlClient,
+    private readonly db: Database,
     private readonly executor: Executor,
     private readonly variants: VariantSelector,
     private readonly bus: RedisEventBus,
@@ -46,18 +56,20 @@ export class InstanceController {
     const commandId = nanoid();
     // Persist the desired instance and its command before touching Docker. This
     // makes creation recoverable if the orchestrator crashes between the two steps.
-    await this.sql.begin(async (transaction) => {
-      await transaction`
-        INSERT INTO server_instances (
-          id, group_id, variant_id, lifecycle_state, availability_state
-        ) VALUES (
-          ${instanceId}, ${groupId}, ${variant.id}, 'CREATING', 'OPEN'
-        )
-      `;
-      await transaction`
-        INSERT INTO commands (id, instance_id, operation, state)
-        VALUES (${commandId}, ${instanceId}, 'CREATE', 'PENDING')
-      `;
+    await this.db.transaction(async (tx) => {
+      await tx.insert(serverInstances).values({
+        id: instanceId,
+        groupId: groupId,
+        variantId: variant.id,
+        lifecycleState: "CREATING",
+        availabilityState: "OPEN",
+      });
+      await tx.insert(commands).values({
+        id: commandId,
+        instanceId: instanceId,
+        operation: "CREATE",
+        state: "PENDING",
+      });
     });
     await this.performCreate(instanceId, commandId);
     return instanceId;
@@ -66,37 +78,49 @@ export class InstanceController {
   // Resume an interrupted CREATE command from persisted state.
   public async resumeCreate(instanceId: string): Promise<void> {
     // Use the newest CREATE command because older attempts may describe an already-retried operation.
-    const commands = await this.sql<{ id: string }[]>`
-      SELECT id FROM commands
-      WHERE instance_id = ${instanceId} AND operation = 'CREATE'
-      ORDER BY created_at DESC LIMIT 1
-    `;
-    const commandId = commands[0]?.id ?? nanoid();
-    if (commands.length === 0) {
-      await this.sql`
-        INSERT INTO commands (id, instance_id, operation, state)
-        VALUES (${commandId}, ${instanceId}, 'CREATE', 'PENDING')
-      `;
+    const cmds = await this.db
+      .select({ id: commands.id })
+      .from(commands)
+      .where(and(eq(commands.instanceId, instanceId), eq(commands.operation, "CREATE")))
+      .orderBy(desc(commands.createdAt))
+      .limit(1);
+    const commandId = cmds[0]?.id ?? nanoid();
+    if (cmds.length === 0) {
+      await this.db.insert(commands).values({
+        id: commandId,
+        instanceId: instanceId,
+        operation: "CREATE",
+        state: "PENDING",
+      });
     }
     await this.performCreate(instanceId, commandId);
   }
 
   // Execute the recoverable database-to-Docker creation workflow.
   private async performCreate(instanceId: string, commandId: string): Promise<void> {
-    const rows = await this.sql<CreateRow[]>`
-      SELECT i.id, i.group_id, i.variant_id, i.session_id,
-             v.template_path, v.runtime_spec
-      FROM server_instances i
-      JOIN server_variants v ON v.id = i.variant_id
-      WHERE i.id = ${instanceId}
-        AND i.lifecycle_state IN ('CREATING', 'STARTING')
-    `;
-    const row = rows[0];
+    const rows = await this.db
+      .select({
+        id: serverInstances.id,
+        group_id: serverInstances.groupId,
+        variant_id: serverInstances.variantId,
+        session_id: serverInstances.sessionId,
+        template_path: serverVariants.templatePath,
+        runtime_spec: serverVariants.runtimeSpec,
+      })
+      .from(serverInstances)
+      .innerJoin(serverVariants, eq(serverVariants.id, serverInstances.variantId))
+      .where(
+        and(
+          eq(serverInstances.id, instanceId),
+          inArray(serverInstances.lifecycleState, ["CREATING", "STARTING"])
+        )
+      );
+    const row = rows[0] as unknown as CreateRow;
     if (!row) return;
-    await this.sql`
-      UPDATE commands SET state = 'RUNNING', attempts = attempts + 1
-      WHERE id = ${commandId} AND state <> 'SUCCEEDED'
-    `;
+    await this.db
+      .update(commands)
+      .set({ state: "RUNNING", attempts: sql`${commands.attempts} + 1` })
+      .where(and(eq(commands.id, commandId), sql`${commands.state} <> 'SUCCEEDED'`));
     try {
       // Executor creation is idempotent: an existing managed container is reused
       // when reconciliation resumes a partially completed CREATE command.
@@ -109,36 +133,47 @@ export class InstanceController {
         runtime: row.runtime_spec,
         environment: {},
       });
-      await this.sql.begin(async (transaction) => {
-        await transaction`
-          UPDATE server_instances
-          SET lifecycle_state = 'STARTING',
-              starting_at = COALESCE(starting_at, now()),
-              container_id = ${created.containerId},
-              runtime_path = ${created.runtimePath},
-              endpoint = ${created.endpoint},
-              updated_at = now()
-          WHERE id = ${instanceId} AND lifecycle_state IN ('CREATING', 'STARTING')
-        `;
-        await transaction`
-          UPDATE commands
-          SET state = 'SUCCEEDED', completed_at = now(), last_error = NULL
-          WHERE id = ${commandId}
-        `;
+      await this.db.transaction(async (tx) => {
+        await tx
+          .update(serverInstances)
+          .set({
+            lifecycleState: "STARTING",
+            startingAt: sql`COALESCE(${serverInstances.startingAt}, now())`,
+            containerId: created.containerId,
+            runtimePath: created.runtimePath,
+            endpoint: created.endpoint,
+            updatedAt: sql`now()`,
+          })
+          .where(
+            and(
+              eq(serverInstances.id, instanceId),
+              inArray(serverInstances.lifecycleState, ["CREATING", "STARTING"])
+            )
+          );
+        await tx
+          .update(commands)
+          .set({
+            state: "SUCCEEDED",
+            completedAt: sql`now()`,
+            lastError: null,
+          })
+          .where(eq(commands.id, commandId));
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await this.sql.begin(async (transaction) => {
-        await transaction`
-          UPDATE server_instances
-          SET lifecycle_state = 'FAILED', updated_at = now()
-          WHERE id = ${instanceId}
-        `;
-        await transaction`
-          UPDATE commands
-          SET state = 'FAILED', completed_at = now(), last_error = ${message}
-          WHERE id = ${commandId}
-        `;
+      await this.db.transaction(async (tx) => {
+        await tx
+          .update(serverInstances)
+          .set({ lifecycleState: "FAILED", updatedAt: sql`now()` })
+          .where(eq(serverInstances.id, instanceId));
+        await tx
+          .update(commands)
+          .set({
+            state: "FAILED",
+            completedAt: sql`now()`,
+            lastError: message,
+          })
+          .where(eq(commands.id, commandId));
       });
       this.logger.error("Instance creation failed", { instanceId, error: message });
     }
@@ -176,33 +211,43 @@ export class InstanceController {
 
   // Promote a starting instance to RUNNING and register it with proxies.
   public async markReady(instanceId: string, reportedEndpoint?: string): Promise<void> {
-    const rows = await this.sql<ServerSnapshot[]>`
-      UPDATE server_instances i
-      SET lifecycle_state = 'RUNNING',
-          endpoint = COALESCE(${reportedEndpoint ?? null}, endpoint),
-          running_at = COALESCE(running_at, now()),
-          updated_at = now()
-      FROM server_groups g
-      WHERE i.id = ${instanceId}
-        AND i.group_id = g.id
-        AND i.lifecycle_state = 'STARTING'
-      RETURNING
-        i.id AS "instanceId", i.variant_id AS "variantId",
-        i.group_id AS "groupId", g.type AS "groupType",
-        i.endpoint, i.lifecycle_state AS "lifecycleState",
-        i.availability_state AS "availabilityState",
-        i.player_count AS "playerCount",
-        COALESCE(g.maximum_players_per_instance, g.maximum_players, 0) AS "maximumPlayers"
-    `;
+    const rows = (await this.db
+      .update(serverInstances)
+      .set({
+        lifecycleState: "RUNNING",
+        endpoint: sql`COALESCE(${reportedEndpoint ?? null}, ${serverInstances.endpoint})`,
+        runningAt: sql`COALESCE(${serverInstances.runningAt}, now())`,
+        updatedAt: sql`now()`,
+      })
+      .from(serverGroups)
+      .where(
+        and(
+          eq(serverInstances.id, instanceId),
+          eq(serverInstances.groupId, serverGroups.id),
+          eq(serverInstances.lifecycleState, "STARTING")
+        )
+      )
+      .returning({
+        instanceId: serverInstances.id,
+        variantId: serverInstances.variantId,
+        groupId: serverInstances.groupId,
+        groupType: serverGroups.type,
+        endpoint: serverInstances.endpoint,
+        lifecycleState: serverInstances.lifecycleState,
+        availabilityState: serverInstances.availabilityState,
+        playerCount: serverInstances.playerCount,
+        maximumPlayers: sql<number>`COALESCE(${serverGroups.maximumPlayersPerInstance}, ${serverGroups.maximumPlayers}, 0)`,
+      })) as unknown as ServerSnapshot[];
     if (rows[0]) {
       // Publish registration only for the transaction that actually performed STARTING -> RUNNING.
       await this.bus.publishRegistry("SERVER_REGISTERED", rows[0]);
       return;
     }
     // A repeated SERVER_READY is valid; distinguish idempotency from an invalid lifecycle.
-    const current = await this.sql<{ lifecycle_state: string }[]>`
-      SELECT lifecycle_state FROM server_instances WHERE id = ${instanceId}
-    `;
+    const current = await this.db
+      .select({ lifecycle_state: serverInstances.lifecycleState })
+      .from(serverInstances)
+      .where(eq(serverInstances.id, instanceId));
     if (current[0]?.lifecycle_state !== "RUNNING") {
       throw new Error(`Instance ${instanceId} is unavailable`);
     }
@@ -210,26 +255,31 @@ export class InstanceController {
 
   // Remove an eligible instance from routing and start its drain deadline.
   public async beginDrain(instanceId: string): Promise<boolean> {
-    const rows = await this.sql<{ id: string }[]>`
-      UPDATE server_instances i
-      SET lifecycle_state = 'DRAINING',
-          draining_at = now(),
-          drain_deadline = now() + (g.draining_timeout_ms * interval '1 millisecond'),
-          updated_at = now()
-      FROM server_groups g
-      WHERE i.id = ${instanceId}
-        AND i.group_id = g.id
-        AND i.lifecycle_state = 'RUNNING'
-        AND (
-          i.availability_state = 'OPEN'
+    const rows = await this.db
+      .update(serverInstances)
+      .set({
+        lifecycleState: "DRAINING",
+        drainingAt: sql`now()`,
+        drainDeadline: sql`now() + (${serverGroups.drainingTimeoutMs} * interval '1 millisecond')`,
+        updatedAt: sql`now()`,
+      })
+      .from(serverGroups)
+      .where(
+        and(
+          eq(serverInstances.id, instanceId),
+          eq(serverInstances.groupId, serverGroups.id),
+          eq(serverInstances.lifecycleState, "RUNNING"),
+          sql`(
+          ${serverInstances.availabilityState} = 'OPEN'
           OR EXISTS (
             SELECT 1 FROM game_sessions s
-            WHERE s.id = i.session_id
+            WHERE s.id = ${serverInstances.sessionId}
               AND s.state IN ('FINISHED', 'CANCELLED', 'FAILED')
           )
+        )`
         )
-      RETURNING i.id
-    `;
+      )
+      .returning({ id: serverInstances.id });
     if (rows.length > 0) {
       // Remove routing before waiting for players to leave, preventing new joins during drain.
       await this.bus.publishRegistry("SERVER_UNREGISTERED", { instanceId });
@@ -240,93 +290,113 @@ export class InstanceController {
 
   // Converge a terminal instance to STOPPED and clean its runtime resources.
   public async stopAndDelete(instanceId: string): Promise<void> {
-    const rows = await this.sql<StopRow[]>`
-      UPDATE server_instances i
-      SET lifecycle_state = 'STOPPING', updated_at = now()
-      FROM server_groups g
-      WHERE i.id = ${instanceId}
-        AND i.group_id = g.id
-        AND i.lifecycle_state IN ('DRAINING', 'FAILED', 'ORPHANED', 'STOPPING')
-      RETURNING i.id, g.shutdown_timeout_ms
-    `;
+    const rows = await this.db
+      .update(serverInstances)
+      .set({
+        lifecycleState: "STOPPING",
+        updatedAt: sql`now()`,
+      })
+      .from(serverGroups)
+      .where(
+        and(
+          eq(serverInstances.id, instanceId),
+          eq(serverInstances.groupId, serverGroups.id),
+          inArray(serverInstances.lifecycleState, ["DRAINING", "FAILED", "ORPHANED", "STOPPING"])
+        )
+      )
+      .returning({
+        id: serverInstances.id,
+        shutdown_timeout_ms: serverGroups.shutdownTimeoutMs,
+      }) as unknown as StopRow[];
     const row = rows[0];
     if (!row) return;
     const commandId = nanoid();
-    await this.sql`
-      INSERT INTO commands (id, instance_id, operation, state)
-      VALUES (${commandId}, ${instanceId}, 'DELETE', 'RUNNING')
-    `;
+    await this.db.insert(commands).values({
+      id: commandId,
+      instanceId: instanceId,
+      operation: "DELETE",
+      state: "RUNNING",
+    });
     try {
       // Give Minecraft its configured graceful shutdown window before forcing removal.
       await this.executor.stopInstance(instanceId, Math.ceil(row.shutdown_timeout_ms / 1_000));
       await this.executor.deleteInstance(instanceId);
-      await this.sql.begin(async (transaction) => {
-        await transaction`
-          UPDATE server_instances
-          SET lifecycle_state = 'STOPPED', stopped_at = now(),
-              container_id = NULL, runtime_path = NULL, updated_at = now()
-          WHERE id = ${instanceId}
-        `;
-        await transaction`
-          UPDATE commands SET state = 'SUCCEEDED', completed_at = now()
-          WHERE id = ${commandId}
-        `;
+      await this.db.transaction(async (tx) => {
+        await tx
+          .update(serverInstances)
+          .set({
+            lifecycleState: "STOPPED",
+            stoppedAt: sql`now()`,
+            containerId: null,
+            runtimePath: null,
+            updatedAt: sql`now()`,
+          })
+          .where(eq(serverInstances.id, instanceId));
+        await tx
+          .update(commands)
+          .set({ state: "SUCCEEDED", completedAt: sql`now()` })
+          .where(eq(commands.id, commandId));
       });
       await this.bus.publishRegistry("SERVER_UNREGISTERED", { instanceId });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await this.sql`
-        UPDATE commands SET state = 'FAILED', completed_at = now(), last_error = ${message}
-        WHERE id = ${commandId}
-      `;
+      await this.db
+        .update(commands)
+        .set({ state: "FAILED", completedAt: sql`now()`, lastError: message })
+        .where(eq(commands.id, commandId));
       this.logger.error("Instance deletion failed", { instanceId, error: message });
     }
   }
 
   // Return all running endpoints that may be registered by a proxy.
   public async listProxyServers(): Promise<readonly ServerSnapshot[]> {
-    return this.sql<ServerSnapshot[]>`
-      SELECT
-        i.id AS "instanceId", i.variant_id AS "variantId",
-        i.group_id AS "groupId", g.type AS "groupType",
-        i.endpoint, i.lifecycle_state AS "lifecycleState",
-        i.availability_state AS "availabilityState",
-        i.player_count AS "playerCount",
-        COALESCE(g.maximum_players_per_instance, g.maximum_players, 0) AS "maximumPlayers"
-      FROM server_instances i
-      JOIN server_groups g ON g.id = i.group_id
-      WHERE i.lifecycle_state = 'RUNNING' AND i.endpoint IS NOT NULL
-      -- Stable startup ordering keeps proxy registry snapshots deterministic.
-      ORDER BY i.running_at, i.id
-    `;
+    return (await this.db
+      .select({
+        instanceId: serverInstances.id,
+        variantId: serverInstances.variantId,
+        groupId: serverInstances.groupId,
+        groupType: serverGroups.type,
+        endpoint: serverInstances.endpoint,
+        lifecycleState: serverInstances.lifecycleState,
+        availabilityState: serverInstances.availabilityState,
+        playerCount: serverInstances.playerCount,
+        maximumPlayers: sql<number>`COALESCE(${serverGroups.maximumPlayersPerInstance}, ${serverGroups.maximumPlayers}, 0)`,
+      })
+      .from(serverInstances)
+      .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
+      .where(
+        and(
+          eq(serverInstances.lifecycleState, "RUNNING"),
+          isNotNull(serverInstances.endpoint)
+        )
+      )
+      .orderBy(serverInstances.runningAt, serverInstances.id)) as unknown as readonly ServerSnapshot[];
   }
 
   // Return the current versioned player assignment for a minigame instance.
   public async getAssignment(instanceId: string) {
-    const sessions = await this.sql<{
-      session_id: string;
-      group_id: string;
-      state: string;
-      assignment_revision: number;
-    }[]>`
-      SELECT s.id AS session_id, s.group_id, s.state, s.assignment_revision
-      FROM game_sessions s
-      JOIN server_instances i ON i.session_id = s.id
-      WHERE i.id = ${instanceId}
-    `;
+    const sessions = await this.db
+      .select({
+        session_id: gameSessions.id,
+        group_id: gameSessions.groupId,
+        state: gameSessions.state,
+        assignment_revision: gameSessions.assignmentRevision,
+      })
+      .from(gameSessions)
+      .innerJoin(serverInstances, eq(serverInstances.sessionId, gameSessions.id))
+      .where(eq(serverInstances.id, instanceId));
     const session = sessions[0];
     if (!session) return null;
-    const players = await this.sql<{
-      player_id: string;
-      party_id: string;
-      team_index: number;
-      state: string;
-    }[]>`
-      SELECT player_id, party_id, team_index, state
-      FROM session_players WHERE session_id = ${session.session_id}
-      -- Group players by team and preserve assignment order inside each team.
-      ORDER BY team_index, selected_at
-    `;
+    const players = await this.db
+      .select({
+        player_id: sessionPlayers.playerId,
+        party_id: sessionPlayers.partyId,
+        team_index: sessionPlayers.teamIndex,
+        state: sessionPlayers.state,
+      })
+      .from(sessionPlayers)
+      .where(eq(sessionPlayers.sessionId, session.session_id))
+      .orderBy(sessionPlayers.teamIndex, sessionPlayers.selectedAt);
     return {
       sessionId: session.session_id,
       groupId: session.group_id,
@@ -343,15 +413,21 @@ export class InstanceController {
 
   // Record that the game server consumed the expected assignment revision.
   public async acknowledgeAssignment(instanceId: string, revision: number): Promise<boolean> {
-    const rows = await this.sql<{ id: string }[]>`
-      UPDATE game_sessions s
-      SET assignment_acknowledged_at = now(), updated_at = now()
-      FROM server_instances i
-      WHERE i.id = ${instanceId}
-        AND i.session_id = s.id
-        AND s.assignment_revision = ${revision}
-      RETURNING s.id
-    `;
+    const rows = await this.db
+      .update(gameSessions)
+      .set({
+        assignmentAcknowledgedAt: sql`now()`,
+        updatedAt: sql`now()`,
+      })
+      .from(serverInstances)
+      .where(
+        and(
+          eq(serverInstances.id, instanceId),
+          eq(serverInstances.sessionId, gameSessions.id),
+          eq(gameSessions.assignmentRevision, revision)
+        )
+      )
+      .returning({ id: gameSessions.id });
     return rows.length > 0;
   }
 
@@ -361,38 +437,47 @@ export class InstanceController {
     playerId: string,
     sessionId?: string,
   ): Promise<void> {
-    await this.sql.begin(async (transaction) => {
+    await this.db.transaction(async (tx) => {
       const effectiveSessionId = await this.validateEventSession(
-        transaction,
+        tx,
         instanceId,
         sessionId,
       );
-      await transaction`
-        INSERT INTO instance_players (instance_id, player_id)
-        VALUES (${instanceId}, ${playerId})
-        ON CONFLICT (instance_id, player_id)
-        DO UPDATE SET last_seen_at = now()
-      `;
-      await transaction`
-        UPDATE server_instances
-        SET player_count = (
-          SELECT count(*)::int FROM instance_players WHERE instance_id = ${instanceId}
-        ), updated_at = now()
-        WHERE id = ${instanceId}
-      `;
+      await tx
+        .insert(instancePlayers)
+        .values({
+          instanceId: instanceId,
+          playerId: playerId,
+        })
+        .onConflictDoUpdate({
+          target: [instancePlayers.instanceId, instancePlayers.playerId],
+          set: { lastSeenAt: sql`now()` },
+        });
+      await tx
+        .update(serverInstances)
+        .set({
+          playerCount: sql`(SELECT count(*)::int FROM instance_players WHERE instance_id = ${instanceId})`,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(serverInstances.id, instanceId));
       if (effectiveSessionId) {
-        await transaction`
-          UPDATE session_players sp
-          SET state = 'CONNECTED',
-              connected_at = COALESCE(connected_at, now()),
-              left_at = NULL
-          FROM game_sessions s
-          WHERE sp.session_id = ${effectiveSessionId}
-            AND sp.player_id = ${playerId}
-            AND s.id = sp.session_id
-            AND s.state IN ('TRANSFERRING', 'WAITING')
-            AND sp.state IN ('SELECTED', 'TRANSFERRING', 'LEFT')
-        `;
+        await tx
+          .update(sessionPlayers)
+          .set({
+            state: "CONNECTED",
+            connectedAt: sql`COALESCE(${sessionPlayers.connectedAt}, now())`,
+            leftAt: null,
+          })
+          .from(gameSessions)
+          .where(
+            and(
+              eq(sessionPlayers.sessionId, effectiveSessionId),
+              eq(sessionPlayers.playerId, playerId),
+              eq(gameSessions.id, sessionPlayers.sessionId),
+              inArray(gameSessions.state, ["TRANSFERRING", "WAITING"]),
+              inArray(sessionPlayers.state, ["SELECTED", "TRANSFERRING", "LEFT"])
+            )
+          );
       }
     });
   }
@@ -403,89 +488,118 @@ export class InstanceController {
     playerId: string,
     sessionId?: string,
   ): Promise<void> {
-    await this.sql.begin(async (transaction) => {
+    await this.db.transaction(async (tx) => {
       const effectiveSessionId = await this.validateEventSession(
-        transaction,
+        tx,
         instanceId,
         sessionId,
       );
       // A grace window tolerates one delayed heartbeat before treating a player as absent.
-      await transaction`
-        DELETE FROM instance_players
-        WHERE instance_id = ${instanceId} AND player_id = ${playerId}
-      `;
-      await transaction`
-        UPDATE server_instances
-        SET player_count = (
-          SELECT count(*)::int FROM instance_players WHERE instance_id = ${instanceId}
-        ), updated_at = now()
-        WHERE id = ${instanceId}
-      `;
+      await tx
+        .delete(instancePlayers)
+        .where(
+          and(
+            eq(instancePlayers.instanceId, instanceId),
+            eq(instancePlayers.playerId, playerId)
+          )
+        );
+      await tx
+        .update(serverInstances)
+        .set({
+          playerCount: sql`(SELECT count(*)::int FROM instance_players WHERE instance_id = ${instanceId})`,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(serverInstances.id, instanceId));
       if (effectiveSessionId) {
-        await transaction`
-          UPDATE session_players
-          SET state = 'LEFT', left_at = now()
-          WHERE session_id = ${effectiveSessionId} AND player_id = ${playerId}
-            AND state <> 'LEFT'
-        `;
+        await tx
+          .update(sessionPlayers)
+          .set({
+            state: "LEFT",
+            leftAt: sql`now()`,
+          })
+          .where(
+            and(
+              eq(sessionPlayers.sessionId, effectiveSessionId),
+              eq(sessionPlayers.playerId, playerId),
+              sql`${sessionPlayers.state} <> 'LEFT'`
+            )
+          );
       }
     });
   }
 
   // Reconcile the authoritative player list reported by the game server.
   private async heartbeat(instanceId: string, playerIds: readonly string[]): Promise<void> {
-    await this.sql.begin(async (transaction) => {
-      const effectiveSessionId = await this.validateEventSession(transaction, instanceId);
+    await this.db.transaction(async (tx) => {
+      const effectiveSessionId = await this.validateEventSession(tx, instanceId);
       // Refresh every reported player before removing stale rows, making the heartbeat authoritative.
       for (const playerId of playerIds) {
-        await transaction`
-          INSERT INTO instance_players (instance_id, player_id)
-          VALUES (${instanceId}, ${playerId})
-          ON CONFLICT (instance_id, player_id)
-          DO UPDATE SET last_seen_at = now()
-        `;
+        await tx
+          .insert(instancePlayers)
+          .values({
+            instanceId: instanceId,
+            playerId: playerId,
+          })
+          .onConflictDoUpdate({
+            target: [instancePlayers.instanceId, instancePlayers.playerId],
+            set: { lastSeenAt: sql`now()` },
+          });
         if (effectiveSessionId) {
-          await transaction`
-            UPDATE session_players sp
-            SET state = 'CONNECTED',
-                connected_at = COALESCE(connected_at, now()),
-                left_at = NULL
-            FROM game_sessions s
-            WHERE sp.session_id = ${effectiveSessionId}
-              AND sp.player_id = ${playerId}
-              AND s.id = sp.session_id
-              AND s.state IN ('TRANSFERRING', 'WAITING')
-              AND sp.state IN ('SELECTED', 'TRANSFERRING', 'LEFT')
-          `;
+          await tx
+            .update(sessionPlayers)
+            .set({
+              state: "CONNECTED",
+              connectedAt: sql`COALESCE(${sessionPlayers.connectedAt}, now())`,
+              leftAt: null,
+            })
+            .from(gameSessions)
+            .where(
+              and(
+                eq(sessionPlayers.sessionId, effectiveSessionId),
+                eq(sessionPlayers.playerId, playerId),
+                eq(gameSessions.id, sessionPlayers.sessionId),
+                inArray(gameSessions.state, ["TRANSFERRING", "WAITING"]),
+                inArray(sessionPlayers.state, ["SELECTED", "TRANSFERRING", "LEFT"])
+              )
+            );
         }
       }
-      await transaction`
-        DELETE FROM instance_players
-        WHERE instance_id = ${instanceId}
-          AND last_seen_at < now() - interval '30 seconds'
-      `;
+      await tx
+        .delete(instancePlayers)
+        .where(
+          and(
+            eq(instancePlayers.instanceId, instanceId),
+            sql`${instancePlayers.lastSeenAt} < now() - interval '30 seconds'`
+          )
+        );
       if (effectiveSessionId) {
         // Mirror heartbeat removals into session state so transfer completion can account for departures.
-        await transaction`
-          UPDATE session_players sp
-          SET state = 'LEFT', left_at = now()
-          WHERE sp.session_id = ${effectiveSessionId}
-            AND sp.state = 'CONNECTED'
-            AND NOT EXISTS (
+        await tx
+          .update(sessionPlayers)
+          .set({
+            state: "LEFT",
+            leftAt: sql`now()`,
+          })
+          .where(
+            and(
+              eq(sessionPlayers.sessionId, effectiveSessionId),
+              eq(sessionPlayers.state, "CONNECTED"),
+              sql`NOT EXISTS (
               SELECT 1
               FROM instance_players ip
               WHERE ip.instance_id = ${instanceId}
-                AND ip.player_id = sp.player_id
+                AND ip.player_id = ${sessionPlayers.playerId}
+            )`
             )
-        `;
+          );
       }
-      await transaction`
-        UPDATE server_instances
-        SET player_count = (
-          SELECT count(*)::int FROM instance_players WHERE instance_id = ${instanceId}
-        ), updated_at = now()
-        WHERE id = ${instanceId}
-      `;
+      await tx
+        .update(serverInstances)
+        .set({
+          playerCount: sql`(SELECT count(*)::int FROM instance_players WHERE instance_id = ${instanceId})`,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(serverInstances.id, instanceId));
     });
   }
 
@@ -495,30 +609,45 @@ export class InstanceController {
     sessionId: string,
     state: "STARTING" | "RUNNING",
   ): Promise<void> {
-    const rows = await this.sql<{ id: string }[]>`
-      UPDATE game_sessions s
-      SET state = ${state},
-          started_at = CASE WHEN ${state} = 'RUNNING' THEN COALESCE(started_at, now()) ELSE started_at END,
-          updated_at = now()
-      FROM server_instances i
-      WHERE s.id = ${sessionId}
-        AND i.id = ${instanceId}
-        AND i.session_id = s.id
-        AND s.instance_id = i.id
-        AND (
-          (${state} = 'STARTING' AND state IN ('TRANSFERRING', 'WAITING'))
-          OR (${state} = 'RUNNING' AND state = 'STARTING')
+    const rows = await this.db
+      .update(gameSessions)
+      .set({
+        state: state,
+        startedAt: sql`CASE WHEN ${state} = 'RUNNING' THEN COALESCE(${gameSessions.startedAt}, now()) ELSE ${gameSessions.startedAt} END`,
+        updatedAt: sql`now()`,
+      })
+      .from(serverInstances)
+      .where(
+        and(
+          eq(gameSessions.id, sessionId),
+          eq(serverInstances.id, instanceId),
+          eq(serverInstances.sessionId, gameSessions.id),
+          eq(gameSessions.instanceId, serverInstances.id),
+          sql`(
+          (${state} = 'STARTING' AND ${gameSessions.state} IN ('TRANSFERRING', 'WAITING'))
+          OR (${state} = 'RUNNING' AND ${gameSessions.state} = 'STARTING')
+        )`
         )
-      RETURNING s.id
-    `;
+      )
+      .returning({ id: gameSessions.id });
     // The conditional UPDATE is the concurrency-safe transition path.
     if (rows.length > 0) return;
-    const current = await this.sql<{ state: string }[]>`
-      SELECT s.state
-      FROM game_sessions s
-      JOIN server_instances i ON i.id = s.instance_id AND i.session_id = s.id
-      WHERE s.id = ${sessionId} AND i.id = ${instanceId}
-    `;
+    const current = await this.db
+      .select({ state: gameSessions.state })
+      .from(gameSessions)
+      .innerJoin(
+        serverInstances,
+        and(
+          eq(serverInstances.id, gameSessions.instanceId),
+          eq(serverInstances.sessionId, gameSessions.id)
+        )
+      )
+      .where(
+        and(
+          eq(gameSessions.id, sessionId),
+          eq(serverInstances.id, instanceId)
+        )
+      );
     // Duplicate plugin events are idempotent, while skipped or foreign transitions are rejected.
     if (current[0]?.state === state) return;
     throw this.invalidSessionEvent(instanceId, sessionId);
@@ -530,24 +659,41 @@ export class InstanceController {
     sessionId: string,
     results: unknown,
   ): Promise<void> {
-    const rows = await this.sql<{ instance_id: string }[]>`
-      UPDATE game_sessions s
-      SET state = 'FINISHED', finished_at = now(), updated_at = now()
-      FROM server_instances i
-      WHERE s.id = ${sessionId}
-        AND i.id = ${instanceId}
-        AND i.session_id = s.id
-        AND s.instance_id = i.id
-        AND s.state IN ('STARTING', 'RUNNING')
-      RETURNING s.instance_id
-    `;
+    const rows = await this.db
+      .update(gameSessions)
+      .set({
+        state: "FINISHED",
+        finishedAt: sql`now()`,
+        updatedAt: sql`now()`,
+      })
+      .from(serverInstances)
+      .where(
+        and(
+          eq(gameSessions.id, sessionId),
+          eq(serverInstances.id, instanceId),
+          eq(serverInstances.sessionId, gameSessions.id),
+          eq(gameSessions.instanceId, serverInstances.id),
+          inArray(gameSessions.state, ["STARTING", "RUNNING"])
+        )
+      )
+      .returning({ instance_id: gameSessions.instanceId });
     if (rows.length === 0) {
-      const current = await this.sql<{ state: string }[]>`
-        SELECT s.state
-        FROM game_sessions s
-        JOIN server_instances i ON i.id = s.instance_id AND i.session_id = s.id
-        WHERE s.id = ${sessionId} AND i.id = ${instanceId}
-      `;
+      const current = await this.db
+        .select({ state: gameSessions.state })
+        .from(gameSessions)
+        .innerJoin(
+          serverInstances,
+          and(
+            eq(serverInstances.id, gameSessions.instanceId),
+            eq(serverInstances.sessionId, gameSessions.id)
+          )
+        )
+        .where(
+          and(
+            eq(gameSessions.id, sessionId),
+            eq(serverInstances.id, instanceId)
+          )
+        );
       if (current[0]?.state === "FINISHED") return;
       throw this.invalidSessionEvent(instanceId, sessionId);
     }
@@ -557,16 +703,15 @@ export class InstanceController {
 
   // Reject stale plugin events that refer to a different instance assignment.
   private async validateEventSession(
-    transaction: postgres.TransactionSql,
+    tx: Extract<Parameters<Parameters<Database["transaction"]>[0]>[0], Function> | any,
     instanceId: string,
     providedSessionId?: string,
   ): Promise<string | undefined> {
-    const rows = await transaction<{ session_id: string | null }[]>`
-      SELECT session_id
-      FROM server_instances
-      WHERE id = ${instanceId}
-      FOR SHARE
-    `;
+    const rows = await (tx as Database)
+      .select({ session_id: serverInstances.sessionId })
+      .from(serverInstances)
+      .where(eq(serverInstances.id, instanceId))
+      .for("share");
     const instance = rows[0];
     if (!instance) {
       throw new Error(`Instance ${instanceId} is unavailable`);
@@ -588,12 +733,14 @@ export class InstanceController {
     type: string,
     payload: unknown,
   ): Promise<void> {
-    await this.sql`
-      INSERT INTO events (id, aggregate_type, aggregate_id, type, payload)
-      VALUES (
-        ${nanoid()}, ${aggregateType}, ${aggregateId}, ${type},
-        ${jsonParameter(payload)}::jsonb
-      )
-    `;
+    await this.db
+      .insert(events)
+      .values({
+        id: nanoid(),
+        aggregateType: aggregateType,
+        aggregateId: aggregateId,
+        type: type,
+        payload: payload as any,
+      });
   }
 }

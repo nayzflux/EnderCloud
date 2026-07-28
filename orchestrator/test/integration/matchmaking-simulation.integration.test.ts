@@ -34,7 +34,7 @@ let matchmaker: Matchmaker;
 let queueService: QueueService;
 
 async function cleanDb() {
-  await sql`TRUNCATE TABLE server_groups CASCADE;`;
+  await sql`TRUNCATE TABLE server_groups CASCADE`;
 }
 
 describe("Mega Simulation End-to-End Matchmaking", () => {
@@ -48,8 +48,8 @@ describe("Mega Simulation End-to-End Matchmaking", () => {
     sql = client.sql;
     db = client.db;
     
-    matchmaker = new Matchmaker(sql, mockTransfers, mockLogger);
-    queueService = new QueueService(sql);
+    matchmaker = new Matchmaker(db, mockTransfers, mockLogger);
+    queueService = new QueueService(db);
   }, 30000); // Allow time for container to download and start
 
   beforeEach(async () => {

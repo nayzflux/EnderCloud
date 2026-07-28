@@ -30,7 +30,7 @@ let db: ReturnType<typeof createDatabase>["db"];
 let matchmaker: Matchmaker;
 
 async function cleanDb() {
-  await sql`TRUNCATE TABLE server_groups CASCADE;`;
+  await sql`TRUNCATE TABLE server_groups CASCADE`;
 }
 
 async function seedGroup() {
@@ -79,7 +79,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     sql = client.sql;
     db = client.db;
     
-    matchmaker = new Matchmaker(sql, mockTransfers, mockLogger);
+    matchmaker = new Matchmaker(db, mockTransfers, mockLogger);
   }, 30000); // Allow time for container to download and start
 
   beforeEach(async () => {

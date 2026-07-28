@@ -1,5 +1,7 @@
 import type { AppConfig } from "../config.ts";
-import type { SqlClient } from "../db/client.ts";
+import type { Database } from "../db/client.ts";
+import { sql, and, eq, inArray, isNotNull, lt, ne, notInArray, or } from "drizzle-orm";
+import { gameSessions, instancePlayers, serverGroups, serverInstances, sessionPlayers, transferCommands } from "../db/schema.ts";
 import { shouldRetryFailedSession } from "../domain/session-recovery.ts";
 import type { SessionState } from "../domain/types.ts";
 import type { Logger } from "../logger.ts";
@@ -21,7 +23,7 @@ export class SessionController {
   private running = false;
 
   public constructor(
-    private readonly sql: SqlClient,
+    private readonly db: Database,
     private readonly instances: InstanceController,
     private readonly transfers: TransferService,
     private readonly config: AppConfig,
@@ -59,35 +61,38 @@ export class SessionController {
 
   // Mark players as left when their transfer acknowledgement never arrives.
   private async expireTransfers(): Promise<void> {
-    await this.sql`
-      UPDATE session_players sp
-      SET state = 'LEFT', left_at = now()
-      FROM game_sessions s
-      WHERE sp.session_id = s.id
-        AND s.state IN ('TRANSFERRING', 'WAITING')
-        AND sp.state = 'TRANSFERRING'
-        AND sp.transferring_at IS NOT NULL
-        AND sp.transferring_at < now() - (
-          ${this.config.transferTimeoutMs} * interval '1 millisecond'
+    await this.db.update(sessionPlayers)
+      .set({ state: "LEFT", leftAt: sql`now()` })
+      .where(and(
+        eq(sessionPlayers.state, "TRANSFERRING"),
+        isNotNull(sessionPlayers.transferringAt),
+        lt(sessionPlayers.transferringAt, sql`now() - (${this.config.transferTimeoutMs} * interval '1 millisecond')`),
+        inArray(
+          sessionPlayers.sessionId,
+          this.db.select({ id: gameSessions.id })
+            .from(gameSessions)
+            .where(inArray(gameSessions.state, ["TRANSFERRING", "WAITING"]))
         )
-    `;
+      ));
   }
 
   // Start, keep waiting, or cancel sessions based on arrivals and deadlines.
   private async advanceWaitingSessions(): Promise<void> {
-    const sessions = await this.sql<SessionRow[]>`
-      SELECT
-        s.id, s.instance_id, s.state,
-        g.minimum_players, g.maximum_players,
-        count(sp.player_id) FILTER (WHERE sp.state <> 'LEFT')::int AS active_players,
-        count(sp.player_id) FILTER (WHERE sp.state = 'CONNECTED')::int AS connected_players,
-        s.waiting_deadline <= now() AS deadline_reached
-      FROM game_sessions s
-      JOIN server_groups g ON g.id = s.group_id
-      LEFT JOIN session_players sp ON sp.session_id = s.id
-      WHERE s.state IN ('WAITING_FOR_INSTANCE', 'TRANSFERRING', 'WAITING')
-      GROUP BY s.id, g.id
-    `;
+    const sessions = await this.db.select({
+      id: gameSessions.id,
+      instance_id: gameSessions.instanceId,
+      state: gameSessions.state,
+      minimum_players: serverGroups.minimumPlayers,
+      maximum_players: serverGroups.maximumPlayers,
+      active_players: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} <> 'LEFT')::int`,
+      connected_players: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} = 'CONNECTED')::int`,
+      deadline_reached: sql<boolean>`${gameSessions.waitingDeadline} <= now()`,
+    })
+    .from(gameSessions)
+    .innerJoin(serverGroups, eq(serverGroups.id, gameSessions.groupId))
+    .leftJoin(sessionPlayers, eq(sessionPlayers.sessionId, gameSessions.id))
+    .where(inArray(gameSessions.state, ["WAITING_FOR_INSTANCE", "TRANSFERRING", "WAITING"]))
+    .groupBy(gameSessions.id, serverGroups.id) as unknown as SessionRow[];
     // Evaluate each session from the same database snapshot of counts and deadline state.
     for (const session of sessions) {
       if (session.state === "WAITING_FOR_INSTANCE") {
@@ -105,15 +110,18 @@ export class SessionController {
         (session.deadline_reached &&
           session.connected_players >= session.minimum_players)
       ) {
-        await this.sql`
-          UPDATE game_sessions SET state = 'STARTING', updated_at = now()
-          WHERE id = ${session.id} AND state IN ('TRANSFERRING', 'WAITING')
-        `;
-        await this.sql`
-          UPDATE transfer_commands
-          SET state = 'COMPLETED', completed_at = now()
-          WHERE session_id = ${session.id} AND state = 'PENDING'
-        `;
+        await this.db.update(gameSessions)
+          .set({ state: "STARTING", updatedAt: sql`now()` })
+          .where(and(
+            eq(gameSessions.id, session.id),
+            inArray(gameSessions.state, ["TRANSFERRING", "WAITING"])
+          ));
+        await this.db.update(transferCommands)
+          .set({ state: "COMPLETED", completedAt: sql`now()` })
+          .where(and(
+            eq(transferCommands.sessionId, session.id),
+            eq(transferCommands.state, "PENDING")
+          ));
       } else if (
         // Below-minimum sessions cannot start safely after the waiting window closes.
         session.deadline_reached &&
@@ -129,36 +137,40 @@ export class SessionController {
         session.active_players > 0 &&
         session.active_players === session.connected_players
       ) {
-        await this.sql`
-          UPDATE game_sessions SET state = 'WAITING', updated_at = now()
-          WHERE id = ${session.id} AND state = 'TRANSFERRING'
-        `;
+        await this.db.update(gameSessions)
+          .set({ state: "WAITING", updatedAt: sql`now()` })
+          .where(and(
+            eq(gameSessions.id, session.id),
+            eq(gameSessions.state, "TRANSFERRING")
+          ));
       }
     }
   }
 
   // Retry safe pre-start failures or fail sessions that can no longer be reassigned.
   private async recoverFailedInstances(): Promise<void> {
-    const failures = await this.sql<
+    const failures = await this.db.select({
+      session_id: gameSessions.id,
+      instance_id: serverInstances.id,
+      session_state: gameSessions.state,
+      retry_count: gameSessions.retryCount,
+      connected_players: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} = 'CONNECTED')::int`,
+    })
+    .from(gameSessions)
+    .innerJoin(serverInstances, eq(serverInstances.id, gameSessions.instanceId))
+    .leftJoin(sessionPlayers, eq(sessionPlayers.sessionId, gameSessions.id))
+    .where(and(
+      eq(serverInstances.lifecycleState, "FAILED"),
+      notInArray(gameSessions.state, ["FINISHED", "CANCELLED", "FAILED"])
+    ))
+    .groupBy(gameSessions.id, serverInstances.id) as unknown as 
       {
         session_id: string;
         instance_id: string;
         session_state: SessionState;
         retry_count: number;
         connected_players: number;
-      }[]
-    >`
-      SELECT
-        s.id AS session_id, i.id AS instance_id, s.state AS session_state,
-        s.retry_count,
-        count(sp.player_id) FILTER (WHERE sp.state = 'CONNECTED')::int AS connected_players
-      FROM game_sessions s
-      JOIN server_instances i ON i.id = s.instance_id
-      LEFT JOIN session_players sp ON sp.session_id = s.id
-      WHERE i.lifecycle_state = 'FAILED'
-        AND s.state NOT IN ('FINISHED', 'CANCELLED', 'FAILED')
-      GROUP BY s.id, i.id
-    `;
+      }[];
     // Each failed instance owns at most one active session, so recover them independently.
     for (const failure of failures) {
       if (
@@ -176,24 +188,25 @@ export class SessionController {
         });
         await this.transfers.cancelForInstance(failure.instance_id);
         // Reset the session and its players atomically so no observer sees mixed retry state.
-        await this.sql.begin(async (transaction) => {
-          await transaction`
-            UPDATE game_sessions s
-            SET state = 'WAITING_FOR_INSTANCE', instance_id = NULL,
-                transfer_started_at = NULL,
-                waiting_deadline = now() + (
-                  g.waiting_timeout_ms * interval '1 millisecond'
-                ),
-                retry_count = retry_count + 1, updated_at = now()
-            FROM server_groups g
-            WHERE s.id = ${failure.session_id} AND g.id = s.group_id
-          `;
-          await transaction`
-            UPDATE session_players
-            SET state = 'SELECTED', transferring_at = NULL
-            WHERE session_id = ${failure.session_id}
-              AND state = 'TRANSFERRING'
-          `;
+        await this.db.transaction(async (tx: any) => {
+          await tx.update(gameSessions)
+            .set({
+              state: "WAITING_FOR_INSTANCE",
+              instanceId: null,
+              transferStartedAt: null,
+              waitingDeadline: sql`now() + (
+                (SELECT waiting_timeout_ms FROM server_groups WHERE id = ${gameSessions.groupId}) * interval '1 millisecond'
+              )`,
+              retryCount: sql`${gameSessions.retryCount} + 1`,
+              updatedAt: sql`now()`
+            })
+            .where(eq(gameSessions.id, failure.session_id));
+          await tx.update(sessionPlayers)
+            .set({ state: "SELECTED", transferringAt: null })
+            .where(and(
+              eq(sessionPlayers.sessionId, failure.session_id),
+              eq(sessionPlayers.state, "TRANSFERRING")
+            ));
         });
       } else {
         this.logger.warn("Failing session after active instance failure", {
@@ -202,10 +215,9 @@ export class SessionController {
           state: failure.session_state,
           connectedPlayers: failure.connected_players,
         });
-        await this.sql`
-          UPDATE game_sessions SET state = 'FAILED', updated_at = now()
-          WHERE id = ${failure.session_id}
-        `;
+        await this.db.update(gameSessions)
+          .set({ state: "FAILED", updatedAt: sql`now()` })
+          .where(eq(gameSessions.id, failure.session_id));
         await this.transfers.cancelForInstance(failure.instance_id);
       }
       // Cleanup happens after the session is detached or failed, making retries safe.
@@ -215,20 +227,27 @@ export class SessionController {
 
   // Evacuate hubs when needed and delete instances whose drain is complete.
   private async finishDrainingInstances(): Promise<void> {
-    const due = await this.sql<
+    const due = await this.db.select({
+      id: serverInstances.id,
+      group_id: serverInstances.groupId,
+      type: serverGroups.type,
+      player_count: serverInstances.playerCount,
+    })
+    .from(serverInstances)
+    .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
+    .where(and(
+      eq(serverInstances.lifecycleState, "DRAINING"),
+      or(
+        eq(serverInstances.playerCount, 0),
+        sql`${serverInstances.drainDeadline} <= now()`
+      )
+    )) as unknown as 
       {
         id: string;
         group_id: string;
         type: "hub" | "minigame";
         player_count: number;
-      }[]
-    >`
-      SELECT i.id, i.group_id, g.type, i.player_count
-      FROM server_instances i
-      JOIN server_groups g ON g.id = i.group_id
-      WHERE i.lifecycle_state = 'DRAINING'
-        AND (i.player_count = 0 OR i.drain_deadline <= now())
-    `;
+      }[];
     // Drain candidates are already due; hubs require evacuation before deletion.
     for (const instance of due) {
       if (instance.type === "hub" && instance.player_count > 0) {
@@ -244,28 +263,30 @@ export class SessionController {
     groupId: string,
   ): Promise<void> {
     const [players, targets] = await Promise.all([
-      this.sql<{ player_id: string }[]>`
-        SELECT player_id FROM instance_players WHERE instance_id = ${sourceInstanceId}
-      `,
-      this.sql<
+      this.db.select({ player_id: instancePlayers.playerId })
+        .from(instancePlayers)
+        .where(eq(instancePlayers.instanceId, sourceInstanceId)) as unknown as { player_id: string }[],
+      this.db.select({
+        id: serverInstances.id,
+        endpoint: serverInstances.endpoint,
+        available: sql<number>`(${serverGroups.maximumPlayersPerInstance} - ${serverInstances.playerCount})::int`,
+      })
+      .from(serverInstances)
+      .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
+      .where(and(
+        eq(serverInstances.groupId, groupId),
+        ne(serverInstances.id, sourceInstanceId),
+        eq(serverInstances.lifecycleState, "RUNNING"),
+        eq(serverInstances.availabilityState, "OPEN"),
+        sql`${serverInstances.playerCount} < ${serverGroups.maximumPlayersPerInstance}`
+      ))
+      .orderBy(serverInstances.playerCount, serverInstances.runningAt) as unknown as 
         {
           id: string;
           endpoint: string;
           available: number;
         }[]
-      >`
-        SELECT i.id, i.endpoint,
-               (g.maximum_players_per_instance - i.player_count)::int AS available
-        FROM server_instances i
-        JOIN server_groups g ON g.id = i.group_id
-        WHERE i.group_id = ${groupId}
-          AND i.id <> ${sourceInstanceId}
-          AND i.lifecycle_state = 'RUNNING'
-          AND i.availability_state = 'OPEN'
-          AND i.player_count < g.maximum_players_per_instance
-        -- Fill the emptiest hubs first to spread load; use age as a stable tie-breaker.
-        ORDER BY i.player_count, i.running_at
-      `,
+      ,
     ]);
     let offset = 0;
     // Consume the player list in slices sized to each destination's free capacity.
@@ -274,8 +295,8 @@ export class SessionController {
         .slice(offset, offset + target.available)
         .map((player) => player.player_id);
       if (selected.length > 0) {
-        await this.sql.begin(async (transaction) => {
-          await this.transfers.enqueue(transaction, {
+        await this.db.transaction(async (tx: any) => {
+          await this.transfers.enqueue(tx, {
             instanceId: target.id,
             endpoint: target.endpoint,
             players: selected,
@@ -293,16 +314,18 @@ export class SessionController {
     sessionId: string,
     instanceId: string | null,
   ): Promise<void> {
-    await this.sql`
-      UPDATE game_sessions SET state = 'CANCELLED', updated_at = now()
-      WHERE id = ${sessionId}
-        AND state IN ('WAITING_FOR_INSTANCE', 'TRANSFERRING', 'WAITING')
-    `;
-    await this.sql`
-      UPDATE transfer_commands
-      SET state = 'CANCELLED', completed_at = now()
-      WHERE session_id = ${sessionId} AND state = 'PENDING'
-    `;
+    await this.db.update(gameSessions)
+      .set({ state: "CANCELLED", updatedAt: sql`now()` })
+      .where(and(
+        eq(gameSessions.id, sessionId),
+        inArray(gameSessions.state, ["WAITING_FOR_INSTANCE", "TRANSFERRING", "WAITING"])
+      ));
+    await this.db.update(transferCommands)
+      .set({ state: "CANCELLED", completedAt: sql`now()` })
+      .where(and(
+        eq(transferCommands.sessionId, sessionId),
+        eq(transferCommands.state, "PENDING")
+      ));
     if (instanceId) await this.instances.beginDrain(instanceId);
   }
 }
