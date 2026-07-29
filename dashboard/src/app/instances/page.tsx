@@ -23,7 +23,8 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import type { DashboardGroup, DashboardInstance } from "@/lib/contracts";
-import { formatAge, ratio } from "@/lib/format";
+import { Elapsed } from "@/components/live-time";
+import { ratio } from "@/lib/format";
 import {
   instanceFilters,
   matchesInstanceFilter,
@@ -126,9 +127,10 @@ export default function InstancesPage() {
         header: "Age",
         align: "right",
         cell: ({ instance }) => (
-          <span className="font-mono text-xs text-muted-foreground tabular">
-            {formatAge(instance.createdAt)}
-          </span>
+          <Elapsed
+            value={instance.createdAt}
+            className="font-mono text-xs text-muted-foreground tabular"
+          />
         ),
         sortValue: ({ instance }) => Date.parse(instance.createdAt),
       },

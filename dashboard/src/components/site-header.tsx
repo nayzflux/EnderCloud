@@ -29,7 +29,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { formatRelativeTime } from "@/lib/format";
+import { RelativeTime } from "@/components/live-time";
 import { cn } from "@/lib/utils";
 
 const pageTitles: Record<string, string> = {
@@ -79,13 +79,17 @@ function LiveIndicator() {
         />
         <span className="font-medium">{labels[state]}</span>
         <span className="hidden text-muted-foreground sm:inline tabular">
-          {snapshot ? formatRelativeTime(snapshot.generatedAt) : "—"}
+          {snapshot ? <RelativeTime value={snapshot.generatedAt} /> : "—"}
         </span>
       </TooltipTrigger>
       <TooltipContent>
-        {snapshot
-          ? `Snapshot generated ${formatRelativeTime(snapshot.generatedAt)}`
-          : "Waiting for the first snapshot"}
+        {snapshot ? (
+          <>
+            Snapshot generated <RelativeTime value={snapshot.generatedAt} />
+          </>
+        ) : (
+          "Waiting for the first snapshot"
+        )}
       </TooltipContent>
     </Tooltip>
   );

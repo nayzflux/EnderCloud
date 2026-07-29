@@ -1,3 +1,4 @@
+import { syncClock } from "./clock";
 import type {
   DashboardClusterSnapshot,
   DashboardInstanceDetail,
@@ -28,7 +29,12 @@ async function readJson<T>(path: string): Promise<T> {
       response.status,
     );
   }
-  return response.json() as Promise<T>;
+  const payload = (await response.json()) as T;
+  // Every dashboard payload is stamped with the orchestrator's instant. Doing
+  // this here — rather than in an effect — means the shared clock is already
+  // corrected by the time React renders the data that came with it.
+  syncClock((payload as { generatedAt?: string }).generatedAt);
+  return payload;
 }
 
 export function fetchCluster(): Promise<DashboardClusterSnapshot> {

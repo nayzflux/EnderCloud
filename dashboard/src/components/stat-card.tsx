@@ -13,7 +13,8 @@ import { cn } from "@/lib/utils";
 
 interface StatCardProps {
   readonly label: string;
-  readonly value: number | string;
+  /** Numbers are localised; anything else is rendered as-is, live times included. */
+  readonly value: number | ReactNode;
   readonly icon?: ComponentType<{ className?: string }>;
   readonly hint?: ReactNode;
   readonly tone?: Tone;

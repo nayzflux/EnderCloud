@@ -23,7 +23,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import type { DashboardGroup, DashboardSession } from "@/lib/contracts";
-import { formatAge, formatCountdown } from "@/lib/format";
+import { Countdown, Elapsed } from "@/components/live-time";
 
 interface Row {
   readonly group: DashboardGroup;
@@ -168,11 +168,11 @@ export default function SessionsPage() {
         hideOnMobile: true,
         align: "right",
         cell: ({ session }) => (
-          <span className="font-mono text-xs text-muted-foreground tabular">
-            {session.waitingDeadline
-              ? formatCountdown(session.waitingDeadline)
-              : "Not eligible"}
-          </span>
+          <Countdown
+            value={session.waitingDeadline}
+            fallback="Not eligible"
+            className="font-mono text-xs text-muted-foreground tabular"
+          />
         ),
         sortValue: ({ session }) =>
           session.waitingDeadline ? Date.parse(session.waitingDeadline) : Number.MAX_SAFE_INTEGER,
@@ -182,9 +182,10 @@ export default function SessionsPage() {
         header: "Age",
         align: "right",
         cell: ({ session }) => (
-          <span className="font-mono text-xs text-muted-foreground tabular">
-            {formatAge(session.createdAt)}
-          </span>
+          <Elapsed
+            value={session.createdAt}
+            className="font-mono text-xs text-muted-foreground tabular"
+          />
         ),
         sortValue: ({ session }) => Date.parse(session.createdAt),
       },
