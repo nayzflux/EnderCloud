@@ -60,6 +60,9 @@ de Paper.
 ## API disponible
 
     public interface EnderCloudPaperApi {
+        CompletableFuture<Boolean> sendToHub(UUID playerId);
+        CompletableFuture<HubTransferResult> sendToHub(Collection<UUID> playerIds);
+
         CompletableFuture<QueueResult> enqueue(QueueRequest request);
         CompletableFuture<Boolean> leaveQueue(String groupId, String partyId);
         Optional<SessionAssignment> currentAssignment();

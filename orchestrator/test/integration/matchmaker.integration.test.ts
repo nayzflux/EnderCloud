@@ -11,6 +11,7 @@ import type { VariantSelector } from "../../src/services/variant-selector.ts";
 import type { RedisEventBus } from "../../src/events/redis-bus.ts";
 import type { AppConfig } from "../../src/config.ts";
 import type { Logger } from "../../src/logger.ts";
+import { HubRouter } from "../../src/services/hub-router.ts";
 import { eq, inArray } from "drizzle-orm";
 import { nanoid } from "../../src/id.ts";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
@@ -455,6 +456,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       {} as VariantSelector,
       {} as RedisEventBus,
       {} as TransferService,
+      {} as HubRouter,
       {} as AppConfig,
       mockLogger,
     );
@@ -565,6 +567,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       {} as VariantSelector,
       bus,
       evacuationTransfers,
+      new HubRouter(db, evacuationTransfers),
       { cancelledDrainTimeoutMs: 10_000 } as AppConfig,
       mockLogger,
     );
@@ -602,6 +605,143 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     expect(evacuation.players.toSorted()).toEqual(playerIds.toSorted());
     expect(evacuation.sourceInstanceId).toBe(sourceInstanceId);
     expect(evacuation.reason).toBe("SESSION_CANCELLED");
+  });
+
+  test("hub routing balances batches across groups and is idempotent", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const sourceInstanceId = nanoid();
+    await db.insert(serverInstances).values({
+      id: sourceInstanceId,
+      groupId,
+      variantId,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "game:25565",
+    });
+
+    const hubGroups = ["hub-one", "hub-two"];
+    const hubInstances: string[] = [];
+    for (const [index, hubGroupId] of hubGroups.entries()) {
+      const hubVariantId = `${hubGroupId}-variant`;
+      const hubInstanceId = nanoid();
+      await db.insert(serverGroups).values({
+        id: hubGroupId,
+        type: "hub",
+        enabled: true,
+        minimumInstances: 1,
+        maximumInstances: 4,
+        minimumWarmInstances: 1,
+        maximumWarmInstances: 2,
+        maximumPlayersPerInstance: 100,
+        targetPlayersPerInstance: 70,
+        startupTimeoutMs: 60_000,
+        drainingTimeoutMs: 60_000,
+        shutdownTimeoutMs: 20_000,
+      });
+      await db.insert(serverVariants).values({
+        id: hubVariantId,
+        groupId: hubGroupId,
+        templatePath: "none",
+        enabled: true,
+        revision: 1,
+        selectionWeight: 100,
+        checksum: "none",
+        runtimeSpec: {},
+      });
+      await db.insert(serverInstances).values({
+        id: hubInstanceId,
+        groupId: hubGroupId,
+        variantId: hubVariantId,
+        lifecycleState: "RUNNING",
+        availabilityState: "OPEN",
+        endpoint: `${hubGroupId}:25565`,
+        playerCount: index === 0 ? 10 : 10,
+      });
+      hubInstances.push(hubInstanceId);
+    }
+
+    const overloadedGroupId = "hub-overloaded";
+    const overloadedVariantId = "hub-overloaded-variant";
+    const overloadedInstanceId = nanoid();
+    await db.insert(serverGroups).values({
+      id: overloadedGroupId,
+      type: "hub",
+      enabled: true,
+      minimumInstances: 1,
+      maximumInstances: 4,
+      minimumWarmInstances: 1,
+      maximumWarmInstances: 2,
+      maximumPlayersPerInstance: 100,
+      targetPlayersPerInstance: 70,
+      startupTimeoutMs: 60_000,
+      drainingTimeoutMs: 60_000,
+      shutdownTimeoutMs: 20_000,
+    });
+    await db.insert(serverVariants).values({
+      id: overloadedVariantId,
+      groupId: overloadedGroupId,
+      templatePath: "none",
+      enabled: true,
+      revision: 1,
+      selectionWeight: 100,
+      checksum: "none",
+      runtimeSpec: {},
+    });
+    await db.insert(serverInstances).values({
+      id: overloadedInstanceId,
+      groupId: overloadedGroupId,
+      variantId: overloadedVariantId,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "hub-overloaded:25565",
+      playerCount: 75,
+    });
+
+    const playerIds = Array.from({ length: 5 }, () => crypto.randomUUID());
+    await db.insert(instancePlayers).values(playerIds.map((playerId) => ({
+      instanceId: sourceInstanceId,
+      playerId,
+    })));
+    await db.insert(transferCommands).values({
+      id: nanoid(),
+      instanceId: hubInstances[0]!,
+      payload: {
+        instanceId: hubInstances[0]!,
+        endpoint: "hub-one:25565",
+        players: [crypto.randomUUID()],
+      },
+      expiresAt: new Date(Date.now() + 20_000),
+    });
+
+    const durableTransfers = {
+      enqueue: async (tx: any, payload: any) => {
+        const id = nanoid();
+        await tx.insert(transferCommands).values({
+          id,
+          instanceId: payload.instanceId,
+          payload,
+          expiresAt: new Date(Date.now() + 20_000),
+        });
+        return id;
+      },
+    } as unknown as TransferService;
+    const router = new HubRouter(db, durableTransfers);
+    const first = await router.transferPlayers(sourceInstanceId, playerIds);
+    const second = await router.transferPlayers(sourceInstanceId, playerIds);
+
+    expect(first.acceptedPlayers.toSorted()).toEqual(playerIds.toSorted());
+    expect(first.rejectedPlayers).toEqual([]);
+    expect(second.acceptedPlayers.toSorted()).toEqual(playerIds.toSorted());
+    const commands = await db.select().from(transferCommands);
+    expect(commands).toHaveLength(3);
+    const routed = commands
+      .map((command) => command.payload as { instanceId: string; players: string[] })
+      .filter((payload) => playerIds.some((playerId) => payload.players.includes(playerId)));
+    expect(routed).toHaveLength(2);
+    expect(routed.every((payload) => payload.instanceId !== overloadedInstanceId)).toBeTrue();
+    expect(routed.flatMap((payload) => payload.players).toSorted()).toEqual(
+      playerIds.toSorted(),
+    );
   });
 
   test("a departure cancels the whole ticket before transfer and only one player afterwards", async () => {

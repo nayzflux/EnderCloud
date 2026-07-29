@@ -1,7 +1,7 @@
 import type { AppConfig } from "../config.ts";
 import type { Database } from "../db/client.ts";
-import { sql, and, eq, inArray, isNotNull, lt, ne, notInArray } from "drizzle-orm";
-import { gameSessions, instancePlayers, serverGroups, serverInstances, sessionPlayers, transferCommands } from "../db/schema.ts";
+import { sql, and, eq, inArray, isNotNull, lt, notInArray } from "drizzle-orm";
+import { gameSessions, serverGroups, serverInstances, sessionPlayers, transferCommands } from "../db/schema.ts";
 import { shouldRetryFailedSession } from "../domain/session-recovery.ts";
 import type { SessionState } from "../domain/types.ts";
 import {
@@ -12,6 +12,7 @@ import {
 import type { Logger } from "../logger.ts";
 import type { InstanceController } from "./instance-controller.ts";
 import type { TransferService } from "./transfer-service.ts";
+import type { HubRouter } from "./hub-router.ts";
 
 interface SessionRow {
   id: string;
@@ -36,6 +37,7 @@ export class SessionController {
     private readonly db: Database,
     private readonly instances: InstanceController,
     private readonly transfers: TransferService,
+    private readonly hubs: HubRouter,
     private readonly config: AppConfig,
     private readonly logger: Logger,
   ) {}
@@ -260,7 +262,6 @@ export class SessionController {
   private async finishDrainingInstances(): Promise<void> {
     const draining = await this.db.select({
       id: serverInstances.id,
-      group_id: serverInstances.groupId,
       type: serverGroups.type,
       player_count: serverInstances.playerCount,
       session_state: gameSessions.state,
@@ -275,7 +276,6 @@ export class SessionController {
     .where(eq(serverInstances.lifecycleState, "DRAINING")) as unknown as
       {
         id: string;
-        group_id: string;
         type: "hub" | "minigame";
         player_count: number;
         session_state: SessionState | null;
@@ -291,62 +291,15 @@ export class SessionController {
       }
       if (!instance.due) continue;
       if (instance.type === "hub" && instance.player_count > 0) {
-        await this.evacuateHub(instance.id, instance.group_id);
+        await this.evacuateHub(instance.id);
       }
       await this.instances.stopAndDelete(instance.id);
     }
   }
 
   // Distribute remaining hub players across healthy instances with spare capacity.
-  private async evacuateHub(
-    sourceInstanceId: string,
-    groupId: string,
-  ): Promise<void> {
-    const [players, targets] = await Promise.all([
-      this.db.select({ player_id: instancePlayers.playerId })
-        .from(instancePlayers)
-        .where(eq(instancePlayers.instanceId, sourceInstanceId)) as unknown as { player_id: string }[],
-      this.db.select({
-        id: serverInstances.id,
-        endpoint: serverInstances.endpoint,
-        available: sql<number>`(${serverGroups.maximumPlayersPerInstance} - ${serverInstances.playerCount})::int`,
-      })
-      .from(serverInstances)
-      .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
-      .where(and(
-        eq(serverInstances.groupId, groupId),
-        ne(serverInstances.id, sourceInstanceId),
-        eq(serverInstances.lifecycleState, "RUNNING"),
-        eq(serverInstances.availabilityState, "OPEN"),
-        sql`${serverInstances.playerCount} < ${serverGroups.maximumPlayersPerInstance}`
-      ))
-      .orderBy(serverInstances.playerCount, serverInstances.runningAt) as unknown as 
-        {
-          id: string;
-          endpoint: string;
-          available: number;
-        }[]
-      ,
-    ]);
-    let offset = 0;
-    // Consume the player list in slices sized to each destination's free capacity.
-    for (const target of targets) {
-      const selected = players
-        .slice(offset, offset + target.available)
-        .map((player) => player.player_id);
-      if (selected.length > 0) {
-        await this.db.transaction(async (tx: any) => {
-          await this.transfers.enqueue(tx, {
-            instanceId: target.id,
-            endpoint: target.endpoint,
-            players: selected,
-          });
-        });
-      }
-      // Move the cursor by actual assignments, not advertised capacity, for the final partial slice.
-      offset += selected.length;
-      if (offset >= players.length) break;
-    }
+  private async evacuateHub(sourceInstanceId: string): Promise<void> {
+    await this.hubs.transferConnectedPlayers(sourceInstanceId);
   }
 
   // Cancel a pre-start session, its transfers, and release its reserved instance.

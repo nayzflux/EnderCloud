@@ -4,6 +4,7 @@ import type { Logger } from "../logger.ts";
 import type { DashboardService } from "../services/dashboard-service.ts";
 import type { InstanceController } from "../services/instance-controller.ts";
 import type { QueueService } from "../services/queue-service.ts";
+import type { HubRouter } from "../services/hub-router.ts";
 import { nanoid } from "../id.ts";
 
 const playerUuid = t.String({ format: "uuid" });
@@ -39,6 +40,7 @@ const paperEventSchema = t.Union([
 export interface ApiDependencies {
   readonly queues: QueueService;
   readonly instances: InstanceController;
+  readonly hubs: HubRouter;
   readonly dashboard: DashboardService;
   readonly logger: Logger;
   readonly isReady: () => boolean;
@@ -211,6 +213,30 @@ export function createApp(dependencies: ApiDependencies) {
               partyId: t.String({ minLength: 1, maxLength: 128 }),
             }),
             detail: { tags: ["Matchmaking"] },
+          },
+        )
+        .post(
+          "/instances/:instanceId/hub-transfers",
+          async ({ params, body, set }) => {
+            const result = await dependencies.hubs.transferPlayers(
+              params.instanceId,
+              body.playerIds,
+            );
+            set.status = 202;
+            return result;
+          },
+          {
+            params: t.Object({ instanceId: internalId }),
+            body: t.Object({
+              playerIds: t.Array(playerUuid, {
+                minItems: 1,
+                uniqueItems: true,
+              }),
+            }),
+            detail: {
+              tags: ["Paper"],
+              summary: "Schedule connected players for balanced hub transfer",
+            },
           },
         )
         .post(

@@ -115,6 +115,11 @@ unregisters the minigame, durably transfers its connected players to available h
 short `CANCELLED_DRAIN_TIMEOUT_MS` safety deadline. EnderCloud deliberately adds no player commands
 and no game-specific behavior.
 
+Paper plugins can also call `sendToHub(UUID)` or `sendToHub(Collection<UUID>)`. Accepted players are
+durably scheduled across the least-loaded running hubs; the returned future does not wait for their
+arrival. `target_players_per_instance` is a soft autoscaling target, while
+`maximum_players_per_instance` is the strict routing limit.
+
 The Velocity plugin instance implements `EnderCloudVelocityApi`. Another Velocity plugin can
 retrieve the `endercloud` plugin container, obtain its instance, cast it to that interface and
 request a hub transfer. Ordinary initial routing and kicked-server fallback are automatic.
@@ -131,6 +136,7 @@ OpenAPI is available at `/openapi` inside the private network. Important routes 
 - `POST /api/v1/queue/entries`
 - `POST /api/v1/proxy/players/{uuid}/disconnected`
 - `POST /api/v1/instances/{id}/events`
+- `POST /api/v1/instances/{id}/hub-transfers`
 - `GET /api/v1/instances/{id}/assignment`
 
 Redis uses `minecraft:proxy:registry` and `minecraft:proxy:transfers`. Subscribers connect before

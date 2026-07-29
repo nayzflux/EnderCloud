@@ -52,8 +52,11 @@ routing:
   target_players_per_instance: 70
 ```
 
-The target must not exceed the maximum. The `hub` group in `hub.yml` is the default example and
-fallback destination used by the proxy.
+The target must not exceed the maximum. It is a soft aggregate scale-out threshold: reaching the
+combined target capacity of the active and starting instances requests another instance, up to
+`maximum_instances`. Players already connected above the target stay in place, and new arrivals
+continue toward the least-loaded hub until the strict maximum is reached. The `hub` group in
+`hub.yml` is the default example and fallback destination used by the proxy.
 
 ## Minigame groups
 

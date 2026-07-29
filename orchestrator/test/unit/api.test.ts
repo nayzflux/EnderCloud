@@ -4,8 +4,9 @@ import type { Logger } from "../../src/logger.ts";
 import type { DashboardService } from "../../src/services/dashboard-service.ts";
 import type { InstanceController } from "../../src/services/instance-controller.ts";
 import type { QueueService } from "../../src/services/queue-service.ts";
+import type { HubRouter } from "../../src/services/hub-router.ts";
 
-function testApp() {
+function testApp(hubs: HubRouter = {} as HubRouter) {
   const dashboard = {
     getCluster: async () => ({
       schemaVersion: 1 as const,
@@ -32,6 +33,7 @@ function testApp() {
     dashboard,
     queues: {} as unknown as QueueService,
     instances: {} as unknown as InstanceController,
+    hubs,
     logger: { error: () => {} } as unknown as Logger,
     isReady: () => true,
   });
@@ -45,6 +47,32 @@ test("dashboard cluster endpoint returns a versioned snapshot", async () => {
   expect(await response.json()).toMatchObject({
     schemaVersion: 1,
     summary: { activeInstances: 0 },
+  });
+});
+
+test("Paper can schedule a balanced hub transfer", async () => {
+  const playerId = "02a1c31e-4748-4106-932d-a780413d7b9a";
+  const hubs = {
+    transferPlayers: async (instanceId: string, playerIds: readonly string[]) => {
+      expect(instanceId).toBe("abcdefghijklmnop");
+      expect(playerIds).toEqual([playerId]);
+      return { acceptedPlayers: [playerId], rejectedPlayers: [] };
+    },
+  } as unknown as HubRouter;
+  const response = await testApp(hubs).handle(
+    new Request(
+      "http://endercloud/api/v1/instances/abcdefghijklmnop/hub-transfers",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ playerIds: [playerId] }),
+      },
+    ),
+  );
+  expect(response.status).toBe(202);
+  expect(await response.json()).toEqual({
+    acceptedPlayers: [playerId],
+    rejectedPlayers: [],
   });
 });
 

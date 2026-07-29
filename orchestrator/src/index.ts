@@ -17,6 +17,7 @@ import { Reconciler } from "./services/reconciler.ts";
 import { SessionController } from "./services/session-controller.ts";
 import { TransferService } from "./services/transfer-service.ts";
 import { VariantSelector } from "./services/variant-selector.ts";
+import { HubRouter } from "./services/hub-router.ts";
 
 const config = loadConfig();
 const logger = new Logger(config.logLevel);
@@ -40,12 +41,14 @@ await bus.connect();
 const executor = new LocalDockerExecutor(config, logger);
 const variants = new VariantSelector(db);
 const transfers = new TransferService(db, bus, config, logger);
+const hubs = new HubRouter(db, transfers);
 const instances = new InstanceController(
   db,
   executor,
   variants,
   bus,
   transfers,
+  hubs,
   config,
   logger,
 );
@@ -53,7 +56,7 @@ const queues = new QueueService(db);
 const dashboard = new DashboardService(db);
 const capacity = new CapacityController(db, instances, logger);
 const matchmaker = new Matchmaker(db, transfers, logger);
-const sessions = new SessionController(db, instances, transfers, config, logger);
+const sessions = new SessionController(db, instances, transfers, hubs, config, logger);
 const reconciler = new Reconciler(db, executor, instances, logger);
 
 // Converge database and runtime state once before readiness probes can succeed.
@@ -65,6 +68,7 @@ ready = true;
 const app = createApp({
   queues,
   instances,
+  hubs,
   dashboard,
   logger,
   isReady: () => ready,

@@ -12,12 +12,14 @@ import org.bukkit.plugin.java.JavaPlugin;
 import fr.nayz.endercloud.core.api.EnderCloudPaperApi;
 import fr.nayz.endercloud.core.http.EnderCloudClient;
 import fr.nayz.endercloud.core.model.PaperEvent;
+import fr.nayz.endercloud.core.model.HubTransferResult;
 import fr.nayz.endercloud.core.model.QueueRequest;
 import fr.nayz.endercloud.core.model.QueueResult;
 import fr.nayz.endercloud.core.model.SessionAssignment;
 
 import java.net.URI;
 import java.util.List;
+import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -113,6 +115,19 @@ public final class EnderCloudPaperPlugin extends JavaPlugin
     @Override
     public Optional<SessionAssignment> currentAssignment() {
         return Optional.ofNullable(assignment.get());
+    }
+
+    @Override
+    public CompletableFuture<Boolean> sendToHub(java.util.UUID playerId) {
+        return sendToHub(List.of(playerId))
+                .thenApply(result -> result.accepted(playerId));
+    }
+
+    @Override
+    public CompletableFuture<HubTransferResult> sendToHub(
+            Collection<java.util.UUID> playerIds
+    ) {
+        return orchestrator.sendToHub(instanceId, playerIds);
     }
 
     @Override

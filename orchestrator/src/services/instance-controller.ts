@@ -29,6 +29,7 @@ import {
   selectRecommendedProfile,
 } from "../domain/matchmaking.ts";
 import type { TransferService } from "./transfer-service.ts";
+import type { HubRouter } from "./hub-router.ts";
 
 interface CreateRow {
   id: string;
@@ -52,6 +53,7 @@ export class InstanceController {
     private readonly variants: VariantSelector,
     private readonly bus: RedisEventBus,
     private readonly transfers: TransferService,
+    private readonly hubs: HubRouter,
     private readonly config: AppConfig,
     private readonly logger: Logger,
   ) {}
@@ -196,12 +198,15 @@ export class InstanceController {
         break;
       case "PLAYER_JOINED":
         await this.playerJoined(instanceId, event.playerId, event.sessionId);
+        await this.publishRoutingUpdate(instanceId);
         break;
       case "PLAYER_LEFT":
         await this.playerLeft(instanceId, event.playerId, event.sessionId);
+        await this.publishRoutingUpdate(instanceId);
         break;
       case "HEARTBEAT":
         await this.heartbeat(instanceId, event.playerIds);
+        await this.publishRoutingUpdate(instanceId);
         break;
       case "GAME_STARTING":
         await this.setSessionState(instanceId, event.sessionId, "STARTING");
@@ -307,96 +312,23 @@ export class InstanceController {
 
   // Actively move every player out of a cancelled minigame, retrying safely until it is empty.
   public async evacuateCancelledMinigame(sourceInstanceId: string): Promise<number> {
-    const moved = await this.db.transaction(async (tx: any) => {
-      // A global evacuation lock prevents simultaneous cancellations from overbooking hub capacity.
-      await tx.execute(sql`
-        SELECT pg_advisory_xact_lock(hashtext('endercloud:cancelled-minigame-drain'))
-      `);
-      const source = await tx.select({ id: serverInstances.id })
-        .from(serverInstances)
-        .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
-        .innerJoin(gameSessions, eq(gameSessions.id, serverInstances.sessionId))
-        .where(and(
-          eq(serverInstances.id, sourceInstanceId),
-          eq(serverInstances.lifecycleState, "DRAINING"),
-          eq(serverGroups.type, "minigame"),
-          eq(gameSessions.state, "CANCELLED"),
-        ))
-        .limit(1);
-      if (!source[0]) return 0;
-
-      const players = await tx.select({ player_id: instancePlayers.playerId })
-        .from(instancePlayers)
-        .where(and(
-          eq(instancePlayers.instanceId, sourceInstanceId),
-          sql`NOT EXISTS (
-            SELECT 1
-            FROM transfer_commands pending,
-                 jsonb_array_elements_text(pending.payload->'players') AS expected(player_id)
-            WHERE pending.state = 'PENDING'
-              AND pending.payload->>'sourceInstanceId' = ${sourceInstanceId}
-              AND expected.player_id = ${instancePlayers.playerId}::text
-          )`,
-          sql`NOT EXISTS (
-            SELECT 1
-            FROM instance_players destination_player
-            JOIN server_instances destination
-              ON destination.id = destination_player.instance_id
-            JOIN server_groups destination_group
-              ON destination_group.id = destination.group_id
-            WHERE destination_player.player_id = ${instancePlayers.playerId}
-              AND destination_group.type = 'hub'
-              AND destination.lifecycle_state = 'RUNNING'
-          )`,
-        ))
-        .orderBy(instancePlayers.connectedAt);
-      if (players.length === 0) return 0;
-
-      const targets = await tx.select({
-        id: serverInstances.id,
-        endpoint: serverInstances.endpoint,
-        available: sql<number>`GREATEST(
-          0,
-          ${serverGroups.maximumPlayersPerInstance} - ${serverInstances.playerCount} -
-          COALESCE((
-            SELECT sum(jsonb_array_length(pending.payload->'players'))::int
-            FROM transfer_commands pending
-            WHERE pending.instance_id = ${serverInstances.id}
-              AND pending.state = 'PENDING'
-          ), 0)
-        )::int`,
-      })
-        .from(serverInstances)
-        .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
-        .where(and(
-          eq(serverGroups.type, "hub"),
-          eq(serverGroups.enabled, true),
-          eq(serverInstances.lifecycleState, "RUNNING"),
-          eq(serverInstances.availabilityState, "OPEN"),
-          isNotNull(serverInstances.endpoint),
-        ))
-        .orderBy(serverInstances.playerCount, serverInstances.runningAt);
-
-      let offset = 0;
-      for (const target of targets) {
-        const capacity = Number(target.available);
-        if (capacity <= 0 || !target.endpoint) continue;
-        const selected = players
-          .slice(offset, offset + capacity)
-          .map((player: { player_id: string }) => player.player_id);
-        if (selected.length === 0) break;
-        await this.transfers.enqueue(tx, {
-          instanceId: target.id,
-          endpoint: target.endpoint,
-          players: selected,
-          sourceInstanceId,
-          reason: "SESSION_CANCELLED",
-        });
-        offset += selected.length;
-        if (offset >= players.length) break;
-      }
-      return offset;
-    });
+    const source = await this.db.select({ id: serverInstances.id })
+      .from(serverInstances)
+      .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
+      .innerJoin(gameSessions, eq(gameSessions.id, serverInstances.sessionId))
+      .where(and(
+        eq(serverInstances.id, sourceInstanceId),
+        eq(serverInstances.lifecycleState, "DRAINING"),
+        eq(serverGroups.type, "minigame"),
+        eq(gameSessions.state, "CANCELLED"),
+      ))
+      .limit(1);
+    if (!source[0]) return 0;
+    const result = await this.hubs.transferConnectedPlayers(
+      sourceInstanceId,
+      "SESSION_CANCELLED",
+    );
+    const moved = result.acceptedPlayers.length;
     if (moved > 0) {
       this.logger.info("Cancelled minigame evacuation scheduled", {
         instanceId: sourceInstanceId,
@@ -489,6 +421,40 @@ export class InstanceController {
         )
       )
       .orderBy(serverInstances.runningAt, serverInstances.id)) as unknown as readonly ServerSnapshot[];
+  }
+
+  private async publishRoutingUpdate(instanceId: string): Promise<void> {
+    const rows = (await this.db
+      .select({
+        instanceId: serverInstances.id,
+        variantId: serverInstances.variantId,
+        groupId: serverInstances.groupId,
+        groupType: serverGroups.type,
+        endpoint: serverInstances.endpoint,
+        lifecycleState: serverInstances.lifecycleState,
+        availabilityState: serverInstances.availabilityState,
+        playerCount: serverInstances.playerCount,
+        maximumPlayers: sql<number>`COALESCE(${serverGroups.maximumPlayersPerInstance}, ${serverGroups.maximumPlayers}, 0)`,
+      })
+      .from(serverInstances)
+      .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
+      .where(
+        and(
+          eq(serverInstances.id, instanceId),
+          eq(serverInstances.lifecycleState, "RUNNING"),
+          isNotNull(serverInstances.endpoint),
+        ),
+      )
+      .limit(1)) as unknown as ServerSnapshot[];
+    if (!rows[0]) return;
+    try {
+      await this.bus.publishRegistry("SERVER_UPDATED", rows[0]);
+    } catch (error) {
+      this.logger.warn("Unable to publish server load update", {
+        instanceId,
+        error: String(error),
+      });
+    }
   }
 
   // Return the current versioned player assignment for a minigame instance.

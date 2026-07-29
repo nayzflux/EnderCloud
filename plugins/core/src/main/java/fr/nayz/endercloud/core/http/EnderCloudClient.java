@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import fr.nayz.endercloud.core.model.PaperEvent;
+import fr.nayz.endercloud.core.model.HubTransferResult;
 import fr.nayz.endercloud.core.model.QueueRequest;
 import fr.nayz.endercloud.core.model.QueueResult;
 import fr.nayz.endercloud.core.model.ServerSnapshot;
@@ -19,6 +20,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Collection;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -74,6 +77,23 @@ public final class EnderCloudClient implements AutoCloseable {
                 "/api/v1/instances/" + encode(instanceId) + "/events",
                 JsonCodec.write(event)
         ).thenApply(ignored -> null);
+    }
+
+    public CompletableFuture<HubTransferResult> sendToHub(
+            String instanceId,
+            Collection<UUID> playerIds
+    ) {
+        List<UUID> uniquePlayerIds = playerIds.stream().distinct().toList();
+        if (uniquePlayerIds.isEmpty()) {
+            return CompletableFuture.completedFuture(
+                    new HubTransferResult(List.of(), List.of())
+            );
+        }
+        return send(
+                "POST",
+                "/api/v1/instances/" + encode(instanceId) + "/hub-transfers",
+                JsonCodec.write(Map.of("playerIds", uniquePlayerIds))
+        ).thenApply(response -> read(response, HubTransferResult.class));
     }
 
     public CompletableFuture<Optional<SessionAssignment>> getAssignment(String instanceId) {

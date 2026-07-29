@@ -19,6 +19,7 @@ export function decideCapacity(
   policy: CapacityPolicy,
   instances: readonly InstanceCapacityState[],
   enabled = true,
+  requiredActiveInstances = 0,
 ): CapacityDecision {
   // Terminal instances consume no capacity and must not affect scaling decisions.
   const activeInstances = instances.filter(
@@ -39,19 +40,28 @@ export function decideCapacity(
 
   // Two independent deficits are considered: total resilience and immediately usable warm capacity.
   const desiredForMinimumInstances = Math.max(0, policy.minimumInstances - active);
+  const desiredForPlayerDemand = Math.max(0, requiredActiveInstances - active);
   const desiredForWarm = Math.max(
     0,
     policy.minimumWarmInstances - warmReady - warmPending,
   );
   const room = Math.max(0, policy.maximumInstances - active);
   // Create enough for the larger deficit, but never cross the absolute maximum.
-  const create = Math.min(room, Math.max(desiredForMinimumInstances, desiredForWarm));
+  const create = Math.min(
+    room,
+    Math.max(
+      desiredForMinimumInstances,
+      desiredForPlayerDemand,
+      desiredForWarm,
+    ),
+  );
   // Drain only the overlap between excess warm capacity and instances above the minimum floor.
+  const activeFloor = Math.max(policy.minimumInstances, requiredActiveInstances);
   const drain = Math.max(
     0,
     Math.min(
       warmReady - policy.maximumWarmInstances,
-      active - policy.minimumInstances,
+      active - activeFloor,
     ),
   );
 

@@ -101,7 +101,11 @@ export interface QueueParty {
 export interface RedisEnvelope<T = unknown> {
   readonly schemaVersion: 1;
   readonly eventId: string;
-  readonly type: "SERVER_REGISTERED" | "SERVER_UNREGISTERED" | "TRANSFER_PLAYERS";
+  readonly type:
+    | "SERVER_REGISTERED"
+    | "SERVER_UPDATED"
+    | "SERVER_UNREGISTERED"
+    | "TRANSFER_PLAYERS";
   readonly occurredAt: string;
   readonly payload: T;
 }

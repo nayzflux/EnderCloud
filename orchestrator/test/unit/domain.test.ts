@@ -14,6 +14,7 @@ import {
   isWarmPending,
 } from "../../src/domain/state-machines.ts";
 import { selectVariant } from "../../src/domain/variant-selection.ts";
+import { allocateHubPlayers } from "../../src/domain/hub-routing.ts";
 
 describe("state machines", () => {
   test("accepts valid lifecycle transitions and rejects invalid ones", () => {
@@ -71,6 +72,51 @@ describe("capacity", () => {
       },
       instances,
     ).create).toBe(0);
+  });
+
+  test("scales at the aggregate hub target and counts pending instances", () => {
+    const policy = {
+      minimumInstances: 1,
+      maximumInstances: 5,
+      minimumWarmInstances: 1,
+      maximumWarmInstances: 4,
+    };
+    const running = [{ lifecycle: "RUNNING" as const, availability: "OPEN" as const }];
+    expect(decideCapacity(policy, running, true, 1).create).toBe(0);
+    expect(decideCapacity(policy, running, true, 2).create).toBe(1);
+    expect(decideCapacity(
+      policy,
+      [...running, { lifecycle: "STARTING", availability: "OPEN" }],
+      true,
+      2,
+    ).create).toBe(0);
+  });
+});
+
+describe("hub routing", () => {
+  test("balances a batch using effective load and keeps the target soft", () => {
+    const players = ["one", "two", "three", "four", "five"];
+    const decision = allocateHubPlayers(players, [
+      { id: "over-target", effectiveLoad: 75, maximumPlayers: 100 },
+      { id: "reserved", effectiveLoad: 11, maximumPlayers: 100 },
+      { id: "least", effectiveLoad: 10, maximumPlayers: 100 },
+    ]);
+    expect(decision.assignments).toEqual([
+      { targetId: "least", playerIds: ["one", "two", "four"] },
+      { targetId: "reserved", playerIds: ["three", "five"] },
+    ]);
+    expect(decision.rejectedPlayers).toEqual([]);
+  });
+
+  test("never allocates beyond the strict maximum", () => {
+    const decision = allocateHubPlayers(["one", "two", "three"], [
+      { id: "almost-full", effectiveLoad: 99, maximumPlayers: 100 },
+      { id: "full", effectiveLoad: 100, maximumPlayers: 100 },
+    ]);
+    expect(decision.assignments).toEqual([
+      { targetId: "almost-full", playerIds: ["one"] },
+    ]);
+    expect(decision.rejectedPlayers).toEqual(["two", "three"]);
   });
 });
 

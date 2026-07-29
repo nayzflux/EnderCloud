@@ -2,8 +2,11 @@ package fr.nayz.endercloud.core.api;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.Collection;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
+import fr.nayz.endercloud.core.model.HubTransferResult;
 import fr.nayz.endercloud.core.model.QueueRequest;
 import fr.nayz.endercloud.core.model.QueueResult;
 import fr.nayz.endercloud.core.model.SessionAssignment;
@@ -14,6 +17,10 @@ public interface EnderCloudPaperApi {
     CompletableFuture<Boolean> leaveQueue(String groupId, String partyId);
 
     Optional<SessionAssignment> currentAssignment();
+
+    CompletableFuture<Boolean> sendToHub(UUID playerId);
+
+    CompletableFuture<HubTransferResult> sendToHub(Collection<UUID> playerIds);
 
     CompletableFuture<Void> reportGameStarting(String sessionId);
 

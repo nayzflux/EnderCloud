@@ -31,7 +31,7 @@ export class RedisEventBus {
 
   // Notify proxies when a backend becomes available or unavailable.
   public async publishRegistry(
-    type: "SERVER_REGISTERED" | "SERVER_UNREGISTERED",
+    type: "SERVER_REGISTERED" | "SERVER_UPDATED" | "SERVER_UNREGISTERED",
     payload: unknown,
   ): Promise<void> {
     await this.publish(REGISTRY_CHANNEL, type, payload);

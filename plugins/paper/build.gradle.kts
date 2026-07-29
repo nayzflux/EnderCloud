@@ -30,7 +30,7 @@ tasks {
 
     register("copyJarToServer3", Copy::class) {
         from(shadowJar.get().archiveFile)
-        into("${System.getenv("USERPROFILE")}/Documents/Code/Minecraft/EnderCloud/templates/skywars-solo-mayas/plugins")
+        into("${System.getenv("USERPROFILE")}/Documents/Code/Minecraft/EnderCloud/templates/skywars-solo-dome/plugins")
     }
 }
 

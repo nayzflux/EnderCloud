@@ -108,8 +108,7 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
 
     @Subscribe
     public void onKicked(KickedFromServerEvent event) {
-        selectHub()
-                .filter(server -> !server.equals(event.getServer()))
+        selectHub(event.getServer())
                 .ifPresent(server -> event.setResult(
                         KickedFromServerEvent.RedirectPlayer.create(server)
                 ));
@@ -131,13 +130,11 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
 
     @Override
     public CompletableFuture<Boolean> sendToHub(UUID playerId) {
-        Optional<RegisteredServer> hub = selectHub();
         return proxy.getPlayer(playerId)
-                .map(player -> hub
-                        .map(server -> player.createConnectionRequest(server)
-                                .connect()
-                                .thenApply(result -> result.isSuccessful()))
-                        .orElseGet(() -> CompletableFuture.completedFuture(false)))
+                .flatMap(player -> player.getCurrentServer()
+                        .flatMap(connection -> instanceId(connection.getServer())))
+                .map(instanceId -> orchestrator.sendToHub(instanceId, Set.of(playerId))
+                        .thenApply(result -> result.accepted(playerId)))
                 .orElseGet(() -> CompletableFuture.completedFuture(false));
     }
 
@@ -197,6 +194,13 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
                     snapshots.put(snapshot.instanceId(), snapshot);
                     register(snapshot);
                 }
+                case "SERVER_UPDATED" -> {
+                    ServerSnapshot snapshot = JsonCodec.mapper().treeToValue(
+                            envelope.payload(),
+                            ServerSnapshot.class
+                    );
+                    update(snapshot);
+                }
                 case "SERVER_UNREGISTERED" -> unregister(
                         envelope.payload().path("instanceId").asText()
                 );
@@ -228,6 +232,16 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
         if (snapshot == null) return;
         proxy.getServer(serverName(snapshot))
                 .ifPresent(server -> proxy.unregisterServer(server.getServerInfo()));
+    }
+
+    private void update(ServerSnapshot snapshot) {
+        ServerSnapshot previous = snapshots.put(snapshot.instanceId(), snapshot);
+        Optional<RegisteredServer> registered = proxy.getServer(serverName(snapshot));
+        if (registered.isEmpty()
+                || previous == null
+                || !previous.endpoint().equals(snapshot.endpoint())) {
+            register(snapshot);
+        }
     }
 
     private void transferPlayers(JsonNode payload, boolean reloadAllowed) {
@@ -274,12 +288,37 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
     }
 
     private Optional<RegisteredServer> selectHub() {
+        return selectHub(null);
+    }
+
+    private Optional<RegisteredServer> selectHub(RegisteredServer excluded) {
         return snapshots.values().stream()
                 .filter(ServerSnapshot::isHubTarget)
-                .sorted(Comparator.comparingInt(ServerSnapshot::playerCount)
+                .filter(snapshot -> proxy.getServer(serverName(snapshot))
+                        .filter(server -> !server.equals(excluded))
+                        .isPresent())
+                .sorted(Comparator.comparingInt(this::effectivePlayerCount)
                         .thenComparing(ServerSnapshot::instanceId))
                 .map(snapshot -> proxy.getServer(serverName(snapshot)))
                 .flatMap(Optional::stream)
+                .findFirst();
+    }
+
+    private int effectivePlayerCount(ServerSnapshot snapshot) {
+        return proxy.getServer(serverName(snapshot))
+                .map(server -> Math.max(
+                        snapshot.playerCount(),
+                        server.getPlayersConnected().size()
+                ))
+                .orElse(snapshot.playerCount());
+    }
+
+    private Optional<String> instanceId(RegisteredServer server) {
+        return snapshots.values().stream()
+                .filter(snapshot -> serverName(snapshot).equals(
+                        server.getServerInfo().getName()
+                ))
+                .map(ServerSnapshot::instanceId)
                 .findFirst();
     }
 
