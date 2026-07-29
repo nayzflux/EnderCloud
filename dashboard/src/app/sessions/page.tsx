@@ -119,17 +119,36 @@ export default function SessionsPage() {
         sortValue: ({ session }) => session.instanceId ?? "",
       },
       {
-        id: "players",
-        header: "Players",
+        id: "sessionPlayers",
+        header: "Session players",
         cell: ({ session }) => (
-          <span className="font-mono text-xs tabular">
+          <span
+            className="font-mono text-xs tabular"
+            title="Players currently belonging to the session / maximum players allowed"
+          >
+            {session.activePlayerCount}
+            <span className="text-muted-foreground">
+              /{session.maximumPlayerCount}
+            </span>
+          </span>
+        ),
+        sortValue: ({ session }) => session.activePlayerCount,
+      },
+      {
+        id: "transferredPlayers",
+        header: "Transferred",
+        cell: ({ session }) => (
+          <span
+            className="font-mono text-xs tabular"
+            title="Players connected to the assigned server / players currently in the session"
+          >
             {session.connectedPlayerCount}
             <span className="text-muted-foreground">
               /{session.activePlayerCount}
             </span>
           </span>
         ),
-        sortValue: ({ session }) => session.activePlayerCount,
+        sortValue: ({ session }) => session.connectedPlayerCount,
       },
       {
         id: "teams",
@@ -177,7 +196,7 @@ export default function SessionsPage() {
     <>
       <PageHeader
         title="Sessions"
-        description="Matches formed by the matchmaker, their assigned instance and how many selected players actually connected."
+        description="Matches formed by the matchmaker, showing session occupancy separately from players transferred to the assigned server."
       />
       <ClusterGate>
         {(snapshot) => {

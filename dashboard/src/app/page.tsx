@@ -185,7 +185,7 @@ function AttentionCard({
           key: `session:${session.id}`,
           id: session.id,
           groupId: group.id,
-          detail: `${session.activePlayerCount} players · waiting ${formatAge(session.createdAt)}`,
+          detail: `${session.activePlayerCount}/${session.maximumPlayerCount} in session · ${session.connectedPlayerCount}/${session.activePlayerCount} transferred · waiting ${formatAge(session.createdAt)}`,
           badge: <SessionStateBadge state={session.state} />,
           open: () => openSession(session.id),
         })),

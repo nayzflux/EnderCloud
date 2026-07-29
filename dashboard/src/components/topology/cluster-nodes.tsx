@@ -285,20 +285,29 @@ export function SessionNode({ data }: NodeProps<ClusterFlowNode>) {
           <Gamepad2Icon className="size-3.5 shrink-0 text-muted-foreground" />
         )}
       </div>
-      <div className="mt-2 flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1.5 text-[0.7rem] text-muted-foreground">
-          <span
-            aria-hidden
-            className={cn("size-1.5 rounded-full", toneDotClass[tone])}
-          />
-          {humanizeState(session.state)}
-        </span>
-        <span className="font-mono text-[0.7rem] tabular">
-          {session.connectedPlayerCount}/{session.activePlayerCount}
-        </span>
+      <div className="mt-2 flex items-center gap-1.5 text-[0.7rem] text-muted-foreground">
+        <span
+          aria-hidden
+          className={cn("size-1.5 rounded-full", toneDotClass[tone])}
+        />
+        {humanizeState(session.state)}
+      </div>
+      <div className="mt-2 space-y-0.5 text-[0.68rem]">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-muted-foreground">In session</span>
+          <span className="font-mono tabular">
+            {session.activePlayerCount}/{session.maximumPlayerCount}
+          </span>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-muted-foreground">Transferred</span>
+          <span className="font-mono tabular">
+            {session.connectedPlayerCount}/{session.activePlayerCount}
+          </span>
+        </div>
       </div>
       {waiting ? (
-        <p className="mt-1.5 text-[0.68rem] text-muted-foreground">
+        <p className="mt-2 shrink-0 text-[0.68rem] text-muted-foreground">
           No instance assigned yet
         </p>
       ) : null}

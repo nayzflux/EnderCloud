@@ -73,8 +73,8 @@ const INSTANCE_TO_SESSION_GAP = 26;
 const QUEUE_SIZE = { width: 216, height: 140 } as const;
 const POOL_SIZE = { width: 216, height: 116 } as const;
 const INSTANCE_SIZE = { width: 260, height: 148 } as const;
-const SESSION_SIZE = { width: 260, height: 92 } as const;
-const WAITING_SIZE = { width: 260, height: 112 } as const;
+const SESSION_SIZE = { width: 260, height: 124 } as const;
+const WAITING_SIZE = { width: 260, height: 148 } as const;
 
 /** Instances, waiting sessions and hosted sessions share one column pitch. */
 const COLUMN_PITCH = INSTANCE_SIZE.width + COLUMN_GAP;

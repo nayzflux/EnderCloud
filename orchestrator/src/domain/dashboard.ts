@@ -47,6 +47,7 @@ export interface DashboardSession {
   readonly waitingDeadline: string | null;
   readonly maximumWaitingDeadline: string | null;
   readonly retryCount: number;
+  readonly maximumPlayerCount: number;
   readonly activePlayerCount: number;
   readonly connectedPlayerCount: number;
   readonly teamCount: number;

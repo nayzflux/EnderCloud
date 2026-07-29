@@ -98,16 +98,27 @@ test.describe("instances", () => {
 });
 
 test.describe("sessions", () => {
-  test("opens a session and shows its teams", async ({ page }) => {
+  test("separates session occupancy from transferred players", async ({ page }) => {
     await visit(page, "/sessions");
     await expect(page.getByRole("heading", { name: "Sessions" })).toBeVisible();
+    await expect(
+      page.getByRole("columnheader", { name: "Session players" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("columnheader", { name: "Transferred" }),
+    ).toBeVisible();
 
     await openRow(page);
 
     const panel = page.getByRole("dialog");
-    await expect(panel.getByRole("tab", { name: /Transfers/ })).toBeVisible();
-    await panel.getByRole("tab", { name: /Teams/ }).click();
-    await expect(panel.getByText(/Team \d/).first()).toBeVisible();
+    await expect(panel.getByText("In session", { exact: true })).toBeVisible();
+    await expect(panel.getByText("Transferred", { exact: true })).toBeVisible();
+    await expect(
+      panel.getByText("Active players / session capacity", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      panel.getByText("Connected to server / active players", { exact: true }),
+    ).toBeVisible();
   });
 });
 

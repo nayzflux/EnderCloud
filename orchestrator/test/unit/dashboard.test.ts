@@ -124,6 +124,7 @@ function session(
     assignment_acknowledged_at: null,
     waiting_deadline: "2026-07-27T12:01:00.000Z",
     retry_count: 0,
+    maximum_player_count: 12,
     active_player_count: 4,
     connected_player_count: state === "RUNNING" ? 4 : 0,
     team_count: 4,
@@ -150,7 +151,11 @@ describe("dashboard snapshot", () => {
     });
     expect(group?.queue.playerCount).toBe(5);
     expect(group?.sessions.find((candidate) => candidate.id === "active-session01"))
-      .toMatchObject({ instanceId: "reserved-game-01", state: "RUNNING" });
+      .toMatchObject({
+        instanceId: "reserved-game-01",
+        state: "RUNNING",
+        maximumPlayerCount: 12,
+      });
     expect(group?.sessions.find((candidate) => candidate.id === "waiting-session1"))
       .toMatchObject({ instanceId: null, state: "WAITING_FOR_INSTANCE" });
     expect(snapshot.groups.find((candidate) => candidate.id === "disabled-hub"))

@@ -94,6 +94,19 @@ describe("mockCluster", () => {
     }
   });
 
+  test("keeps session and transfer player counts coherent", () => {
+    for (const group of mockCluster(now).groups) {
+      for (const session of group.sessions) {
+        expect(session.activePlayerCount).toBeLessThanOrEqual(
+          session.maximumPlayerCount,
+        );
+        expect(session.connectedPlayerCount).toBeLessThanOrEqual(
+          session.activePlayerCount,
+        );
+      }
+    }
+  });
+
   test("covers degraded states so the UI can be exercised", () => {
     const states = new Set(
       mockCluster(now).groups.flatMap((group) =>

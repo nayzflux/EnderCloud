@@ -102,6 +102,7 @@ export interface SessionRow {
   waiting_deadline: DatabaseTimestamp | null;
   maximum_waiting_deadline?: DatabaseTimestamp | null;
   retry_count: number;
+  maximum_player_count: number;
   active_player_count: number;
   connected_player_count: number;
   team_count: number;
@@ -174,6 +175,7 @@ function toSession(row: SessionRow): DashboardSession {
     waitingDeadline: iso(row.waiting_deadline),
     maximumWaitingDeadline: iso(row.maximum_waiting_deadline ?? null),
     retryCount: row.retry_count,
+    maximumPlayerCount: row.maximum_player_count,
     activePlayerCount: row.active_player_count,
     connectedPlayerCount: row.connected_player_count,
     teamCount: row.team_count,
@@ -746,6 +748,7 @@ export class DashboardService {
       waiting_deadline: gameSessions.waitingDeadline,
       maximum_waiting_deadline: gameSessions.maximumWaitingDeadline,
       retry_count: gameSessions.retryCount,
+      maximum_player_count: sql<number>`coalesce(${serverGroups.maximumPlayers}, 0)::int`,
       active_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} <> 'LEFT')::int`,
       connected_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} = 'CONNECTED')::int`,
       team_count: serverGroups.teamCount,
@@ -803,6 +806,7 @@ export class DashboardService {
       waiting_deadline: gameSessions.waitingDeadline,
       maximum_waiting_deadline: gameSessions.maximumWaitingDeadline,
       retry_count: gameSessions.retryCount,
+      maximum_player_count: sql<number>`coalesce(${serverGroups.maximumPlayers}, 0)::int`,
       active_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} <> 'LEFT')::int`,
       connected_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} = 'CONNECTED')::int`,
       team_count: serverGroups.teamCount,

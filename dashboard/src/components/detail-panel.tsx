@@ -483,14 +483,29 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
 
         <ScrollArea className="min-h-0 flex-1">
           <TabsContent value="overview" className="space-y-5 p-4">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-3">
               <div className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">Connected</p>
+                <p className="text-xs text-muted-foreground">In session</p>
+                <p className="font-heading text-xl font-semibold tabular">
+                  {session.activePlayerCount}
+                  <span className="text-sm font-normal text-muted-foreground">
+                    /{session.maximumPlayerCount}
+                  </span>
+                </p>
+                <p className="mt-1 text-[0.7rem] text-muted-foreground">
+                  Active players / session capacity
+                </p>
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">Transferred</p>
                 <p className="font-heading text-xl font-semibold tabular">
                   {session.connectedPlayerCount}
                   <span className="text-sm font-normal text-muted-foreground">
                     /{session.activePlayerCount}
                   </span>
+                </p>
+                <p className="mt-1 text-[0.7rem] text-muted-foreground">
+                  Connected to server / active players
                 </p>
               </div>
               <div className="rounded-lg border p-3">
