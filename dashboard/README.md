@@ -16,7 +16,30 @@ Next.js, TanStack Query, React Flow and shadcn/ui.
 | `/topology`  | React Flow map wiring each group's queue and warm pool to its instances and sessions |
 
 Selecting an instance or a session anywhere in the console opens the same detail
-panel, with its players, commands, events, teams and transfers.
+panel, with its players, commands, events, teams and transfers. Its **Lifecycle**
+section is a timeline: the steps in the order they happen, how long each one took,
+which step the entity is sitting on right now, and the deadline it is racing
+against.
+
+## Elapsed times
+
+Durations used to move only when a packet arrived, so every age jumped five
+seconds at a time. A single clock, in `src/lib/clock.ts`, now drives all of them:
+
+- it anchors on the `generatedAt` the orchestrator stamps on every payload, so
+  ages are measured against the **orchestrator's** clock — a device whose clock
+  is off still shows the right numbers;
+- it advances on its own once a second, and re-anchors whenever fresher data
+  lands. An out-of-order response is ignored rather than letting time run
+  backwards;
+- `syncClock` is called from the API layer, not from an effect, so the correction
+  is applied before React renders the data it came with;
+- the `Elapsed`, `RelativeTime` and `Countdown` components in
+  `src/components/live-time.tsx` each subscribe on their own, so a two-hundred
+  row table re-renders its time cells every second — not the whole table.
+
+Anything with a fixed instant behind it (`title` and `dateTime` on the rendered
+`<time>`) keeps the exact UTC value one hover away.
 
 ## UI foundation
 

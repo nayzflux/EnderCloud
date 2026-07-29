@@ -9,7 +9,7 @@ import {
   UsersIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, XAxis, YAxis } from "recharts";
 import { ClusterGate } from "@/components/cluster-gate";
 import { useDetailPanel } from "@/components/detail-panel";
@@ -57,7 +57,8 @@ import type {
   DashboardGroup,
   LifecycleState,
 } from "@/lib/contracts";
-import { formatAge, humanizeState, ratio } from "@/lib/format";
+import { Elapsed } from "@/components/live-time";
+import { humanizeState, ratio } from "@/lib/format";
 import { lifecycleTone, needsAttention, toneChartColor } from "@/lib/status";
 
 const lifecycleOrder: readonly LifecycleState[] = [
@@ -150,7 +151,7 @@ interface AttentionItem {
   readonly key: string;
   readonly id: string;
   readonly groupId: string;
-  readonly detail: string;
+  readonly detail: ReactNode;
   readonly badge: React.ReactNode;
   readonly open: () => void;
 }
@@ -168,7 +169,11 @@ function AttentionCard({
         key: `instance:${instance.id}`,
         id: instance.id,
         groupId: group.id,
-        detail: `${instance.variantId} · ${formatAge(instance.createdAt)} old`,
+        detail: (
+          <>
+            {instance.variantId} · <Elapsed value={instance.createdAt} /> old
+          </>
+        ),
         badge: <LifecycleBadge state={instance.lifecycleState} />,
         open: () => openInstance(instance.id),
       })),
@@ -185,7 +190,13 @@ function AttentionCard({
           key: `session:${session.id}`,
           id: session.id,
           groupId: group.id,
-          detail: `${session.activePlayerCount}/${session.maximumPlayerCount} in session · ${session.connectedPlayerCount}/${session.activePlayerCount} transferred · waiting ${formatAge(session.createdAt)}`,
+          detail: (
+            <>
+              {session.activePlayerCount}/{session.maximumPlayerCount} in session
+              · {session.connectedPlayerCount}/{session.activePlayerCount}{" "}
+              transferred · waiting <Elapsed value={session.createdAt} />
+            </>
+          ),
           badge: <SessionStateBadge state={session.state} />,
           open: () => openSession(session.id),
         })),

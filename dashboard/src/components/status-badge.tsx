@@ -1,4 +1,4 @@
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { humanizeState } from "@/lib/format";
 import {
@@ -21,7 +21,8 @@ import { cn } from "@/lib/utils";
 
 interface StatusBadgeProps extends ComponentProps<typeof Badge> {
   readonly tone: Tone;
-  readonly label: string;
+  /** A node, not just text, so live durations can be rendered inside a badge. */
+  readonly label: ReactNode;
   readonly dot?: boolean;
 }
 

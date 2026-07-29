@@ -54,7 +54,9 @@ import type {
   DashboardGroup,
   DashboardQueueDetail,
 } from "@/lib/contracts";
-import { formatAge, formatDuration, formatNumber, ratio } from "@/lib/format";
+import { Elapsed } from "@/components/live-time";
+import { useNow } from "@/lib/clock";
+import { formatDuration, formatNumber, ratio } from "@/lib/format";
 import { toneChartColor, type Tone } from "@/lib/status";
 
 const QUEUE_LIMIT = 200;
@@ -119,13 +121,17 @@ function PlayersPopover({ players }: { readonly players: readonly string[] }) {
   );
 }
 
-function WaitDistribution({
-  rows,
-  now,
-}: {
-  readonly rows: readonly QueueRow[];
-  readonly now: number;
-}) {
+/** Subscribes to the clock on its own, so the parties table is not re-rendered. */
+function WaitBadge({ joinedAt }: { readonly joinedAt: string }) {
+  const now = useNow();
+  const waitSeconds = Math.max(0, (now - Date.parse(joinedAt)) / 1_000);
+  const index = bucketIndex(waitSeconds);
+  const tone = waitBuckets[index === -1 ? waitBuckets.length - 1 : index].tone;
+  return <StatusBadge tone={tone} label={<Elapsed value={joinedAt} />} />;
+}
+
+function WaitDistribution({ rows }: { readonly rows: readonly QueueRow[] }) {
+  const now = useNow();
   const data = useMemo(() => {
     const counts = waitBuckets.map(() => 0);
     for (const row of rows) {
@@ -182,10 +188,6 @@ function QueuePanel({ group }: { readonly group: DashboardGroup }) {
     placeholderData: (previous) => previous,
   });
 
-  // Wait times are measured against the snapshot's own timestamp: it keeps the
-  // render pure and makes every duration on the page agree with each other.
-  const now = query.data ? Date.parse(query.data.generatedAt) : 0;
-
   const columns = useMemo<readonly Column<QueueRow>[]>(
     () => [
       {
@@ -216,16 +218,7 @@ function QueuePanel({ group }: { readonly group: DashboardGroup }) {
       {
         id: "wait",
         header: "Waiting for",
-        cell: (row) => {
-          const waitSeconds = Math.max(
-            0,
-            (now - Date.parse(row.joinedAt)) / 1_000,
-          );
-          const index = bucketIndex(waitSeconds);
-          const tone =
-            waitBuckets[index === -1 ? waitBuckets.length - 1 : index].tone;
-          return <StatusBadge tone={tone} label={formatAge(row.joinedAt, now)} />;
-        },
+        cell: (row) => <WaitBadge joinedAt={row.joinedAt} />,
         sortValue: (row) => Date.parse(row.joinedAt),
       },
       {
@@ -235,7 +228,7 @@ function QueuePanel({ group }: { readonly group: DashboardGroup }) {
         cell: (row) => <PlayersPopover players={row.players} />,
       },
     ],
-    [now],
+    [],
   );
 
   if (query.isPending) {
@@ -271,6 +264,9 @@ function QueuePanel({ group }: { readonly group: DashboardGroup }) {
   const readiness = minimumPlayers > 0 ? ratio(detail.totalPlayers, minimumPlayers) : 0;
   const ready = minimumPlayers > 0 && detail.totalPlayers >= minimumPlayers;
   const oldestJoinedAt = detail.entries.at(0)?.joinedAt ?? null;
+  // Tones change rarely, so the snapshot instant is precise enough for them;
+  // only the rendered durations need to tick.
+  const snapshotAt = Date.parse(detail.generatedAt);
   const averageSize =
     detail.totalParties > 0 ? detail.totalPlayers / detail.totalParties : 0;
 
@@ -303,11 +299,11 @@ function QueuePanel({ group }: { readonly group: DashboardGroup }) {
         />
         <StatCard
           label="Longest wait"
-          value={oldestJoinedAt ? formatAge(oldestJoinedAt, now) : "—"}
+          value={<Elapsed value={oldestJoinedAt} />}
           icon={HourglassIcon}
           tone={
             oldestJoinedAt &&
-            now - Date.parse(oldestJoinedAt) >
+            snapshotAt - Date.parse(oldestJoinedAt) >
               (group.matchmaking?.waitingTimeoutMs ?? 60_000)
               ? "warning"
               : "neutral"
@@ -372,7 +368,7 @@ function QueuePanel({ group }: { readonly group: DashboardGroup }) {
               </CardDescription>
             </CardHeader>
             <CardContent className="flex min-h-0 flex-1 flex-col pt-4">
-              <WaitDistribution rows={rows} now={now} />
+              <WaitDistribution rows={rows} />
             </CardContent>
           </Card>
 
@@ -466,7 +462,7 @@ function QueuesView({ snapshot }: { readonly snapshot: DashboardClusterSnapshot 
         />
         <StatCard
           label="Longest wait"
-          value={oldestOverall ? formatAge(oldestOverall) : "—"}
+          value={<Elapsed value={oldestOverall} />}
           icon={HourglassIcon}
           tone={oldestOverall ? "warning" : "neutral"}
         />

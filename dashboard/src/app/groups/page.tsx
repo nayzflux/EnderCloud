@@ -9,7 +9,7 @@ import {
   UsersIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useState, type ComponentType } from "react";
+import { useState, type ComponentType, type ReactNode } from "react";
 import { ClusterGate } from "@/components/cluster-gate";
 import { FilterBar, ResultCount, SearchField } from "@/components/filter-bar";
 import { KeyValue, KeyValueGrid, PageHeader, SectionTitle } from "@/components/page-header";
@@ -34,7 +34,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { DashboardGroup } from "@/lib/contracts";
-import { formatAge, formatBytes, formatDuration, ratio } from "@/lib/format";
+import { Elapsed } from "@/components/live-time";
+import { formatBytes, formatDuration, ratio } from "@/lib/format";
 import { needsAttention } from "@/lib/status";
 
 function MiniStat({
@@ -46,7 +47,7 @@ function MiniStat({
   readonly icon: ComponentType<{ className?: string }>;
   readonly label: string;
   readonly value: string | number;
-  readonly hint?: string;
+  readonly hint?: ReactNode;
 }) {
   return (
     <div className="flex min-w-0 items-start gap-2.5">
@@ -57,7 +58,7 @@ function MiniStat({
           {value}
         </p>
         {hint ? (
-          <p className="truncate text-xs text-muted-foreground">{hint}</p>
+          <div className="truncate text-xs text-muted-foreground">{hint}</div>
         ) : null}
       </div>
     </div>
@@ -155,9 +156,13 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
             label="Queue"
             value={group.queue.playerCount}
             hint={
-              group.queue.oldestJoinedAt
-                ? `oldest ${formatAge(group.queue.oldestJoinedAt)}`
-                : `${group.queue.partyCount} parties`
+              group.queue.oldestJoinedAt ? (
+                <>
+                  oldest <Elapsed value={group.queue.oldestJoinedAt} />
+                </>
+              ) : (
+                `${group.queue.partyCount} parties`
+              )
             }
           />
         </div>

@@ -16,7 +16,9 @@ import {
   type ReactNode,
 } from "react";
 import { CopyableId } from "@/components/copyable-id";
+import { Countdown, Elapsed, RelativeTime } from "@/components/live-time";
 import { KeyValue, KeyValueGrid, SectionTitle } from "@/components/page-header";
+import { Timeline, type TimelineStep } from "@/components/timeline";
 import {
   AvailabilityBadge,
   LifecycleBadge,
@@ -38,19 +40,91 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { fetchInstance, fetchSession } from "@/lib/api";
+import { useNow } from "@/lib/clock";
 import type {
+  DashboardInstance,
   DashboardInstanceDetail,
+  DashboardSession,
   DashboardSessionDetail,
 } from "@/lib/contracts";
-import {
-  formatAge,
-  formatBytes,
-  formatCountdown,
-  formatDateTime,
-  formatRelativeTime,
-  ratio,
-} from "@/lib/format";
+import { formatBytes, formatDateTime, ratio } from "@/lib/format";
 import { cn } from "@/lib/utils";
+
+/** Ordered lifecycle of a managed container, as the orchestrator records it. */
+function instanceSteps(
+  instance: DashboardInstanceDetail["instance"],
+): readonly TimelineStep[] {
+  const failed =
+    instance.lifecycleState === "FAILED" ||
+    instance.lifecycleState === "ORPHANED";
+
+  const steps: TimelineStep[] = [
+    { id: "created", label: "Created", at: instance.createdAt },
+    { id: "starting", label: "Container starting", at: instance.startingAt },
+    {
+      id: "running",
+      label: "Ready",
+      at: instance.runningAt,
+      hint: instance.runningAt ? undefined : "waiting for the readiness signal",
+    },
+    { id: "draining", label: "Draining", at: instance.drainingAt, tone: "warning" },
+    { id: "stopped", label: "Stopped", at: instance.stoppedAt, tone: "neutral" },
+  ];
+
+  if (failed) {
+    steps.push({
+      id: "failed",
+      label:
+        instance.lifecycleState === "ORPHANED" ? "Orphaned" : "Failed",
+      at: instance.updatedAt,
+      tone: "danger",
+    });
+  }
+  return steps;
+}
+
+/** Ordered lifecycle of a match, from formation to teardown. */
+function sessionSteps(
+  session: DashboardSession & { readonly groupId: string },
+): readonly TimelineStep[] {
+  const steps: TimelineStep[] = [
+    { id: "created", label: "Formed from the queue", at: session.createdAt },
+    {
+      id: "assigned",
+      label: "Instance acknowledged",
+      at: session.assignmentAcknowledgedAt,
+      hint: session.instanceId ? undefined : "no instance assigned yet",
+    },
+    { id: "started", label: "Game started", at: session.startedAt },
+    { id: "finished", label: "Finished", at: session.finishedAt, tone: "neutral" },
+  ];
+
+  if (session.state === "FAILED" || session.state === "CANCELLED") {
+    steps.push({
+      id: "terminal",
+      label: session.state === "FAILED" ? "Failed" : "Cancelled",
+      at: session.updatedAt,
+      tone: session.state === "FAILED" ? "danger" : "neutral",
+    });
+  }
+  return steps;
+}
+
+function instanceSettled(instance: DashboardInstance): boolean {
+  return (
+    instance.lifecycleState === "STOPPED" ||
+    instance.lifecycleState === "FAILED" ||
+    instance.lifecycleState === "ORPHANED"
+  );
+}
+
+function sessionSettled(session: DashboardSession): boolean {
+  return (
+    session.state === "FINISHED" ||
+    session.state === "CANCELLED" ||
+    session.state === "FAILED"
+  );
+}
 
 type Selection =
   | { readonly kind: "instance"; readonly id: string }
@@ -189,6 +263,7 @@ function ListCard({
 }
 
 function InstancePanel({ instanceId }: { readonly instanceId: string }) {
+  const now = useNow();
   const query = useQuery({
     queryKey: ["instance", instanceId],
     queryFn: () => fetchInstance(instanceId),
@@ -283,37 +358,33 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
                 <KeyValue label="Session" mono>
                   {instance.sessionId ?? "None"}
                 </KeyValue>
-                <KeyValue label="Age">{formatAge(instance.createdAt)}</KeyValue>
+                <KeyValue label="Age">
+                  <Elapsed value={instance.createdAt} />
+                </KeyValue>
               </KeyValueGrid>
             </section>
 
             <section className="space-y-3">
-              <SectionTitle>Lifecycle timeline</SectionTitle>
-              <KeyValueGrid>
-                <KeyValue label="Created">
-                  {formatDateTime(instance.createdAt)}
-                </KeyValue>
-                <KeyValue label="Starting">
-                  {formatDateTime(instance.startingAt)}
-                </KeyValue>
-                <KeyValue label="Running">
-                  {formatDateTime(instance.runningAt)}
-                </KeyValue>
-                <KeyValue label="Draining">
-                  {formatDateTime(instance.drainingAt)}
-                </KeyValue>
-                <KeyValue label="Drain deadline">
-                  {instance.drainDeadline
-                    ? `${formatDateTime(instance.drainDeadline)} · ${formatCountdown(instance.drainDeadline)}`
-                    : "—"}
-                </KeyValue>
-                <KeyValue label="Stopped">
-                  {formatDateTime(instance.stoppedAt)}
-                </KeyValue>
-                <KeyValue label="Last update">
-                  {formatRelativeTime(instance.updatedAt)}
-                </KeyValue>
-              </KeyValueGrid>
+              <SectionTitle>Lifecycle</SectionTitle>
+              <Timeline
+                steps={instanceSteps(instance)}
+                settled={instanceSettled(instance)}
+                deadline={
+                  instance.drainDeadline
+                    ? {
+                        label: "Drain deadline",
+                        at: instance.drainDeadline,
+                        tone:
+                          Date.parse(instance.drainDeadline) < now
+                            ? "danger"
+                            : "warning",
+                      }
+                    : undefined
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                Last update <RelativeTime value={instance.updatedAt} />
+              </p>
             </section>
 
             <section className="space-y-3">
@@ -371,8 +442,8 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
                   <ListCard key={player.playerId}>
                     <CopyableId value={player.playerId} label="player id" />
                     <p className="text-xs text-muted-foreground">
-                      Connected {formatRelativeTime(player.connectedAt)} · last
-                      seen {formatRelativeTime(player.lastSeenAt)}
+                      Connected <RelativeTime value={player.connectedAt} /> ·
+                      last seen <RelativeTime value={player.lastSeenAt} />
                     </p>
                   </ListCard>
                 ))}
@@ -396,7 +467,7 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
                     <p className="text-xs text-muted-foreground">
                       {command.attempts} attempt
                       {command.attempts === 1 ? "" : "s"} ·{" "}
-                      {formatRelativeTime(command.createdAt)}
+                      <RelativeTime value={command.createdAt} />
                     </p>
                     {command.lastError ? (
                       <p className="rounded-md bg-destructive/10 px-2 py-1 font-mono text-xs text-destructive">
@@ -419,7 +490,7 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
                     <div className="flex items-center justify-between gap-3">
                       <span className="font-mono text-xs">{event.type}</span>
                       <span className="shrink-0 text-xs text-muted-foreground">
-                        {formatRelativeTime(event.createdAt)}
+                        <RelativeTime value={event.createdAt} />
                       </span>
                     </div>
                     <p className="text-xs text-muted-foreground">
@@ -438,6 +509,7 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
 
 function SessionPanel({ sessionId }: { readonly sessionId: string }) {
   const { openInstance } = useDetailPanel();
+  const now = useNow();
   const query = useQuery({
     queryKey: ["session", sessionId],
     queryFn: () => fetchSession(sessionId),
@@ -449,6 +521,14 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
 
   const detail: DashboardSessionDetail = query.data;
   const { session } = detail;
+  // The soft deadline first, then the hard lobby cap once it is the one biting.
+  const nextDeadline = sessionSettled(session)
+    ? null
+    : session.waitingDeadline
+      ? { label: "Waiting deadline", at: session.waitingDeadline }
+      : session.maximumWaitingDeadline
+        ? { label: "Maximum lobby deadline", at: session.maximumWaitingDeadline }
+        : null;
 
   return (
     <>
@@ -537,17 +617,21 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
                 <KeyValue label="Revision">{session.assignmentRevision}</KeyValue>
                 <KeyValue label="Retries">{session.retryCount}</KeyValue>
                 <KeyValue label="Acknowledged">
-                  {formatDateTime(session.assignmentAcknowledgedAt)}
+                  <RelativeTime value={session.assignmentAcknowledgedAt} />
                 </KeyValue>
                 <KeyValue label="Waiting deadline">
-                  {session.waitingDeadline
-                    ? `${formatDateTime(session.waitingDeadline)} · ${formatCountdown(session.waitingDeadline)}`
-                    : "Starts after the session becomes eligible"}
+                  {session.waitingDeadline ? (
+                    <Countdown value={session.waitingDeadline} />
+                  ) : (
+                    "Starts after the session becomes eligible"
+                  )}
                 </KeyValue>
                 <KeyValue label="Maximum lobby deadline">
-                  {session.maximumWaitingDeadline
-                    ? `${formatDateTime(session.maximumWaitingDeadline)} · ${formatCountdown(session.maximumWaitingDeadline)}`
-                    : "Not assigned yet"}
+                  {session.maximumWaitingDeadline ? (
+                    <Countdown value={session.maximumWaitingDeadline} />
+                  ) : (
+                    "Not assigned yet"
+                  )}
                 </KeyValue>
               </KeyValueGrid>
             </section>
@@ -571,21 +655,24 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
             </section>
 
             <section className="space-y-3">
-              <SectionTitle>Lifecycle timeline</SectionTitle>
-              <KeyValueGrid>
-                <KeyValue label="Created">
-                  {formatDateTime(session.createdAt)}
-                </KeyValue>
-                <KeyValue label="Started">
-                  {formatDateTime(session.startedAt)}
-                </KeyValue>
-                <KeyValue label="Finished">
-                  {formatDateTime(session.finishedAt)}
-                </KeyValue>
-                <KeyValue label="Last update">
-                  {formatRelativeTime(session.updatedAt)}
-                </KeyValue>
-              </KeyValueGrid>
+              <SectionTitle>Lifecycle</SectionTitle>
+              <Timeline
+                steps={sessionSteps(session)}
+                settled={sessionSettled(session)}
+                deadline={
+                  nextDeadline
+                    ? {
+                        label: nextDeadline.label,
+                        at: nextDeadline.at,
+                        tone:
+                          Date.parse(nextDeadline.at) < now ? "danger" : "warning",
+                      }
+                    : undefined
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                Last update <RelativeTime value={session.updatedAt} />
+              </p>
             </section>
           </TabsContent>
 
@@ -641,7 +728,7 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
                     <p className="text-xs text-muted-foreground">
                       {transfer.attempts} attempt
                       {transfer.attempts === 1 ? "" : "s"} · expires{" "}
-                      {formatRelativeTime(transfer.expiresAt)}
+                      <RelativeTime value={transfer.expiresAt} />
                     </p>
                   </ListCard>
                 ))}

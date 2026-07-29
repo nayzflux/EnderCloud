@@ -78,6 +78,35 @@ test.describe("instances", () => {
     await expect(panel.getByText(/instance\./).first()).toBeVisible();
   });
 
+  test("shows the lifecycle as an ordered timeline", async ({ page }) => {
+    await visit(page, "/instances");
+    await openRow(page);
+
+    const panel = page.getByRole("dialog");
+    await expect(panel.getByText("Lifecycle", { exact: true })).toBeVisible();
+
+    const steps = panel.locator("ol li");
+    await expect(steps.filter({ hasText: "Created" })).toBeVisible();
+    await expect(steps.filter({ hasText: "Container starting" })).toBeVisible();
+    await expect(steps.filter({ hasText: "Ready" })).toBeVisible();
+    // Steps not reached yet are called out rather than shown as an em dash.
+    await expect(panel.getByText("pending").first()).toBeVisible();
+  });
+
+  test("keeps elapsed times ticking between packets", async ({ page }) => {
+    await visit(page, "/instances");
+
+    const age = page.locator("tbody tr").first().locator("time").last();
+    await expect(age).toBeVisible();
+    const first = await age.textContent();
+
+    // Well under the five-second refetch: any change comes from the local clock.
+    await page.waitForTimeout(2_200);
+    await expect
+      .poll(async () => age.textContent())
+      .not.toBe(first);
+  });
+
   test("narrows the table down to degraded instances", async ({ page }) => {
     test.skip(!desktopOnly(page), "state filter is shown on wide viewports too");
     await visit(page, "/instances");
