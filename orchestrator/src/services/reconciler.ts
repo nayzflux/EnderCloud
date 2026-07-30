@@ -36,8 +36,7 @@ export class Reconciler {
             lifecycle_state: serverInstances.lifecycleState,
             startup_expired: sql<boolean>`(
               ${serverInstances.lifecycleState} = 'STARTING'
-              AND COALESCE(${serverInstances.startingAt}, ${serverInstances.updatedAt}) +
-                (${serverGroups.startupTimeoutMs} * interval '1 millisecond') <= now()
+              AND ${serverInstances.startupDeadline} <= now()
             )`.as("startup_expired"),
           })
           .from(serverInstances)

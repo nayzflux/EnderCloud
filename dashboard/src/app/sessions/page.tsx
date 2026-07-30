@@ -169,13 +169,20 @@ export default function SessionsPage() {
         align: "right",
         cell: ({ session }) => (
           <Countdown
-            value={session.waitingDeadline}
-            fallback="Not eligible"
+            value={
+              session.instanceAcquisitionDeadline ??
+              session.lobbyStaleDeadline
+            }
+            fallback="No active deadline"
             className="font-mono text-xs text-muted-foreground tabular"
           />
         ),
         sortValue: ({ session }) =>
-          session.waitingDeadline ? Date.parse(session.waitingDeadline) : Number.MAX_SAFE_INTEGER,
+          session.instanceAcquisitionDeadline
+            ? Date.parse(session.instanceAcquisitionDeadline)
+            : session.lobbyStaleDeadline
+                ? Date.parse(session.lobbyStaleDeadline)
+                : Number.MAX_SAFE_INTEGER,
       },
       {
         id: "age",

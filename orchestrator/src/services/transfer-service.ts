@@ -1,5 +1,4 @@
 import type postgres from "postgres";
-import type { AppConfig } from "../config.ts";
 import type { Database } from "../db/client.ts";
 import { sql, eq, and, lte, gt, asc } from "drizzle-orm";
 import type { RedisEventBus } from "../events/redis-bus.ts";
@@ -33,7 +32,6 @@ export class TransferService {
   public constructor(
     private readonly db: Database,
     private readonly bus: RedisEventBus,
-    private readonly config: AppConfig,
     private readonly logger: Logger,
   ) {}
 
@@ -44,6 +42,16 @@ export class TransferService {
     sessionId?: string,
   ): Promise<string> {
     const commandId = nanoid();
+    const target = await tx
+      .select({ timeoutMs: schema.serverGroups.transferTimeoutMs })
+      .from(schema.serverInstances)
+      .innerJoin(
+        schema.serverGroups,
+        eq(schema.serverGroups.id, schema.serverInstances.groupId),
+      )
+      .where(eq(schema.serverInstances.id, payload.instanceId))
+      .limit(1);
+    if (!target[0]) throw new Error(`Transfer target ${payload.instanceId} is unavailable`);
     // Store transfer intent in the caller's transaction. Publishing happens later,
     // so a committed session assignment cannot be lost during a Redis outage.
     await tx.insert(schema.transferCommands).values({
@@ -57,7 +65,7 @@ export class TransferService {
         ...(payload.sourceInstanceId ? { sourceInstanceId: payload.sourceInstanceId } : {}),
         ...(payload.reason ? { reason: payload.reason } : {}),
       },
-      expiresAt: sql`now() + (${this.config.transferTimeoutMs} * interval '1 millisecond')`
+      expiresAt: sql`now() + (${target[0].timeoutMs} * interval '1 millisecond')`
     });
     return commandId;
   }

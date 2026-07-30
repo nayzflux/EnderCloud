@@ -112,7 +112,7 @@ EnderCloudPaperApi cloud = Bukkit.getServicesManager()
 Use it to enqueue an atomic party, leave a queue, read the current anonymous team profiles and report
 `GAME_STARTING`, `GAME_STARTED`, `GAME_CANCELLED` or `GAME_FINISHED`. A cancellation immediately
 unregisters the minigame, durably transfers its connected players to available hubs and enforces the
-short `CANCELLED_DRAIN_TIMEOUT_MS` safety deadline. EnderCloud deliberately adds no player commands
+short per-group `timeouts.cancelled_drain` safety deadline. EnderCloud deliberately adds no player commands
 and no game-specific behavior.
 
 Paper plugins can also call `sendToHub(UUID)` or `sendToHub(Collection<UUID>)`. Accepted players are
@@ -144,3 +144,6 @@ loading their HTTP snapshot and reload it after any malformed event or reconnect
 
 This API is intentionally unauthenticated for the MVP. Do not publish port 8080 or Redis outside
 the private Docker network.
+
+See [`docs/TIMEOUTS.md`](docs/TIMEOUTS.md) for the complete list of business deadlines,
+group configuration keys and infrastructure timeouts.

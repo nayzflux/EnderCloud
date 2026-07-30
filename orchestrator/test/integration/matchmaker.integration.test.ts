@@ -9,7 +9,6 @@ import { InstanceController } from "../../src/services/instance-controller.ts";
 import type { Executor } from "../../src/executor/executor.ts";
 import type { VariantSelector } from "../../src/services/variant-selector.ts";
 import type { RedisEventBus } from "../../src/events/redis-bus.ts";
-import type { AppConfig } from "../../src/config.ts";
 import type { Logger } from "../../src/logger.ts";
 import { HubRouter } from "../../src/services/hub-router.ts";
 import { eq, inArray } from "drizzle-orm";
@@ -50,14 +49,18 @@ async function seedGroup() {
     maximumPlayers: 4,
     teamCount: 2,
     teamSize: 2,
-    waitingTimeoutMs: 5000,
+    instanceAcquisitionTimeoutMs: 5000,
+    lobbyStaleTimeoutMs: 15_000,
     minimumInstances: 0,
     maximumInstances: 10,
     minimumWarmInstances: 0,
     maximumWarmInstances: 2,
     startupTimeoutMs: 60000,
-    drainingTimeoutMs: 60000,
+    drainTimeoutMs: 60000,
+    cancelledDrainTimeoutMs: 10_000,
     shutdownTimeoutMs: 60000,
+    transferTimeoutMs: 20_000,
+    playerStaleTimeoutMs: 30_000,
   });
   
   const variantId = "test-variant";
@@ -181,7 +184,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       id: sessionId,
       groupId,
       state: "WAITING_FOR_INSTANCE",
-      waitingDeadline: new Date(Date.now() + 10000), // In the future
+      instanceAcquisitionDeadline: new Date(Date.now() + 10000), // In the future
     });
 
     const partyId = nanoid();
@@ -286,7 +289,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       groupId,
       instanceId,
       state: "TRANSFERRING",
-      waitingDeadline: new Date(Date.now() + 10000), // Waiting for backfill
+      lobbyStaleDeadline: new Date(Date.now() + 10_000),
       assignmentRevision: 1,
     });
 
@@ -326,7 +329,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     expect(mockTransfers.enqueue).toHaveBeenCalledTimes(1);
   });
 
-  test("3.3 backfills after the normal deadline until GAME_STARTING", async () => {
+  test("3.3 backfills until GAME_STARTING while the lobby is fresh", async () => {
     const { groupId, variantId } = await seedGroup();
 
     const instanceId = nanoid();
@@ -346,7 +349,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       groupId,
       instanceId,
       state: "TRANSFERRING",
-      waitingDeadline: new Date(Date.now() - 10000), // Past
+      lobbyStaleDeadline: new Date(Date.now() + 60_000),
     });
 
     await db.update(serverInstances)
@@ -407,7 +410,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     expect(entries[0]!.sessionId).toBe(sessions[0]!.id);
   });
 
-  test("GAME_STARTING locks only an eligible connected profile and cancels pending transfers", async () => {
+  test("GAME_STARTING is authoritative and cancels pending transfers", async () => {
     const { groupId, variantId } = await seedGroup();
     const instanceId = nanoid();
     const sessionId = nanoid();
@@ -424,7 +427,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       groupId,
       instanceId,
       state: "WAITING",
-      waitingDeadline: new Date(Date.now() + 60_000),
+      lobbyStaleDeadline: new Date(Date.now() + 60_000),
     });
     await db.update(serverInstances)
       .set({ sessionId, availabilityState: "RESERVED" })
@@ -457,16 +460,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       {} as RedisEventBus,
       {} as TransferService,
       {} as HubRouter,
-      {} as AppConfig,
       mockLogger,
     );
 
-    await expect(
-      controller.handlePaperEvent(instanceId, { type: "GAME_STARTING", sessionId }),
-    ).rejects.toThrow("not lock eligible");
-    await db.update(gameSessions)
-      .set({ waitingDeadline: new Date(Date.now() - 1_000) })
-      .where(eq(gameSessions.id, sessionId));
     await controller.handlePaperEvent(instanceId, { type: "GAME_STARTING", sessionId });
 
     const sessions = await db.select().from(gameSessions).where(eq(gameSessions.id, sessionId));
@@ -490,8 +486,11 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       maximumPlayersPerInstance: 100,
       targetPlayersPerInstance: 70,
       startupTimeoutMs: 60_000,
-      drainingTimeoutMs: 60_000,
+      drainTimeoutMs: 60_000,
+      cancelledDrainTimeoutMs: 10_000,
       shutdownTimeoutMs: 20_000,
+      transferTimeoutMs: 20_000,
+      playerStaleTimeoutMs: 30_000,
     });
     await db.insert(serverVariants).values({
       id: hubVariantId,
@@ -544,6 +543,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     await db.insert(instancePlayers).values(playerIds.map((playerId) => ({
       instanceId: sourceInstanceId,
       playerId,
+      staleDeadline: new Date(Date.now() + 30_000),
     })));
 
     const evacuationTransfers = {
@@ -568,7 +568,6 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       bus,
       evacuationTransfers,
       new HubRouter(db, evacuationTransfers),
-      { cancelledDrainTimeoutMs: 10_000 } as AppConfig,
       mockLogger,
     );
 
@@ -635,8 +634,11 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
         maximumPlayersPerInstance: 100,
         targetPlayersPerInstance: 70,
         startupTimeoutMs: 60_000,
-        drainingTimeoutMs: 60_000,
+        drainTimeoutMs: 60_000,
+        cancelledDrainTimeoutMs: 10_000,
         shutdownTimeoutMs: 20_000,
+        transferTimeoutMs: 20_000,
+        playerStaleTimeoutMs: 30_000,
       });
       await db.insert(serverVariants).values({
         id: hubVariantId,
@@ -674,8 +676,11 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       maximumPlayersPerInstance: 100,
       targetPlayersPerInstance: 70,
       startupTimeoutMs: 60_000,
-      drainingTimeoutMs: 60_000,
+      drainTimeoutMs: 60_000,
+      cancelledDrainTimeoutMs: 10_000,
       shutdownTimeoutMs: 20_000,
+      transferTimeoutMs: 20_000,
+      playerStaleTimeoutMs: 30_000,
     });
     await db.insert(serverVariants).values({
       id: overloadedVariantId,
@@ -701,6 +706,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     await db.insert(instancePlayers).values(playerIds.map((playerId) => ({
       instanceId: sourceInstanceId,
       playerId,
+      staleDeadline: new Date(Date.now() + 30_000),
     })));
     await db.insert(transferCommands).values({
       id: nanoid(),

@@ -50,15 +50,88 @@ function boolean(value: unknown, context: string, fallback?: boolean): boolean {
 
 // Convert human-readable duration values into milliseconds.
 export function parseDuration(value: unknown, context: string): number {
-  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
   if (typeof value !== "string") {
     throw new Error(`${context} must be a duration such as 45s or 2m`);
   }
   const match = /^(\d+)(ms|s|m|h)$/.exec(value);
   if (!match) throw new Error(`${context} must be a duration such as 45s or 2m`);
   const amount = Number.parseInt(match[1]!, 10);
+  if (amount <= 0) throw new Error(`${context} must be greater than zero`);
   const multipliers = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 } as const;
   return amount * multipliers[match[2] as keyof typeof multipliers];
+}
+
+export interface GroupTimeoutFallbacks {
+  readonly transferMs: number;
+  readonly cancelledDrainMs: number;
+  readonly playerStaleMs?: number;
+  readonly warn?: (message: string) => void;
+}
+
+function timeoutValue(
+  canonical: Record<string, unknown>,
+  canonicalKey: string,
+  legacy: Record<string, unknown>,
+  legacyKey: string,
+  context: string,
+  fallback?: number,
+  warn?: (message: string) => void,
+): number {
+  const next = canonical[canonicalKey];
+  const previous = legacy[legacyKey];
+  if (next !== undefined && previous !== undefined) {
+    throw new Error(
+      `${context} cannot define both timeouts.${canonicalKey} and deprecated ${legacyKey}`,
+    );
+  }
+  if (next !== undefined) return parseDuration(next, `${context}.timeouts.${canonicalKey}`);
+  if (previous !== undefined) {
+    warn?.(`${context}.${legacyKey} is deprecated; use timeouts.${canonicalKey}`);
+    return parseDuration(previous, `${context}.${legacyKey}`);
+  }
+  if (fallback !== undefined) return fallback;
+  throw new Error(`${context}.timeouts.${canonicalKey} is required`);
+}
+
+function renamedTimeoutValue(
+  canonical: Record<string, unknown>,
+  canonicalKey: string,
+  aliases: readonly {
+    readonly container: Record<string, unknown>;
+    readonly key: string;
+    readonly path: string;
+  }[],
+  context: string,
+  fallback?: number,
+  warn?: (message: string) => void,
+): number {
+  const candidates = [
+    {
+      value: canonical[canonicalKey],
+      path: `${context}.timeouts.${canonicalKey}`,
+      deprecated: false,
+    },
+    ...aliases.map((alias) => ({
+      value: alias.container[alias.key],
+      path: `${context}.${alias.path}`,
+      deprecated: true,
+    })),
+  ].filter((candidate) => candidate.value !== undefined);
+  if (candidates.length > 1) {
+    throw new Error(
+      `${context} defines duplicate timeout names: ${candidates.map((item) => item.path).join(", ")}`,
+    );
+  }
+  const selected = candidates[0];
+  if (selected) {
+    if (selected.deprecated) {
+      warn?.(`${selected.path} is deprecated; use timeouts.${canonicalKey}`);
+    }
+    return parseDuration(selected.value, selected.path);
+  }
+  if (fallback !== undefined) return fallback;
+  throw new Error(`${context}.timeouts.${canonicalKey} is required`);
 }
 
 function validateId(value: unknown, context: string): string {
@@ -70,7 +143,15 @@ function validateId(value: unknown, context: string): string {
 }
 
 // Validate a group descriptor and enforce cross-field capacity constraints.
-export function parseGroup(document: unknown, source: string): ServerGroupConfig {
+export function parseGroup(
+  document: unknown,
+  source: string,
+  timeoutFallbacks: GroupTimeoutFallbacks = {
+    transferMs: 20_000,
+    cancelledDrainMs: 10_000,
+    playerStaleMs: 30_000,
+  },
+): ServerGroupConfig {
   const root = object(document, source);
   const id = validateId(root.id, `${source}.id`);
   const type = root.type;
@@ -78,7 +159,8 @@ export function parseGroup(document: unknown, source: string): ServerGroupConfig
     throw new Error(`${source}.type must be hub or minigame`);
   }
   const capacity = object(root.capacity, `${source}.capacity`);
-  const lifecycle = object(root.lifecycle, `${source}.lifecycle`);
+  const timeouts = object(root.timeouts ?? {}, `${source}.timeouts`);
+  const lifecycle = object(root.lifecycle ?? {}, `${source}.lifecycle`);
   const parsed: ServerGroupConfig = {
     id,
     type,
@@ -102,18 +184,28 @@ export function parseGroup(document: unknown, source: string): ServerGroupConfig
         `${source}.capacity.maximum_warm_instances`,
       ),
     },
-    lifecycle: {
-      startupTimeoutMs: parseDuration(
-        lifecycle.startup_timeout,
-        `${source}.lifecycle.startup_timeout`,
+    timeouts: {
+      startupMs: timeoutValue(
+        timeouts, "startup", lifecycle, "startup_timeout", source, undefined, timeoutFallbacks.warn,
       ),
-      drainingTimeoutMs: parseDuration(
-        lifecycle.draining_timeout,
-        `${source}.lifecycle.draining_timeout`,
+      drainMs: timeoutValue(
+        timeouts, "drain", lifecycle, "draining_timeout", source, undefined, timeoutFallbacks.warn,
       ),
-      shutdownTimeoutMs: parseDuration(
-        lifecycle.shutdown_timeout,
-        `${source}.lifecycle.shutdown_timeout`,
+      cancelledDrainMs: timeoutValue(
+        timeouts, "cancelled_drain", {}, "cancelled_drain_timeout", source,
+        timeoutFallbacks.cancelledDrainMs, timeoutFallbacks.warn,
+      ),
+      shutdownMs: timeoutValue(
+        timeouts, "shutdown", lifecycle, "shutdown_timeout", source, undefined,
+        timeoutFallbacks.warn,
+      ),
+      transferMs: timeoutValue(
+        timeouts, "transfer", {}, "transfer_timeout", source,
+        timeoutFallbacks.transferMs, timeoutFallbacks.warn,
+      ),
+      playerStaleMs: timeoutValue(
+        timeouts, "player_stale", {}, "player_stale_timeout", source,
+        timeoutFallbacks.playerStaleMs ?? 30_000, timeoutFallbacks.warn,
       ),
     },
   };
@@ -127,18 +219,37 @@ export function parseGroup(document: unknown, source: string): ServerGroupConfig
 
   if (type === "minigame") {
     const matchmaking = object(root.matchmaking, `${source}.matchmaking`);
-    const waitingTimeoutMs = parseDuration(
-      matchmaking.waiting_timeout,
-      `${source}.matchmaking.waiting_timeout`,
-    );
+    const legacyWaitingMs = matchmaking.waiting_timeout === undefined
+      ? undefined
+      : parseDuration(matchmaking.waiting_timeout, `${source}.matchmaking.waiting_timeout`);
+    if (matchmaking.waiting_timeout !== undefined) {
+      timeoutFallbacks.warn?.(
+        `${source}.matchmaking.waiting_timeout is deprecated and no longer controls game start`,
+      );
+    }
+    if (timeouts.partial_start !== undefined) {
+      timeoutFallbacks.warn?.(
+        `${source}.timeouts.partial_start is deprecated and ignored; the minigame plugin controls game start`,
+      );
+    }
     const teamSize = integer(
       matchmaking.team_size,
       `${source}.matchmaking.team_size`,
       1,
     );
-    const partialStart = object(
-      matchmaking.partial_start ?? {},
-      `${source}.matchmaking.partial_start`,
+    if (matchmaking.team_balance !== undefined && matchmaking.partial_start !== undefined) {
+      throw new Error(
+        `${source} cannot define both matchmaking.team_balance and deprecated matchmaking.partial_start`,
+      );
+    }
+    if (matchmaking.partial_start !== undefined) {
+      timeoutFallbacks.warn?.(
+        `${source}.matchmaking.partial_start is deprecated; use matchmaking.team_balance`,
+      );
+    }
+    const teamBalance = object(
+      matchmaking.team_balance ?? matchmaking.partial_start ?? {},
+      `${source}.matchmaking.team_balance`,
     );
     const policy = {
       minimumPlayers: integer(
@@ -153,39 +264,65 @@ export function parseGroup(document: unknown, source: string): ServerGroupConfig
       ),
       teamCount: integer(matchmaking.team_count, `${source}.matchmaking.team_count`, 1),
       teamSize,
-      waitingTimeoutMs,
       candidateWindow: integer(
         matchmaking.candidate_window ?? 20,
         `${source}.matchmaking.candidate_window`,
         1,
       ),
-      instanceWaitTimeoutMs: parseDuration(
-        matchmaking.instance_wait_timeout ?? waitingTimeoutMs,
-        `${source}.matchmaking.instance_wait_timeout`,
-      ),
-      maximumWaitingTimeoutMs: parseDuration(
-        matchmaking.maximum_waiting_timeout ?? waitingTimeoutMs * 3,
-        `${source}.matchmaking.maximum_waiting_timeout`,
-      ),
       minimumPlayersPerTeam: integer(
-        partialStart.minimum_players_per_team ?? 0,
-        `${source}.matchmaking.partial_start.minimum_players_per_team`,
+        teamBalance.minimum_players_per_team ?? 0,
+        `${source}.matchmaking.team_balance.minimum_players_per_team`,
       ),
       maximumTeamSpread: integer(
-        partialStart.maximum_team_spread ?? teamSize,
-        `${source}.matchmaking.partial_start.maximum_team_spread`,
+        teamBalance.maximum_team_spread ?? teamSize,
+        `${source}.matchmaking.team_balance.maximum_team_spread`,
       ),
     };
     if (
       policy.minimumPlayers > policy.maximumPlayers ||
       policy.maximumPlayers > policy.teamCount * policy.teamSize ||
       policy.minimumPlayersPerTeam > policy.teamSize ||
-      policy.maximumTeamSpread > policy.teamSize ||
-      policy.maximumWaitingTimeoutMs < policy.waitingTimeoutMs
+      policy.maximumTeamSpread > policy.teamSize
     ) {
       throw new Error(`${source} has inconsistent matchmaking limits`);
     }
-    return { ...parsed, matchmaking: policy };
+    const instanceAcquisitionMs = timeoutValue(
+      timeouts,
+      "instance_acquisition",
+      matchmaking,
+      "instance_wait_timeout",
+      source,
+      legacyWaitingMs,
+      timeoutFallbacks.warn,
+    );
+    const lobbyStaleMs = renamedTimeoutValue(
+      timeouts,
+      "lobby_stale",
+      [
+        {
+          container: timeouts,
+          key: "ineligible_lobby",
+          path: "timeouts.ineligible_lobby",
+        },
+        {
+          container: matchmaking,
+          key: "maximum_waiting_timeout",
+          path: "matchmaking.maximum_waiting_timeout",
+        },
+      ],
+      source,
+      legacyWaitingMs === undefined ? undefined : legacyWaitingMs * 3,
+      timeoutFallbacks.warn,
+    );
+    return {
+      ...parsed,
+      timeouts: {
+        ...parsed.timeouts,
+        instanceAcquisitionMs,
+        lobbyStaleMs,
+      },
+      matchmaking: policy,
+    };
   }
 
   const routing = object(root.routing, `${source}.routing`);
@@ -276,13 +413,19 @@ async function checksumDirectory(root: string): Promise<string> {
 }
 
 // Load all group and variant descriptors and verify their references.
-export async function loadConfiguration(groupsRoot: string, templatesRoot: string) {
+export async function loadConfiguration(
+  groupsRoot: string,
+  templatesRoot: string,
+  timeoutFallbacks?: GroupTimeoutFallbacks,
+) {
   const groupFiles = (await readdir(groupsRoot, { withFileTypes: true }))
     .filter((entry) => entry.isFile() && /\.ya?ml$/i.test(entry.name))
     .map((entry) => join(groupsRoot, entry.name));
   // Group files are independent, so parse them concurrently during startup.
   const groups = await Promise.all(
-    groupFiles.map(async (path) => parseGroup(parse(await readFile(path, "utf8")), path)),
+    groupFiles.map(async (path) =>
+      parseGroup(parse(await readFile(path, "utf8")), path, timeoutFallbacks)
+    ),
   );
   const variants: Array<ServerVariantConfig & { templatePath: string; checksum: string }> = [];
   // Each template directory is optional until it contains a valid variant.yml descriptor.
@@ -315,8 +458,14 @@ export async function synchronizeConfiguration(
   groupsRoot: string,
   templatesRoot: string,
   logger: Logger,
+  timeoutFallbacks?: Omit<GroupTimeoutFallbacks, "warn">,
 ): Promise<void> {
-  const configuration = await loadConfiguration(groupsRoot, templatesRoot);
+  const configuration = await loadConfiguration(groupsRoot, templatesRoot, {
+    transferMs: timeoutFallbacks?.transferMs ?? 20_000,
+    cancelledDrainMs: timeoutFallbacks?.cancelledDrainMs ?? 10_000,
+    playerStaleMs: timeoutFallbacks?.playerStaleMs ?? 30_000,
+    warn: (message) => logger.warn("Deprecated group timeout configuration", { message }),
+  });
   // Groups and variants are committed together so readers never observe a partial config refresh.
   await db.transaction(async (tx) => {
     // Upsert preserves runtime rows that reference stable group identifiers.
@@ -331,10 +480,9 @@ export async function synchronizeConfiguration(
         maximumPlayers: matchmaking?.maximumPlayers ?? null,
         teamCount: matchmaking?.teamCount ?? null,
         teamSize: matchmaking?.teamSize ?? null,
-        waitingTimeoutMs: matchmaking?.waitingTimeoutMs ?? null,
         candidateWindow: matchmaking?.candidateWindow ?? null,
-        instanceWaitTimeoutMs: matchmaking?.instanceWaitTimeoutMs ?? null,
-        maximumWaitingTimeoutMs: matchmaking?.maximumWaitingTimeoutMs ?? null,
+        instanceAcquisitionTimeoutMs: group.timeouts.instanceAcquisitionMs ?? null,
+        lobbyStaleTimeoutMs: group.timeouts.lobbyStaleMs ?? null,
         minimumPlayersPerTeam: matchmaking?.minimumPlayersPerTeam ?? null,
         maximumTeamSpread: matchmaking?.maximumTeamSpread ?? null,
         minimumInstances: group.capacity.minimumInstances,
@@ -343,9 +491,12 @@ export async function synchronizeConfiguration(
         maximumWarmInstances: group.capacity.maximumWarmInstances,
         maximumPlayersPerInstance: routing?.maximumPlayersPerInstance ?? null,
         targetPlayersPerInstance: routing?.targetPlayersPerInstance ?? null,
-        startupTimeoutMs: group.lifecycle.startupTimeoutMs,
-        drainingTimeoutMs: group.lifecycle.drainingTimeoutMs,
-        shutdownTimeoutMs: group.lifecycle.shutdownTimeoutMs,
+        startupTimeoutMs: group.timeouts.startupMs,
+        drainTimeoutMs: group.timeouts.drainMs,
+        cancelledDrainTimeoutMs: group.timeouts.cancelledDrainMs,
+        shutdownTimeoutMs: group.timeouts.shutdownMs,
+        transferTimeoutMs: group.timeouts.transferMs,
+        playerStaleTimeoutMs: group.timeouts.playerStaleMs,
         updatedAt: sql`now()`,
       }).onConflictDoUpdate({
         target: serverGroups.id,
@@ -356,10 +507,9 @@ export async function synchronizeConfiguration(
           maximumPlayers: matchmaking?.maximumPlayers ?? null,
           teamCount: matchmaking?.teamCount ?? null,
           teamSize: matchmaking?.teamSize ?? null,
-          waitingTimeoutMs: matchmaking?.waitingTimeoutMs ?? null,
           candidateWindow: matchmaking?.candidateWindow ?? null,
-          instanceWaitTimeoutMs: matchmaking?.instanceWaitTimeoutMs ?? null,
-          maximumWaitingTimeoutMs: matchmaking?.maximumWaitingTimeoutMs ?? null,
+          instanceAcquisitionTimeoutMs: group.timeouts.instanceAcquisitionMs ?? null,
+          lobbyStaleTimeoutMs: group.timeouts.lobbyStaleMs ?? null,
           minimumPlayersPerTeam: matchmaking?.minimumPlayersPerTeam ?? null,
           maximumTeamSpread: matchmaking?.maximumTeamSpread ?? null,
           minimumInstances: group.capacity.minimumInstances,
@@ -368,9 +518,12 @@ export async function synchronizeConfiguration(
           maximumWarmInstances: group.capacity.maximumWarmInstances,
           maximumPlayersPerInstance: routing?.maximumPlayersPerInstance ?? null,
           targetPlayersPerInstance: routing?.targetPlayersPerInstance ?? null,
-          startupTimeoutMs: group.lifecycle.startupTimeoutMs,
-          drainingTimeoutMs: group.lifecycle.drainingTimeoutMs,
-          shutdownTimeoutMs: group.lifecycle.shutdownTimeoutMs,
+          startupTimeoutMs: group.timeouts.startupMs,
+          drainTimeoutMs: group.timeouts.drainMs,
+          cancelledDrainTimeoutMs: group.timeouts.cancelledDrainMs,
+          shutdownTimeoutMs: group.timeouts.shutdownMs,
+          transferTimeoutMs: group.timeouts.transferMs,
+          playerStaleTimeoutMs: group.timeouts.playerStaleMs,
           updatedAt: sql`now()`,
         }
       });

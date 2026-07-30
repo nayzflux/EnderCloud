@@ -183,19 +183,16 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
                 <KeyValue label="Teams">
                   {group.matchmaking.teamCount} × {group.matchmaking.teamSize}
                 </KeyValue>
-                <KeyValue label="Waiting timeout">
-                  {formatDuration(group.matchmaking.waitingTimeoutMs)}
+                <KeyValue label="Instance acquisition">
+                  {formatDuration(group.timeouts.instanceAcquisitionMs ?? 0)}
                 </KeyValue>
-                <KeyValue label="Instance wait">
-                  {formatDuration(group.matchmaking.instanceWaitTimeoutMs)}
-                </KeyValue>
-                <KeyValue label="Maximum lobby">
-                  {formatDuration(group.matchmaking.maximumWaitingTimeoutMs)}
+                <KeyValue label="Lobby stale">
+                  {formatDuration(group.timeouts.lobbyStaleMs ?? 0)}
                 </KeyValue>
                 <KeyValue label="Candidate window">
                   {group.matchmaking.candidateWindow} tickets
                 </KeyValue>
-                <KeyValue label="Partial start">
+                <KeyValue label="Team policy">
                   min {group.matchmaking.minimumPlayersPerTeam}/team · spread{" "}
                   {group.matchmaking.maximumTeamSpread}
                 </KeyValue>
@@ -217,16 +214,25 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
           </section>
 
           <section className="space-y-3">
-            <SectionTitle>Lifecycle timeouts</SectionTitle>
+            <SectionTitle>Timeouts</SectionTitle>
             <KeyValueGrid columns={3}>
               <KeyValue label="Startup">
-                {formatDuration(group.lifecycle.startupTimeoutMs)}
+                {formatDuration(group.timeouts.startupMs)}
               </KeyValue>
-              <KeyValue label="Draining">
-                {formatDuration(group.lifecycle.drainingTimeoutMs)}
+              <KeyValue label="Drain">
+                {formatDuration(group.timeouts.drainMs)}
+              </KeyValue>
+              <KeyValue label="Cancelled drain">
+                {formatDuration(group.timeouts.cancelledDrainMs)}
               </KeyValue>
               <KeyValue label="Shutdown">
-                {formatDuration(group.lifecycle.shutdownTimeoutMs)}
+                {formatDuration(group.timeouts.shutdownMs)}
+              </KeyValue>
+              <KeyValue label="Transfer">
+                {formatDuration(group.timeouts.transferMs)}
+              </KeyValue>
+              <KeyValue label="Player stale">
+                {formatDuration(group.timeouts.playerStaleMs)}
               </KeyValue>
             </KeyValueGrid>
           </section>

@@ -33,8 +33,11 @@ export interface AppConfig {
   readonly capacityIntervalMs: number;
   readonly matchmakingIntervalMs: number;
   readonly reconcileIntervalMs: number;
-  readonly transferTimeoutMs: number;
-  readonly cancelledDrainTimeoutMs: number;
+  /** Deprecated group-policy fallbacks kept for one compatibility window. */
+  readonly legacyTransferTimeoutMs: number;
+  readonly legacyCancelledDrainTimeoutMs: number;
+  readonly legacyTransferTimeoutConfigured: boolean;
+  readonly legacyCancelledDrainTimeoutConfigured: boolean;
   readonly maxInstanceRetries: number;
   readonly logLevel: string;
 }
@@ -61,8 +64,11 @@ export function loadConfig(): AppConfig {
     capacityIntervalMs: integer("CAPACITY_INTERVAL_MS", 5_000, 100),
     matchmakingIntervalMs: integer("MATCHMAKING_INTERVAL_MS", 1_000, 100),
     reconcileIntervalMs: integer("RECONCILE_INTERVAL_MS", 15_000, 1_000),
-    transferTimeoutMs: integer("TRANSFER_TIMEOUT_MS", 20_000, 1_000),
-    cancelledDrainTimeoutMs: integer("CANCELLED_DRAIN_TIMEOUT_MS", 10_000, 1_000),
+    legacyTransferTimeoutMs: integer("TRANSFER_TIMEOUT_MS", 20_000, 1),
+    legacyCancelledDrainTimeoutMs: integer("CANCELLED_DRAIN_TIMEOUT_MS", 10_000, 1),
+    legacyTransferTimeoutConfigured: process.env.TRANSFER_TIMEOUT_MS !== undefined,
+    legacyCancelledDrainTimeoutConfigured:
+      process.env.CANCELLED_DRAIN_TIMEOUT_MS !== undefined,
     maxInstanceRetries: integer("MAX_INSTANCE_RETRIES", 2, 0),
     logLevel: process.env.LOG_LEVEL ?? "info",
   };

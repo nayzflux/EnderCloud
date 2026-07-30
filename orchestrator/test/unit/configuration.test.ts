@@ -19,7 +19,10 @@ describe("configuration", () => {
           maximum_players: 12,
           team_count: 12,
           team_size: 1,
-          waiting_timeout: "45s",
+          team_balance: {
+            minimum_players_per_team: 0,
+            maximum_team_spread: 1,
+          },
         },
         capacity: {
           minimum_instances: 0,
@@ -27,10 +30,15 @@ describe("configuration", () => {
           minimum_warm_instances: 2,
           maximum_warm_instances: 4,
         },
-        lifecycle: {
-          startup_timeout: "90s",
-          draining_timeout: "15m",
-          shutdown_timeout: "20s",
+        timeouts: {
+          startup: "90s",
+          drain: "15m",
+          cancelled_drain: "10s",
+          shutdown: "20s",
+          transfer: "20s",
+          player_stale: "30s",
+          instance_acquisition: "45s",
+          lobby_stale: "135s",
         },
       },
       "group.yml",
@@ -38,14 +46,17 @@ describe("configuration", () => {
     expect(group.matchmaking?.maximumPlayers).toBe(12);
     expect(group.matchmaking).toMatchObject({
       candidateWindow: 20,
-      instanceWaitTimeoutMs: 45_000,
-      maximumWaitingTimeoutMs: 135_000,
       minimumPlayersPerTeam: 0,
       maximumTeamSpread: 1,
     });
+    expect(group.timeouts).toMatchObject({
+      transferMs: 20_000,
+      instanceAcquisitionMs: 45_000,
+      lobbyStaleMs: 135_000,
+    });
   });
 
-  test("parses partial-start balancing policy", () => {
+  test("parses the legacy team-balancing policy alias", () => {
     const group = parseGroup(
       {
         id: "bedwars-4v4v4v4",
@@ -80,11 +91,89 @@ describe("configuration", () => {
     );
     expect(group.matchmaking).toMatchObject({
       candidateWindow: 32,
-      instanceWaitTimeoutMs: 30_000,
-      maximumWaitingTimeoutMs: 240_000,
       minimumPlayersPerTeam: 1,
       maximumTeamSpread: 2,
     });
+    expect(group.timeouts).toMatchObject({
+      instanceAcquisitionMs: 30_000,
+      lobbyStaleMs: 240_000,
+    });
+  });
+
+  test("warns on legacy aliases and rejects duplicate timeout names", () => {
+    const warnings: string[] = [];
+    const legacy = {
+      id: "legacy-hub",
+      type: "hub",
+      capacity: {
+        minimum_instances: 0,
+        maximum_instances: 2,
+        minimum_warm_instances: 0,
+        maximum_warm_instances: 1,
+      },
+      routing: {
+        maximum_players_per_instance: 100,
+        target_players_per_instance: 70,
+      },
+      lifecycle: {
+        startup_timeout: "90s",
+        draining_timeout: "5m",
+        shutdown_timeout: "20s",
+      },
+    };
+    parseGroup(legacy, "legacy.yml", {
+      transferMs: 20_000,
+      cancelledDrainMs: 10_000,
+      warn: (message) => warnings.push(message),
+    });
+    expect(warnings.length).toBe(3);
+    expect(() =>
+      parseGroup(
+        {
+          ...legacy,
+          timeouts: { startup: "90s" },
+        },
+        "duplicate.yml",
+      )
+    ).toThrow("cannot define both");
+  });
+
+  test("rejects non-positive durations and duplicate lobby-stale aliases", () => {
+    expect(() => parseDuration("0s", "timeout")).toThrow("greater than zero");
+    expect(() => parseDuration(-1, "timeout")).toThrow("duration");
+
+    expect(() =>
+      parseGroup(
+        {
+          id: "invalid-minigame",
+          type: "minigame",
+          capacity: {
+            minimum_instances: 0,
+            maximum_instances: 2,
+            minimum_warm_instances: 0,
+            maximum_warm_instances: 1,
+          },
+          matchmaking: {
+            minimum_players: 2,
+            maximum_players: 4,
+            team_count: 2,
+            team_size: 2,
+          },
+          timeouts: {
+            startup: "90s",
+            drain: "5m",
+            cancelled_drain: "10s",
+            shutdown: "20s",
+            transfer: "20s",
+            player_stale: "30s",
+            instance_acquisition: "45s",
+            lobby_stale: "135s",
+            ineligible_lobby: "135s",
+          },
+        },
+        "invalid.yml",
+      )
+    ).toThrow("duplicate timeout names");
   });
 
   test("rejects latest images", () => {

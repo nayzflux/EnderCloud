@@ -80,14 +80,18 @@ describe("Mega Simulation End-to-End Matchmaking", () => {
       maximumPlayers: 16,
       teamCount: 4,
       teamSize: 4,
-      waitingTimeoutMs: 30000,
+      instanceAcquisitionTimeoutMs: 30000,
+      lobbyStaleTimeoutMs: 90000,
       minimumInstances: 0,
       maximumInstances: 10,
       minimumWarmInstances: 0,
       maximumWarmInstances: 2,
       startupTimeoutMs: 60000,
-      drainingTimeoutMs: 60000,
+      drainTimeoutMs: 60000,
+      cancelledDrainTimeoutMs: 10000,
       shutdownTimeoutMs: 60000,
+      transferTimeoutMs: 20000,
+      playerStaleTimeoutMs: 30000,
     });
     
     await db.insert(serverVariants).values({

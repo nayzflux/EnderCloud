@@ -1,4 +1,3 @@
-import type { AppConfig } from "../config.ts";
 import type { Database } from "../db/client.ts";
 import {
   serverInstances,
@@ -54,7 +53,6 @@ export class InstanceController {
     private readonly bus: RedisEventBus,
     private readonly transfers: TransferService,
     private readonly hubs: HubRouter,
-    private readonly config: AppConfig,
     private readonly logger: Logger,
   ) {}
 
@@ -149,6 +147,10 @@ export class InstanceController {
           .set({
             lifecycleState: "STARTING",
             startingAt: sql`COALESCE(${serverInstances.startingAt}, now())`,
+            startupDeadline: sql`now() + (
+              (SELECT startup_timeout_ms FROM server_groups WHERE id = ${row.group_id})
+              * interval '1 millisecond'
+            )`,
             containerId: created.containerId,
             runtimePath: created.runtimePath,
             endpoint: created.endpoint,
@@ -272,16 +274,17 @@ export class InstanceController {
   // Remove an eligible instance from routing and start its drain deadline.
   public async beginDrain(
     instanceId: string,
-    timeoutMs?: number,
+    reason: "NORMAL" | "SESSION_CANCELLED" = "NORMAL",
   ): Promise<boolean> {
     const rows = await this.db
       .update(serverInstances)
       .set({
         lifecycleState: "DRAINING",
         drainingAt: sql`now()`,
-        drainDeadline: timeoutMs === undefined
-          ? sql`now() + (${serverGroups.drainingTimeoutMs} * interval '1 millisecond')`
-          : sql`now() + (${timeoutMs} * interval '1 millisecond')`,
+        drainReason: reason,
+        drainDeadline: reason === "SESSION_CANCELLED"
+          ? sql`now() + (${serverGroups.cancelledDrainTimeoutMs} * interval '1 millisecond')`
+          : sql`now() + (${serverGroups.drainTimeoutMs} * interval '1 millisecond')`,
         updatedAt: sql`now()`,
       })
       .from(serverGroups)
@@ -344,6 +347,9 @@ export class InstanceController {
       .update(serverInstances)
       .set({
         lifecycleState: "STOPPING",
+        stoppingAt: sql`COALESCE(${serverInstances.stoppingAt}, now())`,
+        shutdownDeadline:
+          sql`now() + (${serverGroups.shutdownTimeoutMs} * interval '1 millisecond')`,
         updatedAt: sql`now()`,
       })
       .from(serverGroups)
@@ -465,8 +471,7 @@ export class InstanceController {
         group_id: gameSessions.groupId,
         state: gameSessions.state,
         assignment_revision: gameSessions.assignmentRevision,
-        waiting_deadline: gameSessions.waitingDeadline,
-        maximum_waiting_deadline: gameSessions.maximumWaitingDeadline,
+        lobby_stale_deadline: gameSessions.lobbyStaleDeadline,
         minimum_players: serverGroups.minimumPlayers,
         maximum_players: serverGroups.maximumPlayers,
         team_count: serverGroups.teamCount,
@@ -525,9 +530,8 @@ export class InstanceController {
         .includes(session.state) &&
         expectedPlayerCount < (session.maximum_players ?? Number.MAX_SAFE_INTEGER) &&
         (
-          !session.maximum_waiting_deadline ||
-          session.maximum_waiting_deadline.getTime() > Date.now() ||
-          lockEligible
+          !session.lobby_stale_deadline ||
+          session.lobby_stale_deadline.getTime() > Date.now()
         ),
       lockEligible,
       feasibleProfiles,
@@ -578,10 +582,24 @@ export class InstanceController {
         .values({
           instanceId: instanceId,
           playerId: playerId,
+          staleDeadline: sql`now() + (
+            SELECT player_stale_timeout_ms * interval '1 millisecond'
+            FROM server_groups g
+            JOIN server_instances i ON i.group_id = g.id
+            WHERE i.id = ${instanceId}
+          )`,
         })
         .onConflictDoUpdate({
           target: [instancePlayers.instanceId, instancePlayers.playerId],
-          set: { lastSeenAt: sql`now()` },
+          set: {
+            lastSeenAt: sql`now()`,
+            staleDeadline: sql`now() + (
+              SELECT player_stale_timeout_ms * interval '1 millisecond'
+              FROM server_groups g
+              JOIN server_instances i ON i.group_id = g.id
+              WHERE i.id = ${instanceId}
+            )`,
+          },
         });
       await tx
         .update(serverInstances)
@@ -596,6 +614,7 @@ export class InstanceController {
           .set({
             state: "CONNECTED",
             connectedAt: sql`COALESCE(${sessionPlayers.connectedAt}, now())`,
+            transferDeadline: null,
             leftAt: null,
           })
           .from(gameSessions)
@@ -674,10 +693,24 @@ export class InstanceController {
           .values({
             instanceId: instanceId,
             playerId: playerId,
+            staleDeadline: sql`now() + (
+              SELECT player_stale_timeout_ms * interval '1 millisecond'
+              FROM server_groups g
+              JOIN server_instances i ON i.group_id = g.id
+              WHERE i.id = ${instanceId}
+            )`,
           })
           .onConflictDoUpdate({
             target: [instancePlayers.instanceId, instancePlayers.playerId],
-            set: { lastSeenAt: sql`now()` },
+            set: {
+              lastSeenAt: sql`now()`,
+              staleDeadline: sql`now() + (
+                SELECT player_stale_timeout_ms * interval '1 millisecond'
+                FROM server_groups g
+                JOIN server_instances i ON i.group_id = g.id
+                WHERE i.id = ${instanceId}
+              )`,
+            },
           });
         if (effectiveSessionId) {
           const changed = await tx
@@ -685,6 +718,7 @@ export class InstanceController {
             .set({
               state: "CONNECTED",
               connectedAt: sql`COALESCE(${sessionPlayers.connectedAt}, now())`,
+              transferDeadline: null,
               leftAt: null,
             })
             .from(gameSessions)
@@ -700,37 +734,6 @@ export class InstanceController {
             .returning({ playerId: sessionPlayers.playerId });
           assignmentChanged ||= changed.length > 0;
         }
-      }
-      await tx
-        .delete(instancePlayers)
-        .where(
-          and(
-            eq(instancePlayers.instanceId, instanceId),
-            sql`${instancePlayers.lastSeenAt} < now() - interval '30 seconds'`
-          )
-        );
-      if (effectiveSessionId) {
-        // Mirror heartbeat removals into session state so transfer completion can account for departures.
-        const departed = await tx
-          .update(sessionPlayers)
-          .set({
-            state: "LEFT",
-            leftAt: sql`now()`,
-          })
-          .where(
-            and(
-              eq(sessionPlayers.sessionId, effectiveSessionId),
-              eq(sessionPlayers.state, "CONNECTED"),
-              sql`NOT EXISTS (
-              SELECT 1
-              FROM instance_players ip
-              WHERE ip.instance_id = ${instanceId}
-                AND ip.player_id = ${sessionPlayers.playerId}
-            )`
-            )
-          )
-          .returning({ playerId: sessionPlayers.playerId });
-        assignmentChanged ||= departed.length > 0;
       }
       await tx
         .update(serverInstances)
@@ -754,20 +757,12 @@ export class InstanceController {
     const transitioned = await this.db.transaction(async (tx) => {
       const current = await tx.select({
         state: gameSessions.state,
-        waiting_deadline: gameSessions.waitingDeadline,
-        minimum_players: serverGroups.minimumPlayers,
-        maximum_players: serverGroups.maximumPlayers,
-        team_count: serverGroups.teamCount,
-        team_size: serverGroups.teamSize,
-        minimum_players_per_team: serverGroups.minimumPlayersPerTeam,
-        maximum_team_spread: serverGroups.maximumTeamSpread,
       })
         .from(gameSessions)
         .innerJoin(serverInstances, and(
           eq(serverInstances.id, gameSessions.instanceId),
           eq(serverInstances.sessionId, gameSessions.id),
         ))
-        .innerJoin(serverGroups, eq(serverGroups.id, gameSessions.groupId))
         .where(and(eq(gameSessions.id, sessionId), eq(serverInstances.id, instanceId)))
         .for("update", { of: gameSessions });
       const session = current[0];
@@ -776,32 +771,6 @@ export class InstanceController {
 
       if (state === "STARTING") {
         if (!["TRANSFERRING", "WAITING"].includes(session.state)) return false;
-        const connected = await tx.select({
-          partyId: sessionPlayers.partyId,
-          ticketId: sessionPlayers.queueEntryId,
-        })
-          .from(sessionPlayers)
-          .where(and(
-            eq(sessionPlayers.sessionId, sessionId),
-            eq(sessionPlayers.state, "CONNECTED"),
-          ));
-        const sizes = new Map<string, number>();
-        for (const player of connected) {
-          const ticketId = player.ticketId ?? `legacy:${player.partyId}`;
-          sizes.set(ticketId, (sizes.get(ticketId) ?? 0) + 1);
-        }
-        const profiles = computeFeasibleProfiles(
-          [...sizes.values()],
-          session.team_count ?? 1,
-          session.team_size ?? 1,
-        );
-        if (!this.evaluateLockEligibility(
-          connected.length,
-          selectRecommendedProfile(profiles),
-          session,
-        )) {
-          throw new Error(`Session ${sessionId} is not lock eligible`);
-        }
         await tx.update(gameSessions)
           .set({ state: "STARTING", updatedAt: sql`now()` })
           .where(eq(gameSessions.id, sessionId));
@@ -861,7 +830,6 @@ export class InstanceController {
     connectedPlayerCount: number,
     recommendedProfile: readonly number[] | null,
     session: {
-      waiting_deadline: Date | null;
       minimum_players: number | null;
       maximum_players: number | null;
       minimum_players_per_team: number | null;
@@ -873,10 +841,6 @@ export class InstanceController {
       connectedPlayerCount,
       session.minimum_players ?? 1,
       session.maximum_players ?? Number.MAX_SAFE_INTEGER,
-      Boolean(
-        session.waiting_deadline &&
-        session.waiting_deadline.getTime() <= Date.now()
-      ),
       recommendedProfile,
       session.minimum_players_per_team ?? 0,
       session.maximum_team_spread ?? session.team_size ?? 1,
@@ -956,10 +920,7 @@ export class InstanceController {
         reason: reason ?? null,
       });
     }
-    const draining = await this.beginDrain(
-      instanceId,
-      this.config.cancelledDrainTimeoutMs,
-    );
+    const draining = await this.beginDrain(instanceId, "SESSION_CANCELLED");
     // A duplicate event may arrive after the lifecycle already entered DRAINING.
     if (!draining) await this.evacuateCancelledMinigame(instanceId);
   }

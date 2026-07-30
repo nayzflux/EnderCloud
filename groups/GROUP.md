@@ -15,7 +15,7 @@ enabled: true          # defaults to true when omitted
 The `id` must be unique. A template selects its group with `group` in `variant.yml`; a minigame
 group must have at least one enabled, complete variant before it can accept players.
 
-## Capacity and lifecycle
+## Capacity and timeouts
 
 Both group types require these sections:
 
@@ -26,10 +26,13 @@ capacity:
   minimum_warm_instances: 2
   maximum_warm_instances: 4
 
-lifecycle:
-  startup_timeout: 90s
-  draining_timeout: 15m
-  shutdown_timeout: 20s
+timeouts:
+  startup: 90s
+  drain: 15m
+  cancelled_drain: 10s
+  shutdown: 20s
+  transfer: 20s
+  player_stale: 30s
 ```
 
 `minimum_instances` and `maximum_instances` bound the total number of instances. Warm instances
@@ -68,25 +71,29 @@ matchmaking:
   maximum_players: 12
   team_count: 12
   team_size: 1
-  waiting_timeout: 45s
   candidate_window: 20
-  instance_wait_timeout: 45s
-  maximum_waiting_timeout: 135s
-  partial_start:
+  team_balance:
     minimum_players_per_team: 0
     maximum_team_spread: 1
 ```
 
-The first ticket creates a `FORMING` session. Once `minimum_players` and the partial-start profile
-constraints are satisfied, EnderCloud reserves an instance; only the game plugin's
-`GAME_STARTING` event locks the session. `candidate_window` bounds the FIFO work per tick,
-`instance_wait_timeout` covers capacity acquisition, and `maximum_waiting_timeout` bounds an
-ineligible on-server lobby. Their defaults are respectively `20`, `waiting_timeout`, and three
-times `waiting_timeout`.
+The first ticket creates a `FORMING` session. Once `minimum_players` and the team-balance profile
+constraints are satisfied, EnderCloud reserves an instance. The game plugin has sole authority
+to emit `GAME_STARTING`; the orchestrator does not impose a partial-start deadline.
+`candidate_window` bounds the FIFO work per tick.
+Minigame groups add their matchmaking deadlines to `timeouts`:
+
+```yaml
+  instance_acquisition: 45s
+  lobby_stale: 135s
+```
+
+They respectively bound capacity acquisition and cancel a lobby that never progresses to
+`GAME_STARTING`. See [the timeout reference](../docs/TIMEOUTS.md) for every deadline.
 
 The cap cannot exceed `team_count * team_size`; a party larger than `team_size` is rejected.
 `minimum_players_per_team` defaults to `0` and `maximum_team_spread` defaults to `team_size`.
-For a partial 4v4v4v4 mode with at least one player per team and a spread of at most two, use:
+For a 4v4v4v4 formation with at least one player per team and a spread of at most two, use:
 
 ```yaml
 matchmaking:
@@ -94,8 +101,7 @@ matchmaking:
   maximum_players: 16
   team_count: 4
   team_size: 4
-  waiting_timeout: 60s
-  partial_start:
+  team_balance:
     minimum_players_per_team: 1
     maximum_team_spread: 2
 ```

@@ -74,7 +74,7 @@ export function createApp(dependencies: ApiDependencies) {
         set.status = 400;
         return { error: "VALIDATION_ERROR", message, requestId };
       }
-      if (/unavailable|larger|already|distinct|not lock eligible/i.test(message)) {
+      if (/unavailable|larger|already|distinct/i.test(message)) {
         set.status = 409;
         return { error: "CONFLICT", message, requestId };
       }

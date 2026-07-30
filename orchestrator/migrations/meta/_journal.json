@@ -43,6 +43,13 @@
       "when": 1785236400000,
       "tag": "0005_session_player_tickets",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785416400000,
+      "tag": "0006_group_timeout_deadlines",
+      "breakpoints": true
     }
   ]
 }

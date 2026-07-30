@@ -18,8 +18,8 @@ Next.js, TanStack Query, React Flow and shadcn/ui.
 Selecting an instance or a session anywhere in the console opens the same detail
 panel, with its players, commands, events, teams and transfers. Its **Lifecycle**
 section is a timeline: the steps in the order they happen, how long each one took,
-which step the entity is sitting on right now, and the deadline it is racing
-against.
+which step the entity is sitting on right now, and the single active deadline
+selected by the orchestrator.
 
 ## Elapsed times
 
@@ -37,6 +37,11 @@ seconds at a time. A single clock, in `src/lib/clock.ts`, now drives all of them
 - the `Elapsed`, `RelativeTime` and `Countdown` components in
   `src/components/live-time.tsx` each subscribe on their own, so a two-hundred
   row table re-renders its time cells every second — not the whole table.
+
+The timeline counters continue while auto-refresh is paused, without issuing a
+network request every second. The client never infers a business deadline from
+an entity state: it renders `activeDeadline` from the version 2 dashboard
+contract.
 
 Anything with a fixed instant behind it (`title` and `dateTime` on the rendered
 `<time>`) keeps the exact UTC value one hover away.

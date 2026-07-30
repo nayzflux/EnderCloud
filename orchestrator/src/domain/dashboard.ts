@@ -21,6 +21,20 @@ export interface DashboardVariant {
   readonly runtime: VariantRuntimeSpec;
 }
 
+export type ActiveDeadlineKind =
+  | "INSTANCE_STARTUP"
+  | "INSTANCE_DRAIN"
+  | "CANCELLED_INSTANCE_DRAIN"
+  | "INSTANCE_SHUTDOWN"
+  | "INSTANCE_ACQUISITION"
+  | "PLAYER_TRANSFER"
+  | "LOBBY_STALE";
+
+export interface ActiveDeadline {
+  readonly kind: ActiveDeadlineKind;
+  readonly at: string;
+}
+
 export interface DashboardInstance {
   readonly id: string;
   readonly variantId: string;
@@ -32,9 +46,13 @@ export interface DashboardInstance {
   readonly maximumPlayers: number;
   readonly createdAt: string;
   readonly startingAt: string | null;
+  readonly startupDeadline: string | null;
   readonly runningAt: string | null;
   readonly drainingAt: string | null;
   readonly drainDeadline: string | null;
+  readonly drainReason: string | null;
+  readonly stoppingAt: string | null;
+  readonly shutdownDeadline: string | null;
   readonly updatedAt: string;
 }
 
@@ -44,8 +62,8 @@ export interface DashboardSession {
   readonly state: SessionState;
   readonly assignmentRevision: number;
   readonly assignmentAcknowledgedAt: string | null;
-  readonly waitingDeadline: string | null;
-  readonly maximumWaitingDeadline: string | null;
+  readonly instanceAcquisitionDeadline: string | null;
+  readonly lobbyStaleDeadline: string | null;
   readonly retryCount: number;
   readonly maximumPlayerCount: number;
   readonly activePlayerCount: number;
@@ -71,20 +89,22 @@ export interface DashboardGroup {
     readonly pendingWarmInstances: number;
     readonly reservedInstances: number;
   };
-  readonly lifecycle: {
-    readonly startupTimeoutMs: number;
-    readonly drainingTimeoutMs: number;
-    readonly shutdownTimeoutMs: number;
+  readonly timeouts: {
+    readonly startupMs: number;
+    readonly drainMs: number;
+    readonly cancelledDrainMs: number;
+    readonly shutdownMs: number;
+    readonly transferMs: number;
+    readonly playerStaleMs: number;
+    readonly instanceAcquisitionMs: number | null;
+    readonly lobbyStaleMs: number | null;
   };
   readonly matchmaking: {
     readonly minimumPlayers: number;
     readonly maximumPlayers: number;
     readonly teamCount: number;
     readonly teamSize: number;
-    readonly waitingTimeoutMs: number;
     readonly candidateWindow: number;
-    readonly instanceWaitTimeoutMs: number;
-    readonly maximumWaitingTimeoutMs: number;
     readonly minimumPlayersPerTeam: number;
     readonly maximumTeamSpread: number;
   } | null;
@@ -99,7 +119,7 @@ export interface DashboardGroup {
 }
 
 export interface DashboardClusterSnapshot {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly generatedAt: string;
   readonly summary: {
     readonly enabledGroups: number;
@@ -117,7 +137,7 @@ export interface DashboardClusterSnapshot {
 }
 
 export interface DashboardQueueDetail {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly generatedAt: string;
   readonly groupId: string;
   readonly totalParties: number;
@@ -132,8 +152,9 @@ export interface DashboardQueueDetail {
 }
 
 export interface DashboardInstanceDetail {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly generatedAt: string;
+  readonly activeDeadline: ActiveDeadline | null;
   readonly instance: DashboardInstance & {
     readonly groupId: string;
     readonly groupType: GroupType;
@@ -169,8 +190,9 @@ export interface DashboardInstanceDetail {
 }
 
 export interface DashboardSessionDetail {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly generatedAt: string;
+  readonly activeDeadline: ActiveDeadline | null;
   readonly session: DashboardSession & {
     readonly groupId: string;
   };

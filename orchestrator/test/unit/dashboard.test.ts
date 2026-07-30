@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  activeInstanceDeadline,
+  activeSessionDeadline,
   assembleClusterSnapshot,
   normalizeDashboardLimit,
   type DashboardRows,
@@ -18,7 +20,8 @@ function rows(): DashboardRows {
         maximum_players: 12,
         team_count: 12,
         team_size: 1,
-        waiting_timeout_ms: 45_000,
+        instance_acquisition_timeout_ms: 45_000,
+        lobby_stale_timeout_ms: 135_000,
         minimum_instances: 0,
         maximum_instances: 20,
         minimum_warm_instances: 2,
@@ -26,8 +29,11 @@ function rows(): DashboardRows {
         maximum_players_per_instance: null,
         target_players_per_instance: null,
         startup_timeout_ms: 90_000,
-        draining_timeout_ms: 900_000,
+        drain_timeout_ms: 900_000,
+        cancelled_drain_timeout_ms: 10_000,
         shutdown_timeout_ms: 20_000,
+        transfer_timeout_ms: 20_000,
+        player_stale_timeout_ms: 30_000,
       },
       {
         id: "disabled-hub",
@@ -37,7 +43,8 @@ function rows(): DashboardRows {
         maximum_players: null,
         team_count: null,
         team_size: null,
-        waiting_timeout_ms: null,
+        instance_acquisition_timeout_ms: null,
+        lobby_stale_timeout_ms: null,
         minimum_instances: 0,
         maximum_instances: 2,
         minimum_warm_instances: 0,
@@ -45,8 +52,11 @@ function rows(): DashboardRows {
         maximum_players_per_instance: 100,
         target_players_per_instance: 70,
         startup_timeout_ms: 90_000,
-        draining_timeout_ms: 300_000,
+        drain_timeout_ms: 300_000,
+        cancelled_drain_timeout_ms: 10_000,
         shutdown_timeout_ms: 20_000,
+        transfer_timeout_ms: 20_000,
+        player_stale_timeout_ms: 30_000,
       },
     ],
     variants: [
@@ -103,9 +113,14 @@ function instance(
     maximum_players: 12,
     created_at: now.toISOString(),
     starting_at: lifecycle === "STARTING" ? now.toISOString() : null,
+    startup_deadline:
+      lifecycle === "STARTING" ? "2026-07-27T12:01:30.000Z" : null,
     running_at: lifecycle === "RUNNING" ? now.toISOString() : null,
     draining_at: null,
     drain_deadline: null,
+    drain_reason: null,
+    stopping_at: null,
+    shutdown_deadline: null,
     updated_at: now.toISOString(),
   } as const;
 }
@@ -122,7 +137,9 @@ function session(
     state,
     assignment_revision: 1,
     assignment_acknowledged_at: null,
-    waiting_deadline: "2026-07-27T12:01:00.000Z",
+    instance_acquisition_deadline:
+      state === "WAITING_FOR_INSTANCE" ? "2026-07-27T12:01:00.000Z" : null,
+    lobby_stale_deadline: null,
     retry_count: 0,
     maximum_player_count: 12,
     active_player_count: 4,
@@ -168,5 +185,47 @@ describe("dashboard snapshot", () => {
     expect(normalizeDashboardLimit(undefined)).toBe(50);
     expect(normalizeDashboardLimit(0)).toBe(1);
     expect(normalizeDashboardLimit(500)).toBe(200);
+  });
+
+  test("selects only the deadline that can advance an instance", () => {
+    const starting = instance("pending-warm-001", "STARTING", "OPEN", null);
+    expect(activeInstanceDeadline(starting)).toEqual({
+      kind: "INSTANCE_STARTUP",
+      at: "2026-07-27T12:01:30.000Z",
+    });
+    expect(activeInstanceDeadline(instance("ready", "RUNNING", "OPEN", null))).toBeNull();
+
+    expect(activeInstanceDeadline({
+      ...starting,
+      lifecycle_state: "DRAINING",
+      startup_deadline: null,
+      draining_at: now.toISOString(),
+      drain_deadline: "2026-07-27T12:00:10.000Z",
+      drain_reason: "SESSION_CANCELLED",
+    })).toEqual({
+      kind: "CANCELLED_INSTANCE_DRAIN",
+      at: "2026-07-27T12:00:10.000Z",
+    });
+  });
+
+  test("prioritizes session acquisition, transfers and lobby stale", () => {
+    const waitingForInstance = session("waiting-session1", null, "WAITING_FOR_INSTANCE");
+    expect(activeSessionDeadline(waitingForInstance, [])?.kind)
+      .toBe("INSTANCE_ACQUISITION");
+
+    const waiting = {
+      ...session("waiting-session2", "instance-1", "RUNNING"),
+      state: "WAITING" as const,
+      lobby_stale_deadline: "2026-07-27T12:02:15.000Z",
+    };
+    expect(activeSessionDeadline(waiting, [{
+      state: "PENDING",
+      expires_at: "2026-07-27T12:00:20.000Z",
+    }])?.kind).toBe("PLAYER_TRANSFER");
+    expect(activeSessionDeadline(waiting, [])?.kind).toBe("LOBBY_STALE");
+    expect(activeSessionDeadline({
+      ...waiting,
+      state: "FINISHED",
+    }, [])).toBeNull();
   });
 });

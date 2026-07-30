@@ -169,6 +169,10 @@ Une assignation contient sessionId, groupId, l’état de session, une revision,
 et connectés, `acceptingTickets`, `lockEligible`, les profils réalisables et le profil recommandé.
 Chaque joueur contient son UUID, sa party, le `ticketId` de cette inscription et son état.
 
+`lockEligible` est une indication calculée depuis la politique d’équilibrage, pas une autorisation :
+le plugin conserve l’autorité sur `GAME_STARTING`, que l’orchestrateur accepte sans deadline de
+démarrage partiel.
+
 Les états d’un joueur sont SELECTED, TRANSFERRING, CONNECTED et LEFT.
 
 Les profils sont anonymes et triés. Le plugin mini-jeu reste responsable de l’affectation finale
@@ -211,8 +215,8 @@ Si le mini-jeu ne peut plus continuer, il doit signaler explicitement l’annula
 `GAME_CANCELLED` est accepté pendant le transfert, l’attente, le démarrage ou une partie déjà
 lancée. EnderCloud ferme immédiatement les transferts entrants, retire l’instance du registre
 Velocity et transfère activement les joueurs présents vers les hubs disponibles. L’évacuation est
-réessayée tant que l’instance contient des joueurs. `CANCELLED_DRAIN_TIMEOUT_MS`, égal à 10 secondes
-par défaut, constitue la deadline de sécurité avant l’arrêt forcé du serveur.
+réessayée tant que l’instance contient des joueurs. `timeouts.cancelled_drain`, égal à 10 secondes
+dans l’exemple, constitue la deadline de sécurité avant l’arrêt forcé du serveur.
 
 ## Terminer la partie
 
@@ -249,9 +253,9 @@ Le heartbeat permet à EnderCloud de corriger les états après une déconnexion
 
 ## Backfill et changement de revision
 
-Tant qu’une session est en FORMING, WAITING_FOR_INSTANCE, TRANSFERRING ou WAITING,
-l’orchestrateur peut lui ajouter un ticket compatible, y compris après la deadline normale.
-Seul `GAME_STARTING` ferme définitivement le backfill.
+Tant qu’une session est en FORMING, WAITING_FOR_INSTANCE, TRANSFERRING ou WAITING et que
+`lobby_stale` n’est pas atteint, l’orchestrateur peut lui ajouter un ticket compatible.
+`GAME_STARTING` ferme définitivement le backfill.
 
 Le plugin doit :
 
@@ -277,23 +281,29 @@ Exemple SkyWars Solo :
       maximum_players: 12
       team_count: 12
       team_size: 1
-      waiting_timeout: 45s
       candidate_window: 20
-      instance_wait_timeout: 45s
-      maximum_waiting_timeout: 135s
-      partial_start:
+      team_balance:
         minimum_players_per_team: 0
         maximum_team_spread: 1
 
-Exemple BedWars 4v4v4v4 à démarrage partiel :
+    timeouts:
+      startup: 90s
+      drain: 15m
+      cancelled_drain: 10s
+      shutdown: 20s
+      transfer: 20s
+      player_stale: 30s
+      instance_acquisition: 45s
+      lobby_stale: 135s
+
+Exemple BedWars 4v4v4v4 avec équilibrage des équipes :
 
     matchmaking:
       minimum_players: 8
       maximum_players: 16
       team_count: 4
       team_size: 4
-      waiting_timeout: 60s
-      partial_start:
+      team_balance:
         minimum_players_per_team: 1
         maximum_team_spread: 2
 

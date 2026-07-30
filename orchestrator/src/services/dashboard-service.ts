@@ -24,6 +24,7 @@ import type {
   DashboardSession,
   DashboardSessionDetail,
   DashboardVariant,
+  ActiveDeadline,
 } from "../domain/dashboard.ts";
 import type {
   AvailabilityState,
@@ -48,10 +49,9 @@ export interface GroupRow {
   maximum_players: number | null;
   team_count: number | null;
   team_size: number | null;
-  waiting_timeout_ms: number | null;
   candidate_window?: number | null;
-  instance_wait_timeout_ms?: number | null;
-  maximum_waiting_timeout_ms?: number | null;
+  instance_acquisition_timeout_ms?: number | null;
+  lobby_stale_timeout_ms?: number | null;
   minimum_players_per_team?: number | null;
   maximum_team_spread?: number | null;
   minimum_instances: number;
@@ -61,8 +61,11 @@ export interface GroupRow {
   maximum_players_per_instance: number | null;
   target_players_per_instance: number | null;
   startup_timeout_ms: number;
-  draining_timeout_ms: number;
+  drain_timeout_ms: number;
+  cancelled_drain_timeout_ms: number;
   shutdown_timeout_ms: number;
+  transfer_timeout_ms: number;
+  player_stale_timeout_ms: number;
 }
 
 export interface VariantRow {
@@ -86,9 +89,13 @@ export interface InstanceRow {
   maximum_players: number;
   created_at: DatabaseTimestamp;
   starting_at: DatabaseTimestamp | null;
+  startup_deadline: DatabaseTimestamp | null;
   running_at: DatabaseTimestamp | null;
   draining_at: DatabaseTimestamp | null;
   drain_deadline: DatabaseTimestamp | null;
+  drain_reason: string | null;
+  stopping_at: DatabaseTimestamp | null;
+  shutdown_deadline: DatabaseTimestamp | null;
   updated_at: DatabaseTimestamp;
 }
 
@@ -99,8 +106,8 @@ export interface SessionRow {
   state: SessionState;
   assignment_revision: number;
   assignment_acknowledged_at: DatabaseTimestamp | null;
-  waiting_deadline: DatabaseTimestamp | null;
-  maximum_waiting_deadline?: DatabaseTimestamp | null;
+  instance_acquisition_deadline: DatabaseTimestamp | null;
+  lobby_stale_deadline?: DatabaseTimestamp | null;
   retry_count: number;
   maximum_player_count: number;
   active_player_count: number;
@@ -158,9 +165,13 @@ function toInstance(row: InstanceRow): DashboardInstance {
     maximumPlayers: row.maximum_players,
     createdAt: requiredIso(row.created_at),
     startingAt: iso(row.starting_at),
+    startupDeadline: iso(row.startup_deadline),
     runningAt: iso(row.running_at),
     drainingAt: iso(row.draining_at),
     drainDeadline: iso(row.drain_deadline),
+    drainReason: row.drain_reason,
+    stoppingAt: iso(row.stopping_at),
+    shutdownDeadline: iso(row.shutdown_deadline),
     updatedAt: requiredIso(row.updated_at),
   };
 }
@@ -172,8 +183,8 @@ function toSession(row: SessionRow): DashboardSession {
     state: row.state,
     assignmentRevision: row.assignment_revision,
     assignmentAcknowledgedAt: iso(row.assignment_acknowledged_at),
-    waitingDeadline: iso(row.waiting_deadline),
-    maximumWaitingDeadline: iso(row.maximum_waiting_deadline ?? null),
+    instanceAcquisitionDeadline: iso(row.instance_acquisition_deadline),
+    lobbyStaleDeadline: iso(row.lobby_stale_deadline ?? null),
     retryCount: row.retry_count,
     maximumPlayerCount: row.maximum_player_count,
     activePlayerCount: row.active_player_count,
@@ -184,6 +195,54 @@ function toSession(row: SessionRow): DashboardSession {
     finishedAt: iso(row.finished_at),
     updatedAt: requiredIso(row.updated_at),
   };
+}
+
+export function activeInstanceDeadline(row: InstanceRow): ActiveDeadline | null {
+  if (row.lifecycle_state === "STARTING" && row.startup_deadline) {
+    return { kind: "INSTANCE_STARTUP", at: requiredIso(row.startup_deadline) };
+  }
+  if (row.lifecycle_state === "DRAINING" && row.drain_deadline) {
+    return {
+      kind:
+        row.drain_reason === "SESSION_CANCELLED"
+          ? "CANCELLED_INSTANCE_DRAIN"
+          : "INSTANCE_DRAIN",
+      at: requiredIso(row.drain_deadline),
+    };
+  }
+  if (row.lifecycle_state === "STOPPING" && row.shutdown_deadline) {
+    return { kind: "INSTANCE_SHUTDOWN", at: requiredIso(row.shutdown_deadline) };
+  }
+  return null;
+}
+
+export function activeSessionDeadline(
+  row: SessionRow,
+  transfers: readonly { state: string; expires_at: DatabaseTimestamp }[],
+): ActiveDeadline | null {
+  if (row.state === "WAITING_FOR_INSTANCE" && row.instance_acquisition_deadline) {
+    return {
+      kind: "INSTANCE_ACQUISITION",
+      at: requiredIso(row.instance_acquisition_deadline),
+    };
+  }
+  if (row.state !== "TRANSFERRING" && row.state !== "WAITING") return null;
+  const pendingTransfer = transfers
+    .filter((transfer) => transfer.state === "PENDING")
+    .toSorted(
+      (left, right) =>
+        new Date(left.expires_at).getTime() - new Date(right.expires_at).getTime(),
+    )[0];
+  if (pendingTransfer) {
+    return { kind: "PLAYER_TRANSFER", at: requiredIso(pendingTransfer.expires_at) };
+  }
+  if (row.lobby_stale_deadline) {
+    return {
+      kind: "LOBBY_STALE",
+      at: requiredIso(row.lobby_stale_deadline),
+    };
+  }
+  return null;
 }
 
 const emptyQueue: DashboardQueueSummary = {
@@ -258,29 +317,28 @@ export function assembleClusterSnapshot(
         pendingWarmInstances,
         reservedInstances,
       },
-      lifecycle: {
-        startupTimeoutMs: group.startup_timeout_ms,
-        drainingTimeoutMs: group.draining_timeout_ms,
-        shutdownTimeoutMs: group.shutdown_timeout_ms,
+      timeouts: {
+        startupMs: group.startup_timeout_ms,
+        drainMs: group.drain_timeout_ms,
+        cancelledDrainMs: group.cancelled_drain_timeout_ms,
+        shutdownMs: group.shutdown_timeout_ms,
+        transferMs: group.transfer_timeout_ms,
+        playerStaleMs: group.player_stale_timeout_ms,
+        instanceAcquisitionMs: group.instance_acquisition_timeout_ms ?? null,
+        lobbyStaleMs: group.lobby_stale_timeout_ms ?? null,
       },
       matchmaking:
         group.type === "minigame" &&
         group.minimum_players !== null &&
         group.maximum_players !== null &&
         group.team_count !== null &&
-        group.team_size !== null &&
-        group.waiting_timeout_ms !== null
+        group.team_size !== null
           ? {
               minimumPlayers: group.minimum_players,
               maximumPlayers: group.maximum_players,
               teamCount: group.team_count,
               teamSize: group.team_size,
-              waitingTimeoutMs: group.waiting_timeout_ms,
               candidateWindow: group.candidate_window ?? 20,
-              instanceWaitTimeoutMs:
-                group.instance_wait_timeout_ms ?? group.waiting_timeout_ms,
-              maximumWaitingTimeoutMs:
-                group.maximum_waiting_timeout_ms ?? group.waiting_timeout_ms * 3,
               minimumPlayersPerTeam: group.minimum_players_per_team ?? 0,
               maximumTeamSpread: group.maximum_team_spread ?? group.team_size,
             }
@@ -304,7 +362,7 @@ export function assembleClusterSnapshot(
   const allInstances = groups.flatMap((group) => group.instances);
   const allSessions = groups.flatMap((group) => group.sessions);
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: generatedAt.toISOString(),
     summary: {
       enabledGroups: groups.filter((group) => group.enabled).length,
@@ -408,7 +466,7 @@ export class DashboardService {
 
       const totalParties = totals[0]?.party_count ?? 0;
       return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         generatedAt: new Date().toISOString(),
         groupId,
         totalParties,
@@ -440,9 +498,13 @@ export class DashboardService {
         maximum_players: sql<number>`coalesce(${serverGroups.maximumPlayersPerInstance}, ${serverGroups.maximumPlayers}, 0)::int`,
         created_at: serverInstances.createdAt,
         starting_at: serverInstances.startingAt,
+        startup_deadline: serverInstances.startupDeadline,
         running_at: serverInstances.runningAt,
         draining_at: serverInstances.drainingAt,
         drain_deadline: serverInstances.drainDeadline,
+        drain_reason: serverInstances.drainReason,
+        stopping_at: serverInstances.stoppingAt,
+        shutdown_deadline: serverInstances.shutdownDeadline,
         updated_at: serverInstances.updatedAt,
         
         group_type: serverGroups.type,
@@ -508,8 +570,9 @@ export class DashboardService {
       ]);
 
       return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         generatedAt: new Date().toISOString(),
+        activeDeadline: activeInstanceDeadline(instance as InstanceRow),
         instance: {
           ...toInstance(instance),
           groupId: instance.group_id,
@@ -646,9 +709,14 @@ export class DashboardService {
       const transferByTicket = new Map(
         ticketRows.map((row) => [row.id, row.transfer_started_at]),
       );
+      const generatedAt = new Date();
       return {
-        schemaVersion: 1,
-        generatedAt: new Date().toISOString(),
+        schemaVersion: 2,
+        generatedAt: generatedAt.toISOString(),
+        activeDeadline: activeSessionDeadline(
+          session,
+          transfers,
+        ),
         session: { ...toSession(session), groupId: session.group_id },
         tickets: [...byTicket.entries()]
           .map(([ticketId, ticket]) => ({
@@ -686,10 +754,9 @@ export class DashboardService {
       maximum_players: serverGroups.maximumPlayers,
       team_count: serverGroups.teamCount,
       team_size: serverGroups.teamSize,
-      waiting_timeout_ms: serverGroups.waitingTimeoutMs,
       candidate_window: serverGroups.candidateWindow,
-      instance_wait_timeout_ms: serverGroups.instanceWaitTimeoutMs,
-      maximum_waiting_timeout_ms: serverGroups.maximumWaitingTimeoutMs,
+      instance_acquisition_timeout_ms: serverGroups.instanceAcquisitionTimeoutMs,
+      lobby_stale_timeout_ms: serverGroups.lobbyStaleTimeoutMs,
       minimum_players_per_team: serverGroups.minimumPlayersPerTeam,
       maximum_team_spread: serverGroups.maximumTeamSpread,
       minimum_instances: serverGroups.minimumInstances,
@@ -699,8 +766,11 @@ export class DashboardService {
       maximum_players_per_instance: serverGroups.maximumPlayersPerInstance,
       target_players_per_instance: serverGroups.targetPlayersPerInstance,
       startup_timeout_ms: serverGroups.startupTimeoutMs,
-      draining_timeout_ms: serverGroups.drainingTimeoutMs,
+      drain_timeout_ms: serverGroups.drainTimeoutMs,
+      cancelled_drain_timeout_ms: serverGroups.cancelledDrainTimeoutMs,
       shutdown_timeout_ms: serverGroups.shutdownTimeoutMs,
+      transfer_timeout_ms: serverGroups.transferTimeoutMs,
+      player_stale_timeout_ms: serverGroups.playerStaleTimeoutMs,
     })
     .from(serverGroups)
     .orderBy(asc(serverGroups.type), asc(serverGroups.id));
@@ -728,9 +798,13 @@ export class DashboardService {
       maximum_players: sql<number>`coalesce(${serverGroups.maximumPlayersPerInstance}, ${serverGroups.maximumPlayers}, 0)::int`,
       created_at: serverInstances.createdAt,
       starting_at: serverInstances.startingAt,
+      startup_deadline: serverInstances.startupDeadline,
       running_at: serverInstances.runningAt,
       draining_at: serverInstances.drainingAt,
       drain_deadline: serverInstances.drainDeadline,
+      drain_reason: serverInstances.drainReason,
+      stopping_at: serverInstances.stoppingAt,
+      shutdown_deadline: serverInstances.shutdownDeadline,
       updated_at: serverInstances.updatedAt,
     })
     .from(serverInstances)
@@ -745,8 +819,8 @@ export class DashboardService {
       state: gameSessions.state,
       assignment_revision: gameSessions.assignmentRevision,
       assignment_acknowledged_at: gameSessions.assignmentAcknowledgedAt,
-      waiting_deadline: gameSessions.waitingDeadline,
-      maximum_waiting_deadline: gameSessions.maximumWaitingDeadline,
+      instance_acquisition_deadline: gameSessions.instanceAcquisitionDeadline,
+      lobby_stale_deadline: gameSessions.lobbyStaleDeadline,
       retry_count: gameSessions.retryCount,
       maximum_player_count: sql<number>`coalesce(${serverGroups.maximumPlayers}, 0)::int`,
       active_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} <> 'LEFT')::int`,
@@ -803,8 +877,8 @@ export class DashboardService {
       state: gameSessions.state,
       assignment_revision: gameSessions.assignmentRevision,
       assignment_acknowledged_at: gameSessions.assignmentAcknowledgedAt,
-      waiting_deadline: gameSessions.waitingDeadline,
-      maximum_waiting_deadline: gameSessions.maximumWaitingDeadline,
+      instance_acquisition_deadline: gameSessions.instanceAcquisitionDeadline,
+      lobby_stale_deadline: gameSessions.lobbyStaleDeadline,
       retry_count: gameSessions.retryCount,
       maximum_player_count: sql<number>`coalesce(${serverGroups.maximumPlayers}, 0)::int`,
       active_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} <> 'LEFT')::int`,

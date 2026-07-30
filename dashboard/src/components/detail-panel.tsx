@@ -40,8 +40,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { fetchInstance, fetchSession } from "@/lib/api";
-import { useNow } from "@/lib/clock";
 import type {
+  ActiveDeadlineKind,
   DashboardInstance,
   DashboardInstanceDetail,
   DashboardSession,
@@ -68,6 +68,7 @@ function instanceSteps(
       hint: instance.runningAt ? undefined : "waiting for the readiness signal",
     },
     { id: "draining", label: "Draining", at: instance.drainingAt, tone: "warning" },
+    { id: "stopping", label: "Stopping", at: instance.stoppingAt, tone: "warning" },
     { id: "stopped", label: "Stopped", at: instance.stoppedAt, tone: "neutral" },
   ];
 
@@ -82,6 +83,16 @@ function instanceSteps(
   }
   return steps;
 }
+
+const deadlineLabels: Readonly<Record<ActiveDeadlineKind, string>> = {
+  INSTANCE_STARTUP: "Startup deadline",
+  INSTANCE_DRAIN: "Drain deadline",
+  CANCELLED_INSTANCE_DRAIN: "Cancelled-session drain deadline",
+  INSTANCE_SHUTDOWN: "Shutdown deadline",
+  INSTANCE_ACQUISITION: "Instance acquisition deadline",
+  PLAYER_TRANSFER: "Player transfer deadline",
+  LOBBY_STALE: "Lobby stale deadline",
+};
 
 /** Ordered lifecycle of a match, from formation to teardown. */
 function sessionSteps(
@@ -263,7 +274,6 @@ function ListCard({
 }
 
 function InstancePanel({ instanceId }: { readonly instanceId: string }) {
-  const now = useNow();
   const query = useQuery({
     queryKey: ["instance", instanceId],
     queryFn: () => fetchInstance(instanceId),
@@ -370,14 +380,10 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
                 steps={instanceSteps(instance)}
                 settled={instanceSettled(instance)}
                 deadline={
-                  instance.drainDeadline
+                  detail.activeDeadline
                     ? {
-                        label: "Drain deadline",
-                        at: instance.drainDeadline,
-                        tone:
-                          Date.parse(instance.drainDeadline) < now
-                            ? "danger"
-                            : "warning",
+                        label: deadlineLabels[detail.activeDeadline.kind],
+                        at: detail.activeDeadline.at,
                       }
                     : undefined
                 }
@@ -509,7 +515,6 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
 
 function SessionPanel({ sessionId }: { readonly sessionId: string }) {
   const { openInstance } = useDetailPanel();
-  const now = useNow();
   const query = useQuery({
     queryKey: ["session", sessionId],
     queryFn: () => fetchSession(sessionId),
@@ -521,14 +526,6 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
 
   const detail: DashboardSessionDetail = query.data;
   const { session } = detail;
-  // The soft deadline first, then the hard lobby cap once it is the one biting.
-  const nextDeadline = sessionSettled(session)
-    ? null
-    : session.waitingDeadline
-      ? { label: "Waiting deadline", at: session.waitingDeadline }
-      : session.maximumWaitingDeadline
-        ? { label: "Maximum lobby deadline", at: session.maximumWaitingDeadline }
-        : null;
 
   return (
     <>
@@ -619,16 +616,16 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
                 <KeyValue label="Acknowledged">
                   <RelativeTime value={session.assignmentAcknowledgedAt} />
                 </KeyValue>
-                <KeyValue label="Waiting deadline">
-                  {session.waitingDeadline ? (
-                    <Countdown value={session.waitingDeadline} />
+                <KeyValue label="Instance acquisition">
+                  {session.instanceAcquisitionDeadline ? (
+                    <Countdown value={session.instanceAcquisitionDeadline} />
                   ) : (
-                    "Starts after the session becomes eligible"
+                    "Not waiting for capacity"
                   )}
                 </KeyValue>
-                <KeyValue label="Maximum lobby deadline">
-                  {session.maximumWaitingDeadline ? (
-                    <Countdown value={session.maximumWaitingDeadline} />
+                <KeyValue label="Lobby stale">
+                  {session.lobbyStaleDeadline ? (
+                    <Countdown value={session.lobbyStaleDeadline} />
                   ) : (
                     "Not assigned yet"
                   )}
@@ -660,12 +657,10 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
                 steps={sessionSteps(session)}
                 settled={sessionSettled(session)}
                 deadline={
-                  nextDeadline
+                  detail.activeDeadline
                     ? {
-                        label: nextDeadline.label,
-                        at: nextDeadline.at,
-                        tone:
-                          Date.parse(nextDeadline.at) < now ? "danger" : "warning",
+                        label: deadlineLabels[detail.activeDeadline.kind],
+                        at: detail.activeDeadline.at,
                       }
                     : undefined
                 }

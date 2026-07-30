@@ -56,7 +56,7 @@ import type {
 } from "@/lib/contracts";
 import { Elapsed } from "@/components/live-time";
 import { useNow } from "@/lib/clock";
-import { formatDuration, formatNumber, ratio } from "@/lib/format";
+import { formatNumber, ratio } from "@/lib/format";
 import { toneChartColor, type Tone } from "@/lib/status";
 
 const QUEUE_LIMIT = 200;
@@ -266,7 +266,6 @@ function QueuePanel({ group }: { readonly group: DashboardGroup }) {
   const oldestJoinedAt = detail.entries.at(0)?.joinedAt ?? null;
   // Tones change rarely, so the snapshot instant is precise enough for them;
   // only the rendered durations need to tick.
-  const snapshotAt = Date.parse(detail.generatedAt);
   const averageSize =
     detail.totalParties > 0 ? detail.totalPlayers / detail.totalParties : 0;
 
@@ -301,18 +300,7 @@ function QueuePanel({ group }: { readonly group: DashboardGroup }) {
           label="Longest wait"
           value={<Elapsed value={oldestJoinedAt} />}
           icon={HourglassIcon}
-          tone={
-            oldestJoinedAt &&
-            snapshotAt - Date.parse(oldestJoinedAt) >
-              (group.matchmaking?.waitingTimeoutMs ?? 60_000)
-              ? "warning"
-              : "neutral"
-          }
-          hint={
-            group.matchmaking
-              ? `timeout ${formatDuration(group.matchmaking.waitingTimeoutMs)}`
-              : undefined
-          }
+          tone="neutral"
         />
         <StatCard
           label="Warm capacity"

@@ -121,7 +121,7 @@ describe("hub routing", () => {
 });
 
 describe("matchmaking profiles", () => {
-  test("recommends the required balanced partial composition", () => {
+  test("recommends the required balanced composition", () => {
     const profiles = computeFeasibleProfiles([3, 2, 1, 1, 1], 4, 4);
     expect(selectRecommendedProfile(profiles)).toEqual([1, 2, 2, 3]);
   });
@@ -167,12 +167,11 @@ describe("matchmaking profiles", () => {
     expect(ranked[0]?.sessionId).toBe("open");
   });
 
-  test("lets only a full or deadline-eligible connected profile lock", () => {
-    expect(isSessionLockEligible(8, 8, 16, false, [1, 2, 2, 3], 1, 2)).toBeFalse();
-    expect(isSessionLockEligible(8, 8, 16, true, [1, 2, 2, 3], 1, 2)).toBeTrue();
-    expect(isSessionLockEligible(8, 8, 16, true, [0, 0, 4, 4], 1, 2)).toBeFalse();
-    expect(isSessionLockEligible(16, 8, 16, false, [4, 4, 4, 4], 1, 2)).toBeTrue();
-    expect(isSessionLockEligible(16, 8, 16, false, null, 1, 2)).toBeFalse();
+  test("reports whether a connected profile matches the advisory team policy", () => {
+    expect(isSessionLockEligible(8, 8, 16, [1, 2, 2, 3], 1, 2)).toBeTrue();
+    expect(isSessionLockEligible(8, 8, 16, [0, 0, 4, 4], 1, 2)).toBeFalse();
+    expect(isSessionLockEligible(16, 8, 16, [4, 4, 4, 4], 1, 2)).toBeTrue();
+    expect(isSessionLockEligible(16, 8, 16, null, 1, 2)).toBeFalse();
   });
 });
 

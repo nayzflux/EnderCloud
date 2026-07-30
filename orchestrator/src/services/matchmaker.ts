@@ -11,7 +11,6 @@ import {
 import {
   computeFeasibleProfiles,
   isProfileEligible,
-  isSessionLockEligible,
   rankSessionCandidates,
   selectRecommendedProfile,
 } from "../domain/matchmaking.ts";
@@ -26,10 +25,10 @@ interface GroupRow {
   maximumPlayers: number;
   teamCount: number;
   teamSize: number;
-  waitingTimeoutMs: number;
   candidateWindow: number;
-  instanceWaitTimeoutMs: number;
-  maximumWaitingTimeoutMs: number;
+  instanceAcquisitionTimeoutMs: number;
+  lobbyStaleTimeoutMs: number;
+  transferTimeoutMs: number;
   minimumPlayersPerTeam: number;
   maximumTeamSpread: number;
 }
@@ -44,9 +43,8 @@ interface SessionCandidate {
   endpoint: string | null;
   createdAt: Date;
   ticketSizes: number[];
-  connectedTicketSizes: number[];
-  waitingDeadline: Date | null;
-  maximumWaitingDeadline: Date | null;
+  instanceAcquisitionDeadline: Date | null;
+  lobbyStaleDeadline: Date | null;
 }
 
 interface QueueRow {
@@ -81,10 +79,10 @@ export class Matchmaker {
           maximumPlayers: serverGroups.maximumPlayers,
           teamCount: serverGroups.teamCount,
           teamSize: serverGroups.teamSize,
-          waitingTimeoutMs: serverGroups.waitingTimeoutMs,
           candidateWindow: serverGroups.candidateWindow,
-          instanceWaitTimeoutMs: serverGroups.instanceWaitTimeoutMs,
-          maximumWaitingTimeoutMs: serverGroups.maximumWaitingTimeoutMs,
+          instanceAcquisitionTimeoutMs: serverGroups.instanceAcquisitionTimeoutMs,
+          lobbyStaleTimeoutMs: serverGroups.lobbyStaleTimeoutMs,
+          transferTimeoutMs: serverGroups.transferTimeoutMs,
           minimumPlayersPerTeam: serverGroups.minimumPlayersPerTeam,
           maximumTeamSpread: serverGroups.maximumTeamSpread,
         })
@@ -125,7 +123,7 @@ export class Matchmaker {
       if (!locks[0]?.locked) return;
 
       const sessions = (await this.loadSessions(tx, group.id)).filter((session) =>
-        this.acceptsTicketsAtCurrentDeadline(session, group)
+        this.acceptsTicketsBeforeStaleDeadline(session)
       );
       // Capacity is assigned before queue placement so a waiting session resumes promptly.
       for (const session of sessions) {
@@ -134,12 +132,12 @@ export class Matchmaker {
             await this.tryAssignInstance(tx, group, session);
           } else {
             session.state = "FORMING";
-            session.waitingDeadline = null;
+            session.instanceAcquisitionDeadline = null;
             await tx.update(gameSessions)
               .set({
                 state: "FORMING",
-                waitingDeadline: null,
-                maximumWaitingDeadline: null,
+                instanceAcquisitionDeadline: null,
+                lobbyStaleDeadline: null,
                 updatedAt: sql`now()`,
               })
               .where(
@@ -179,16 +177,15 @@ export class Matchmaker {
             endpoint: null,
             createdAt: new Date(),
             ticketSizes: [],
-            connectedTicketSizes: [],
-            waitingDeadline: null,
-            maximumWaitingDeadline: null,
+            instanceAcquisitionDeadline: null,
+            lobbyStaleDeadline: null,
           };
           await tx.insert(gameSessions).values({
             id: session.id,
             groupId: group.id,
             state: "FORMING",
-            waitingDeadline: null,
-            maximumWaitingDeadline: null,
+            instanceAcquisitionDeadline: null,
+            lobbyStaleDeadline: null,
           });
           sessions.push(session);
         }
@@ -214,10 +211,10 @@ export class Matchmaker {
     maximumPlayers: number | null;
     teamCount: number | null;
     teamSize: number | null;
-    waitingTimeoutMs: number | null;
     candidateWindow: number | null;
-    instanceWaitTimeoutMs: number | null;
-    maximumWaitingTimeoutMs: number | null;
+    instanceAcquisitionTimeoutMs: number | null;
+    lobbyStaleTimeoutMs: number | null;
+    transferTimeoutMs: number;
     minimumPlayersPerTeam: number | null;
     maximumTeamSpread: number | null;
   }): GroupRow | null {
@@ -226,7 +223,8 @@ export class Matchmaker {
       raw.maximumPlayers == null ||
       raw.teamCount == null ||
       raw.teamSize == null ||
-      raw.waitingTimeoutMs == null
+      raw.instanceAcquisitionTimeoutMs == null ||
+      raw.lobbyStaleTimeoutMs == null
     ) {
       this.logger.error("Skipping minigame group with incomplete policy", {
         groupId: raw.id,
@@ -239,11 +237,10 @@ export class Matchmaker {
       maximumPlayers: raw.maximumPlayers,
       teamCount: raw.teamCount,
       teamSize: raw.teamSize,
-      waitingTimeoutMs: raw.waitingTimeoutMs,
       candidateWindow: raw.candidateWindow ?? 20,
-      instanceWaitTimeoutMs: raw.instanceWaitTimeoutMs ?? raw.waitingTimeoutMs,
-      maximumWaitingTimeoutMs:
-        raw.maximumWaitingTimeoutMs ?? raw.waitingTimeoutMs * 3,
+      instanceAcquisitionTimeoutMs: raw.instanceAcquisitionTimeoutMs,
+      lobbyStaleTimeoutMs: raw.lobbyStaleTimeoutMs,
+      transferTimeoutMs: raw.transferTimeoutMs,
       minimumPlayersPerTeam: raw.minimumPlayersPerTeam ?? 0,
       maximumTeamSpread: raw.maximumTeamSpread ?? raw.teamSize,
     };
@@ -257,8 +254,8 @@ export class Matchmaker {
         instance_id: gameSessions.instanceId,
         endpoint: serverInstances.endpoint,
         created_at: gameSessions.createdAt,
-        waiting_deadline: gameSessions.waitingDeadline,
-        maximum_waiting_deadline: gameSessions.maximumWaitingDeadline,
+        instance_acquisition_deadline: gameSessions.instanceAcquisitionDeadline,
+        lobby_stale_deadline: gameSessions.lobbyStaleDeadline,
       })
       .from(gameSessions)
       .leftJoin(serverInstances, eq(serverInstances.id, gameSessions.instanceId))
@@ -280,8 +277,8 @@ export class Matchmaker {
       instance_id: string | null;
       endpoint: string | null;
       created_at: Date;
-      waiting_deadline: Date | null;
-      maximum_waiting_deadline: Date | null;
+      instance_acquisition_deadline: Date | null;
+      lobby_stale_deadline: Date | null;
     }[];
     const sizes = rows.length === 0
       ? []
@@ -290,7 +287,6 @@ export class Matchmaker {
             session_id: sessionPlayers.sessionId,
             ticket_id: sql<string>`COALESCE(${sessionPlayers.queueEntryId}, 'legacy:' || ${sessionPlayers.partyId})`,
             player_count: sql<number>`count(*)::integer`,
-            connected_player_count: sql<number>`count(*) FILTER (WHERE ${sessionPlayers.state} = 'CONNECTED')::integer`,
           })
           .from(sessionPlayers)
           .where(
@@ -307,7 +303,6 @@ export class Matchmaker {
             session_id: string;
             ticket_id: string;
             player_count: number;
-            connected_player_count: number;
           }[];
     return rows.map((row) => ({
       id: row.id,
@@ -318,46 +313,19 @@ export class Matchmaker {
       ticketSizes: sizes
         .filter((size) => size.session_id === row.id)
         .map((size) => Number(size.player_count)),
-      connectedTicketSizes: sizes
-        .filter((size) => size.session_id === row.id && Number(size.connected_player_count) > 0)
-        .map((size) => Number(size.connected_player_count)),
-      waitingDeadline: row.waiting_deadline ? new Date(row.waiting_deadline) : null,
-      maximumWaitingDeadline: row.maximum_waiting_deadline
-        ? new Date(row.maximum_waiting_deadline)
+      instanceAcquisitionDeadline: row.instance_acquisition_deadline
+        ? new Date(row.instance_acquisition_deadline)
+        : null,
+      lobbyStaleDeadline: row.lobby_stale_deadline
+        ? new Date(row.lobby_stale_deadline)
         : null,
     }));
   }
 
-  private acceptsTicketsAtCurrentDeadline(
-    session: SessionCandidate,
-    group: GroupRow,
-  ): boolean {
-    if (
-      !session.maximumWaitingDeadline ||
-      session.maximumWaitingDeadline.getTime() > Date.now()
-    ) {
-      return true;
-    }
-    const connectedCount = session.connectedTicketSizes.reduce(
-      (sum, size) => sum + size,
-      0,
-    );
-    const profiles = computeFeasibleProfiles(
-      session.connectedTicketSizes,
-      group.teamCount,
-      group.teamSize,
-    );
-    return isSessionLockEligible(
-      connectedCount,
-      group.minimumPlayers,
-      group.maximumPlayers,
-      Boolean(
-        session.waitingDeadline &&
-        session.waitingDeadline.getTime() <= Date.now()
-      ),
-      selectRecommendedProfile(profiles),
-      group.minimumPlayersPerTeam,
-      group.maximumTeamSpread,
+  private acceptsTicketsBeforeStaleDeadline(session: SessionCandidate): boolean {
+    return (
+      !session.lobbyStaleDeadline ||
+      session.lobbyStaleDeadline.getTime() > Date.now()
     );
   }
 
@@ -471,8 +439,9 @@ export class Matchmaker {
       await tx.update(gameSessions)
         .set({
           state: "WAITING_FOR_INSTANCE",
-          waitingDeadline: sql`now() + (${group.instanceWaitTimeoutMs} * interval '1 millisecond')`,
-          maximumWaitingDeadline: null,
+          instanceAcquisitionDeadline:
+            sql`now() + (${group.instanceAcquisitionTimeoutMs} * interval '1 millisecond')`,
+          lobbyStaleDeadline: null,
           updatedAt: sql`now()`,
         })
         .where(and(eq(gameSessions.id, session.id), eq(gameSessions.state, "FORMING")));
@@ -547,8 +516,9 @@ export class Matchmaker {
         instanceId: reservation.id,
         state: "TRANSFERRING",
         transferStartedAt: sql`now()`,
-        waitingDeadline: sql`now() + (${group.waitingTimeoutMs} * interval '1 millisecond')`,
-        maximumWaitingDeadline: sql`now() + (${group.maximumWaitingTimeoutMs} * interval '1 millisecond')`,
+        instanceAcquisitionDeadline: null,
+        lobbyStaleDeadline:
+          sql`now() + (${group.lobbyStaleTimeoutMs} * interval '1 millisecond')`,
         updatedAt: sql`now()`,
       })
       .where(
@@ -567,7 +537,12 @@ export class Matchmaker {
         ),
       );
     await tx.update(sessionPlayers)
-      .set({ state: "TRANSFERRING", transferringAt: sql`now()` })
+      .set({
+        state: "TRANSFERRING",
+        transferringAt: sql`now()`,
+        transferDeadline:
+          sql`now() + (${group.transferTimeoutMs} * interval '1 millisecond')`,
+      })
       .where(
         and(
           eq(sessionPlayers.sessionId, session.id),
@@ -604,8 +579,19 @@ export class Matchmaker {
     await tx.update(queueEntries)
       .set({ transferStartedAt: sql`now()`, updatedAt: sql`now()` })
       .where(eq(queueEntries.id, party.entryId));
+    const timeout = await tx.select({ transferTimeoutMs: serverGroups.transferTimeoutMs })
+      .from(serverGroups)
+      .innerJoin(gameSessions, eq(gameSessions.groupId, serverGroups.id))
+      .where(eq(gameSessions.id, session.id))
+      .limit(1);
+    if (!timeout[0]) throw new Error(`Session ${session.id} has no timeout policy`);
     await tx.update(sessionPlayers)
-      .set({ state: "TRANSFERRING", transferringAt: sql`now()` })
+      .set({
+        state: "TRANSFERRING",
+        transferringAt: sql`now()`,
+        transferDeadline:
+          sql`now() + (${timeout[0].transferTimeoutMs} * interval '1 millisecond')`,
+      })
       .where(
         and(
           eq(sessionPlayers.sessionId, session.id),

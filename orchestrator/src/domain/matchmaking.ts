@@ -126,15 +126,13 @@ export function isSessionLockEligible(
   connectedPlayerCount: number,
   minimumPlayers: number,
   maximumPlayers: number,
-  normalDeadlineReached: boolean,
   recommendedProfile: TeamProfile | null,
   minimumPlayersPerTeam: number,
   maximumTeamSpread: number,
 ): boolean {
   if (!recommendedProfile || connectedPlayerCount < minimumPlayers) return false;
-  if (connectedPlayerCount === maximumPlayers) return true;
   return (
-    normalDeadlineReached &&
+    connectedPlayerCount === maximumPlayers ||
     isProfileEligible(
       recommendedProfile,
       minimumPlayersPerTeam,

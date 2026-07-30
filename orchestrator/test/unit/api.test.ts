@@ -9,7 +9,7 @@ import type { HubRouter } from "../../src/services/hub-router.ts";
 function testApp(hubs: HubRouter = {} as HubRouter) {
   const dashboard = {
     getCluster: async () => ({
-      schemaVersion: 1 as const,
+      schemaVersion: 2 as const,
       generatedAt: "2026-07-27T12:00:00.000Z",
       summary: {
         enabledGroups: 0,
@@ -45,7 +45,7 @@ test("dashboard cluster endpoint returns a versioned snapshot", async () => {
   );
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({
-    schemaVersion: 1,
+    schemaVersion: 2,
     summary: { activeInstances: 0 },
   });
 });

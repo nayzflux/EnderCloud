@@ -107,6 +107,34 @@ test.describe("instances", () => {
       .not.toBe(first);
   });
 
+  test("keeps the timeline live while refresh is paused", async ({ page }) => {
+    test.skip(!desktopOnly(page), "the refresh interval control is desktop-only");
+    let clusterRequests = 0;
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/cluster") clusterRequests += 1;
+    });
+    await visit(page, "/instances");
+
+    await page.getByLabel("Auto-refresh interval").click();
+    await page.getByRole("option", { name: "Paused" }).click();
+
+    const startingRow = tableRows(page).filter({ hasText: "Starting" }).first();
+    await expect(startingRow).toBeVisible();
+    const age = startingRow.locator("time").last();
+    const firstAge = await age.textContent();
+    const requestsAtPause = clusterRequests;
+
+    // Longer than the default refresh interval: only the client clock moves.
+    await page.waitForTimeout(5_500);
+    await expect.poll(async () => age.textContent()).not.toBe(firstAge);
+    expect(clusterRequests).toBe(requestsAtPause);
+
+    await startingRow.locator("td").first().click();
+    const panel = page.getByRole("dialog");
+    await expect(panel.getByText("Startup deadline", { exact: true })).toBeVisible();
+    await expect(panel.getByText(/overdue by/)).toBeVisible();
+  });
+
   test("narrows the table down to degraded instances", async ({ page }) => {
     test.skip(!desktopOnly(page), "state filter is shown on wide viewports too");
     await visit(page, "/instances");

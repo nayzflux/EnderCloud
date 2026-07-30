@@ -195,6 +195,29 @@ describe("mockInstance and mockSession", () => {
     }
   });
 
+  test("cover every active deadline rendered by the timeline", () => {
+    const kinds = new Set<string>();
+    for (const group of mockCluster(now).groups) {
+      for (const instance of group.instances) {
+        const deadline = mockInstance(instance.id, now)?.activeDeadline;
+        if (deadline) kinds.add(deadline.kind);
+      }
+      for (const session of group.sessions) {
+        const deadline = mockSession(session.id, now)?.activeDeadline;
+        if (deadline) kinds.add(deadline.kind);
+      }
+    }
+    expect(kinds).toEqual(new Set([
+      "INSTANCE_STARTUP",
+      "INSTANCE_DRAIN",
+      "CANCELLED_INSTANCE_DRAIN",
+      "INSTANCE_SHUTDOWN",
+      "INSTANCE_ACQUISITION",
+      "PLAYER_TRANSFER",
+      "LOBBY_STALE",
+    ]));
+  });
+
   test("are null for unknown ids", () => {
     expect(mockInstance("0000000000000000", now)).toBeNull();
     expect(mockSession("0000000000000000", now)).toBeNull();

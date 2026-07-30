@@ -23,6 +23,15 @@ const config = loadConfig();
 const logger = new Logger(config.logLevel);
 let ready = false;
 
+if (config.legacyTransferTimeoutConfigured) {
+  logger.warn("TRANSFER_TIMEOUT_MS is deprecated; configure timeouts.transfer per group");
+}
+if (config.legacyCancelledDrainTimeoutConfigured) {
+  logger.warn(
+    "CANCELLED_DRAIN_TIMEOUT_MS is deprecated; configure timeouts.cancelled_drain per group",
+  );
+}
+
 // Bootstrap persistent dependencies before exposing the HTTP service as ready.
 await mkdir(config.groupsRoot, { recursive: true });
 await mkdir(config.templatesRoot, { recursive: true });
@@ -35,12 +44,17 @@ await synchronizeConfiguration(
   config.groupsRoot,
   config.templatesRoot,
   logger,
+  {
+    transferMs: config.legacyTransferTimeoutMs,
+    cancelledDrainMs: config.legacyCancelledDrainTimeoutMs,
+    playerStaleMs: 30_000,
+  },
 );
 const bus = new RedisEventBus(config.redisUrl, logger);
 await bus.connect();
 const executor = new LocalDockerExecutor(config, logger);
 const variants = new VariantSelector(db);
-const transfers = new TransferService(db, bus, config, logger);
+const transfers = new TransferService(db, bus, logger);
 const hubs = new HubRouter(db, transfers);
 const instances = new InstanceController(
   db,
@@ -49,7 +63,6 @@ const instances = new InstanceController(
   bus,
   transfers,
   hubs,
-  config,
   logger,
 );
 const queues = new QueueService(db);

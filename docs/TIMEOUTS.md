@@ -1,0 +1,86 @@
+# Deadlines et timeouts
+
+EnderCloud distingue deux notions :
+
+- un **timeout** est une durée configurée dans le server group ;
+- une **deadline** est l’instant UTC absolu calculé et persisté lorsque l’étape commence.
+
+Une deadline déjà créée ne change pas lors d’un rechargement de configuration. La nouvelle durée
+s’applique uniquement aux opérations suivantes.
+
+## Timeouts configurables par server group
+
+Toutes les durées utilisent `ms`, `s`, `m` ou `h`.
+
+| Clé `timeouts` | Groupes | Exemple | Départ | Deadline persistée | Effet à expiration |
+| --- | --- | ---: | --- | --- | --- |
+| `startup` | Tous | `90s` | Passage de l’instance à `STARTING` | `server_instances.startup_deadline` | L’instance devient `FAILED` si Paper n’a pas annoncé `SERVER_READY`. |
+| `drain` | Tous | `15m` | Drain normal d’une instance | `server_instances.drain_deadline` avec raison `NORMAL` | L’instance est arrêtée même si des joueurs sont encore observés. |
+| `cancelled_drain` | Tous | `10s` | Annulation d’une session minigame | `server_instances.drain_deadline` avec raison `SESSION_CANCELLED` | Borne l’évacuation active vers un hub avant l’arrêt forcé. |
+| `shutdown` | Tous | `20s` | Passage à `STOPPING` | `server_instances.shutdown_deadline` | Délai accordé au serveur Minecraft avant l’arrêt Docker forcé. |
+| `transfer` | Tous | `20s` | Création d’une commande de transfert | `transfer_commands.expires_at` et `session_players.transfer_deadline` | La commande expire et les joueurs de session non arrivés passent à `LEFT`. Le groupe cible fournit la durée. |
+| `player_stale` | Tous | `30s` | Dernière observation d’un joueur | `instance_players.stale_deadline` | Le joueur est retiré du comptage et marqué parti de sa session. |
+| `instance_acquisition` | Minigame | `45s` | Session éligible sans instance chaude disponible | `game_sessions.instance_acquisition_deadline` | La session est annulée si aucune instance n’a été réservée. |
+| `lobby_stale` | Minigame | `135s` | Début des transferts vers l’instance | `game_sessions.lobby_stale_deadline` | Annule une session qui n’a pas progressé vers `GAME_STARTING`. |
+
+Le plugin minijeu possède l’autorité sur le démarrage. L’orchestrateur accepte son événement
+`GAME_STARTING` sans attendre ni valider une deadline de démarrage partiel. `lobby_stale` est
+uniquement un watchdog contre une session abandonnée.
+
+### Présence, heartbeat et transfert
+
+Le plugin Paper envoie environ toutes les dix secondes un heartbeat contenant la liste des joueurs
+connectés. Chaque observation renouvelle la deadline `player_stale`. Si cette deadline expire,
+l’orchestrateur considère seulement que son observation est périmée : il ne kicke pas le joueur.
+
+La deadline `transfer` mesure plutôt le temps accordé à un joueur pour rejoindre le serveur cible
+après l’émission d’une commande de transfert.
+
+## Exemple
+
+```yaml
+timeouts:
+  startup: 90s
+  drain: 15m
+  cancelled_drain: 10s
+  shutdown: 20s
+  transfer: 20s
+  player_stale: 30s
+  instance_acquisition: 45s
+  lobby_stale: 135s
+```
+
+Les deux dernières clés sont absentes des groupes `hub`.
+
+## Compatibilité
+
+Les anciens champs `lifecycle.startup_timeout`, `lifecycle.draining_timeout`,
+`lifecycle.shutdown_timeout`, `matchmaking.waiting_timeout`,
+`matchmaking.instance_wait_timeout` et `matchmaking.maximum_waiting_timeout` restent acceptés
+temporairement. L’orchestrateur journalise un avertissement lorsqu’il les rencontre et refuse un
+fichier qui définit simultanément l’ancien et le nouveau nom d’une même durée.
+
+`timeouts.ineligible_lobby` reste temporairement accepté comme alias de `timeouts.lobby_stale`.
+`timeouts.partial_start` est accepté mais ignoré avec un avertissement : le plugin décide désormais
+seul quand démarrer. La politique d’équilibrage anciennement nommée
+`matchmaking.partial_start` devient `matchmaking.team_balance`.
+
+`TRANSFER_TIMEOUT_MS` et `CANCELLED_DRAIN_TIMEOUT_MS` restent disponibles comme fallbacks
+dépréciés pour les anciens fichiers. Les nouveaux groupes doivent déclarer leurs durées dans
+`timeouts`.
+
+## Délais techniques non liés aux groupes
+
+| Délai | Valeur actuelle | Rôle |
+| --- | ---: | --- |
+| Proxy dashboard → orchestrateur | `8s` | Annule une lecture dashboard bloquée. |
+| Client HTTP Java | `10s` | Timeout de connexion et de requête des plugins Paper/Velocity. |
+| Connexion PostgreSQL | `10s` | Borne l’établissement d’une connexion. |
+| Connexion PostgreSQL inactive | `20s` | Ferme une connexion inutilisée du pool. |
+| Fermeture PostgreSQL | `10s` | Borne l’arrêt gracieux de l’orchestrateur. |
+| Retry Redis | `250ms` exponentiel, maximum `5s` | Reconnexion du bus Redis. |
+| Retry d’un transfert | `2s`, puis maximum `30s` | Réémet une commande durable jusqu’à son expiration. |
+| Healthchecks Compose | `3s` | Borne chaque sonde d’infrastructure. |
+
+Les intervalles `CAPACITY_INTERVAL_MS`, `MATCHMAKING_INTERVAL_MS` et `RECONCILE_INTERVAL_MS`
+pilotent la fréquence des boucles de contrôle ; ce ne sont pas des deadlines.

@@ -8,6 +8,7 @@ import type {
   DashboardSession,
   DashboardSessionDetail,
   DashboardVariant,
+  ActiveDeadlineKind,
   GroupType,
   LifecycleState,
   SessionPlayerState,
@@ -95,6 +96,7 @@ interface InstanceBlueprint {
   /** Fraction of `maximumPlayers` currently connected. */
   readonly load?: number;
   readonly ageSeconds: number;
+  readonly drainReason?: "NORMAL" | "SESSION_CANCELLED";
   readonly session?: SessionBlueprint;
 }
 
@@ -104,6 +106,10 @@ interface SessionBlueprint {
   readonly players: number;
   readonly connected: number;
   readonly detached?: boolean;
+  readonly deadlineKind?: Extract<
+    ActiveDeadlineKind,
+    "PLAYER_TRANSFER" | "LOBBY_STALE"
+  >;
 }
 
 interface GroupBlueprint {
@@ -172,10 +178,7 @@ const blueprints: readonly GroupBlueprint[] = [
       maximumPlayers: 12,
       teamCount: 12,
       teamSize: 1,
-      waitingTimeoutMs: 45_000,
       candidateWindow: 20,
-      instanceWaitTimeoutMs: 45_000,
-      maximumWaitingTimeoutMs: 135_000,
       minimumPlayersPerTeam: 0,
       maximumTeamSpread: 1,
     },
@@ -218,14 +221,26 @@ const blueprints: readonly GroupBlueprint[] = [
         variantIndex: 1,
         load: 0.5,
         ageSeconds: 410,
-        session: { state: "STARTING", ageSeconds: 38, players: 8, connected: 6 },
+        session: {
+          state: "WAITING",
+          ageSeconds: 38,
+          players: 8,
+          connected: 6,
+          deadlineKind: "LOBBY_STALE",
+        },
       },
       {
         lifecycleState: "RUNNING",
         availabilityState: "RESERVED",
         load: 0.33,
         ageSeconds: 96,
-        session: { state: "TRANSFERRING", ageSeconds: 21, players: 6, connected: 2 },
+        session: {
+          state: "TRANSFERRING",
+          ageSeconds: 21,
+          players: 6,
+          connected: 2,
+          deadlineKind: "PLAYER_TRANSFER",
+        },
       },
       { lifecycleState: "RUNNING", availabilityState: "OPEN", load: 0, ageSeconds: 1_240 },
       { lifecycleState: "RUNNING", availabilityState: "OPEN", variantIndex: 1, load: 0, ageSeconds: 900 },
@@ -260,10 +275,7 @@ const blueprints: readonly GroupBlueprint[] = [
       maximumPlayers: 16,
       teamCount: 8,
       teamSize: 2,
-      waitingTimeoutMs: 60_000,
       candidateWindow: 20,
-      instanceWaitTimeoutMs: 60_000,
-      maximumWaitingTimeoutMs: 180_000,
       minimumPlayersPerTeam: 1,
       maximumTeamSpread: 1,
     },
@@ -300,10 +312,30 @@ const blueprints: readonly GroupBlueprint[] = [
         ageSeconds: 620,
         session: { state: "RUNNING", ageSeconds: 300, players: 12, connected: 12 },
       },
+      {
+        lifecycleState: "RUNNING",
+        availabilityState: "RESERVED",
+        load: 0.38,
+        ageSeconds: 260,
+        session: {
+          state: "WAITING",
+          ageSeconds: 90,
+          players: 10,
+          connected: 6,
+          deadlineKind: "LOBBY_STALE",
+        },
+      },
       { lifecycleState: "RUNNING", availabilityState: "OPEN", load: 0, ageSeconds: 2_100 },
       { lifecycleState: "RUNNING", availabilityState: "OPEN", variantIndex: 1, load: 0, ageSeconds: 1_700 },
       { lifecycleState: "STARTING", availabilityState: "OPEN", load: 0, ageSeconds: 31 },
       { lifecycleState: "STOPPING", availabilityState: "OPEN", load: 0, ageSeconds: 4_820 },
+      {
+        lifecycleState: "DRAINING",
+        availabilityState: "OPEN",
+        load: 0,
+        ageSeconds: 15,
+        drainReason: "SESSION_CANCELLED",
+      },
     ],
     queueParties: 6,
   },
@@ -323,10 +355,7 @@ const blueprints: readonly GroupBlueprint[] = [
       maximumPlayers: 12,
       teamCount: 4,
       teamSize: 3,
-      waitingTimeoutMs: 90_000,
       candidateWindow: 20,
-      instanceWaitTimeoutMs: 90_000,
-      maximumWaitingTimeoutMs: 270_000,
       minimumPlayersPerTeam: 1,
       maximumTeamSpread: 2,
     },
@@ -468,8 +497,8 @@ function buildWorld(now: number): MockWorld {
             spec.session.state === "RUNNING" || spec.session.state === "STARTING"
               ? ago(now, spec.session.ageSeconds - 4)
               : null,
-          waitingDeadline: ago(now, spec.session.ageSeconds - 45),
-          maximumWaitingDeadline: ago(now, spec.session.ageSeconds - 135),
+          instanceAcquisitionDeadline: null,
+          lobbyStaleDeadline: ago(now, spec.session.ageSeconds - 135),
           retryCount: spec.session.state === "TRANSFERRING" ? 1 : 0,
           maximumPlayerCount: blueprint.maximumPlayers,
           activePlayerCount: spec.session.players,
@@ -503,9 +532,18 @@ function buildWorld(now: number): MockWorld {
         maximumPlayers: blueprint.maximumPlayers,
         createdAt,
         startingAt: started ? ago(now, spec.ageSeconds - 6) : null,
+        startupDeadline:
+          spec.lifecycleState === "STARTING" ? ago(now, -2) : null,
         runningAt: running ? ago(now, spec.ageSeconds - 24) : null,
         drainingAt: draining ? ago(now, Math.min(spec.ageSeconds, 180)) : null,
         drainDeadline: draining ? ago(now, -420) : null,
+        drainReason: draining ? (spec.drainReason ?? "NORMAL") : null,
+        stoppingAt:
+          spec.lifecycleState === "STOPPING"
+            ? ago(now, Math.min(spec.ageSeconds, 12))
+            : null,
+        shutdownDeadline:
+          spec.lifecycleState === "STOPPING" ? ago(now, -8) : null,
         updatedAt: ago(now, between(random, 1, 12)),
       };
 
@@ -525,8 +563,8 @@ function buildWorld(now: number): MockWorld {
         state: spec.state,
         assignmentRevision: 0,
         assignmentAcknowledgedAt: null,
-        waitingDeadline: ago(now, spec.ageSeconds - 45),
-        maximumWaitingDeadline: null,
+        instanceAcquisitionDeadline: ago(now, spec.ageSeconds - 45),
+        lobbyStaleDeadline: null,
         retryCount: between(random, 0, 2),
         maximumPlayerCount: blueprint.maximumPlayers,
         activePlayerCount: spec.players,
@@ -577,10 +615,15 @@ function buildWorld(now: number): MockWorld {
         pendingWarmInstances,
         reservedInstances,
       },
-      lifecycle: {
-        startupTimeoutMs: 90_000,
-        drainingTimeoutMs: 900_000,
-        shutdownTimeoutMs: 20_000,
+      timeouts: {
+        startupMs: 90_000,
+        drainMs: 900_000,
+        cancelledDrainMs: 10_000,
+        shutdownMs: 20_000,
+        transferMs: 20_000,
+        playerStaleMs: 30_000,
+        instanceAcquisitionMs: blueprint.type === "minigame" ? 45_000 : null,
+        lobbyStaleMs: blueprint.type === "minigame" ? 135_000 : null,
       },
       matchmaking: blueprint.matchmaking,
       routing: blueprint.routing,
@@ -820,7 +863,9 @@ function buildSessionRecord(
   const transfers = session.instanceId
     ? Array.from({ length: between(random, 1, 3) }, () => {
         const createdSeconds = between(random, 5, spec.ageSeconds + 5);
-        const completed = spec.state === "RUNNING";
+        const completed =
+          spec.state === "RUNNING" ||
+          spec.deadlineKind === "LOBBY_STALE";
         return {
           id: internalId(random),
           instanceId: session.instanceId as string,
@@ -855,7 +900,7 @@ function buildSessionRecord(
 export function mockCluster(now = Date.now()): DashboardClusterSnapshot {
   const world = buildWorld(now);
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: world.generatedAt,
     summary: world.summary,
     groups: world.groups,
@@ -871,7 +916,7 @@ export function mockQueue(
   const entries = world.queues.get(groupId);
   if (!entries) return null;
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: world.generatedAt,
     groupId,
     totalParties: entries.length,
@@ -889,8 +934,23 @@ export function mockInstance(
   const record = world.instances.get(instanceId);
   if (!record) return null;
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: world.generatedAt,
+    activeDeadline:
+      record.instance.lifecycleState === "STARTING" && record.instance.startupDeadline
+        ? { kind: "INSTANCE_STARTUP", at: record.instance.startupDeadline }
+        : record.instance.lifecycleState === "DRAINING" && record.instance.drainDeadline
+          ? {
+              kind:
+                record.instance.drainReason === "SESSION_CANCELLED"
+                  ? "CANCELLED_INSTANCE_DRAIN"
+                  : "INSTANCE_DRAIN",
+              at: record.instance.drainDeadline,
+            }
+          : record.instance.lifecycleState === "STOPPING" &&
+              record.instance.shutdownDeadline
+            ? { kind: "INSTANCE_SHUTDOWN", at: record.instance.shutdownDeadline }
+            : null,
     instance: {
       ...record.instance,
       groupId: record.groupId,
@@ -915,8 +975,27 @@ export function mockSession(
   const record = world.sessions.get(sessionId);
   if (!record) return null;
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: world.generatedAt,
+    activeDeadline:
+      record.session.state === "WAITING_FOR_INSTANCE" &&
+      record.session.instanceAcquisitionDeadline
+        ? {
+            kind: "INSTANCE_ACQUISITION",
+            at: record.session.instanceAcquisitionDeadline,
+          }
+        : record.transfers.find((transfer) => transfer.state === "PENDING")
+          ? {
+              kind: "PLAYER_TRANSFER",
+              at: record.transfers.find((transfer) => transfer.state === "PENDING")!
+                .expiresAt,
+            }
+          : record.session.lobbyStaleDeadline
+            ? {
+                kind: "LOBBY_STALE",
+                at: record.session.lobbyStaleDeadline,
+              }
+            : null,
     session: record.session,
     tickets: record.tickets,
     expectedProfiles: record.expectedProfiles,

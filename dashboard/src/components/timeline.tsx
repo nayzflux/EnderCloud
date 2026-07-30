@@ -5,6 +5,7 @@ import { Countdown, Elapsed } from "@/components/live-time";
 import { formatDateTime, formatDuration, formatTime } from "@/lib/format";
 import { toneDotClass, toneTextClass, type Tone } from "@/lib/status";
 import { cn } from "@/lib/utils";
+import { useNow } from "@/lib/clock";
 
 export type StepState = "done" | "current" | "pending" | "skipped";
 
@@ -26,10 +27,39 @@ interface TimelineProps {
   readonly deadline?: {
     readonly label: string;
     readonly at: string | null;
-    readonly tone?: Tone;
   };
   /** Marks the run as terminal, so the last reached step stops counting up. */
   readonly settled?: boolean;
+}
+
+function DeadlineItem({
+  deadline,
+}: {
+  readonly deadline: NonNullable<TimelineProps["deadline"]>;
+}) {
+  const now = useNow();
+  if (!deadline.at) return null;
+  const overdue = now > 0 && Date.parse(deadline.at) <= now;
+  return (
+    <li className="relative flex gap-3 pt-1">
+      <span
+        aria-hidden
+        className={cn(
+          "relative z-10 mt-1 size-2.5 shrink-0 rounded-full border-2 border-dashed bg-card",
+          overdue ? "border-destructive" : "border-muted-foreground/60",
+        )}
+      />
+      <div className="-mt-0.5 flex min-w-0 flex-1 flex-wrap items-baseline justify-between gap-x-3">
+        <span className="text-sm text-muted-foreground">{deadline.label}</span>
+        <span className="font-mono text-xs tabular" title={formatDateTime(deadline.at)}>
+          <Countdown
+            value={deadline.at}
+            className={cn(overdue && toneTextClass.danger)}
+          />
+        </span>
+      </div>
+    </li>
+  );
 }
 
 function stateOf(
@@ -143,30 +173,7 @@ export function Timeline({ steps, deadline, settled = false }: TimelineProps) {
         );
       })}
 
-      {deadline?.at ? (
-        <li className="relative flex gap-3 pt-1">
-          <span
-            aria-hidden
-            className={cn(
-              "relative z-10 mt-1 size-2.5 shrink-0 rounded-full border-2 border-dashed bg-card",
-              deadline.tone === "danger"
-                ? "border-destructive"
-                : "border-muted-foreground/60",
-            )}
-          />
-          <div className="-mt-0.5 flex min-w-0 flex-1 flex-wrap items-baseline justify-between gap-x-3">
-            <span className="text-sm text-muted-foreground">{deadline.label}</span>
-            <span className="font-mono text-xs tabular" title={formatDateTime(deadline.at)}>
-              <Countdown
-                value={deadline.at}
-                className={cn(
-                  deadline.tone === "danger" && toneTextClass.danger,
-                )}
-              />
-            </span>
-          </div>
-        </li>
-      ) : null}
+      {deadline ? <DeadlineItem deadline={deadline} /> : null}
     </ol>
   );
 }

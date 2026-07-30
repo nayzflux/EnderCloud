@@ -315,9 +315,9 @@ export class QueueService {
             : session.state === "WAITING_FOR_INSTANCE" && !eligible
               ? "FORMING"
               : session.state,
-        waitingDeadline:
+        instanceAcquisitionDeadline:
           session.state === "WAITING_FOR_INSTANCE" && !eligible ? null : undefined,
-        maximumWaitingDeadline:
+        lobbyStaleDeadline:
           session.state === "WAITING_FOR_INSTANCE" && !eligible ? null : undefined,
         assignmentRevision: sql`${gameSessions.assignmentRevision} + 1`,
         assignmentAcknowledgedAt: null,

@@ -48,18 +48,20 @@ export interface MatchmakingPolicy {
   readonly maximumPlayers: number;
   readonly teamCount: number;
   readonly teamSize: number;
-  readonly waitingTimeoutMs: number;
   readonly candidateWindow: number;
-  readonly instanceWaitTimeoutMs: number;
-  readonly maximumWaitingTimeoutMs: number;
   readonly minimumPlayersPerTeam: number;
   readonly maximumTeamSpread: number;
 }
 
-export interface LifecyclePolicy {
-  readonly startupTimeoutMs: number;
-  readonly drainingTimeoutMs: number;
-  readonly shutdownTimeoutMs: number;
+export interface TimeoutPolicy {
+  readonly startupMs: number;
+  readonly drainMs: number;
+  readonly cancelledDrainMs: number;
+  readonly shutdownMs: number;
+  readonly transferMs: number;
+  readonly playerStaleMs: number;
+  readonly instanceAcquisitionMs?: number;
+  readonly lobbyStaleMs?: number;
 }
 
 export interface ServerGroupConfig {
@@ -68,7 +70,7 @@ export interface ServerGroupConfig {
   readonly enabled: boolean;
   readonly matchmaking?: MatchmakingPolicy;
   readonly capacity: CapacityPolicy;
-  readonly lifecycle: LifecyclePolicy;
+  readonly timeouts: TimeoutPolicy;
   readonly routing?: {
     readonly maximumPlayersPerInstance: number;
     readonly targetPlayersPerInstance: number;

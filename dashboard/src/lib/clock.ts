@@ -54,8 +54,14 @@ export function syncClock(generatedAt: string | null | undefined): void {
   if (!generatedAt) return;
   const serverMs = Date.parse(generatedAt);
   if (Number.isNaN(serverMs)) return;
-  // Responses can arrive out of order; never let the clock run backwards.
-  if (serverMs < anchorServerMs) return;
+  // A payload may be newer than the previous payload yet arrive behind the
+  // already-projected server time. Neither case may rewind a visible counter.
+  if (
+    anchorServerMs !== 0 &&
+    serverMs < Math.max(anchorServerMs, publishedMs, projected())
+  ) {
+    return;
+  }
   anchorServerMs = serverMs;
   anchorLocalMs = localNow();
   publishedMs = serverMs;
