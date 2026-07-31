@@ -106,17 +106,39 @@ export class Reconciler {
 
       // Scan the opposite direction to detect containers with no persisted owner.
       for (const runtime of runtimeInstances) {
-        if (!databaseById.has(runtime.instanceId)) {
-          this.logger.warn("Quarantined orphan Docker container", {
+        if (databaseById.has(runtime.instanceId)) continue;
+        try {
+          // Close the race where creation commits after the initial DB snapshot but before cleanup.
+          const current = await this.db
+            .select({ lifecycle_state: serverInstances.lifecycleState })
+            .from(serverInstances)
+            .where(eq(serverInstances.id, runtime.instanceId))
+            .limit(1);
+          if (current[0] && current[0].lifecycle_state !== "STOPPED") continue;
+
+          this.logger.warn("Removing orphan Docker container", {
             instanceId: runtime.instanceId,
             containerId: runtime.containerId,
           });
+          const cleanup = await this.executor.deleteOrphanInstance(runtime);
           await this.db.insert(events).values({
             id: nanoid(),
             aggregateType: "instance",
             aggregateId: runtime.instanceId,
             type: "ORPHAN_DISCOVERED",
-            payload: runtime,
+            payload: { ...runtime, cleanup },
+          });
+          this.logger.info("Removed orphan Docker container", {
+            instanceId: runtime.instanceId,
+            containerId: runtime.containerId,
+            ...cleanup,
+          });
+        } catch (error) {
+          // Keep processing the remaining orphans and retry this one on the next tick.
+          this.logger.error("Orphan Docker container cleanup failed", {
+            instanceId: runtime.instanceId,
+            containerId: runtime.containerId,
+            error: String(error),
           });
         }
       }

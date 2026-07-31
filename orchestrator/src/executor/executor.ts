@@ -33,10 +33,16 @@ export interface RuntimeInstance {
   readonly status: string;
 }
 
+export interface OrphanCleanupResult {
+  readonly containerRemoved: boolean;
+  readonly runtimeDirectoryRemoved: boolean;
+}
+
 export interface Executor {
   createInstance(spec: InstanceSpec): Promise<CreatedInstance>;
   stopInstance(instanceId: string, timeoutSeconds: number): Promise<void>;
   deleteInstance(instanceId: string): Promise<void>;
+  deleteOrphanInstance(instance: RuntimeInstance): Promise<OrphanCleanupResult>;
   inspectInstance(instanceId: string): Promise<RuntimeState>;
   listManagedInstances(): Promise<readonly RuntimeInstance[]>;
 }

@@ -1,5 +1,5 @@
 import { cp, mkdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import Docker from "dockerode";
 import type { AppConfig } from "../config.ts";
 import type { Logger } from "../logger.ts";
@@ -7,9 +7,17 @@ import type {
   CreatedInstance,
   Executor,
   InstanceSpec,
+  OrphanCleanupResult,
   RuntimeInstance,
   RuntimeState,
 } from "./executor.ts";
+
+function isDockerNotFound(error: unknown): boolean {
+  return typeof error === "object" &&
+    error !== null &&
+    "statusCode" in error &&
+    error.statusCode === 404;
+}
 
 export function instanceName(variantId: string, instanceId: string): string {
   return `endercloud-${variantId}-${instanceId}`;
@@ -113,6 +121,43 @@ export class LocalDockerExecutor implements Executor {
     await rm(runtimePath, { recursive: true, force: true });
   }
 
+  // Delete the exact Docker object observed by reconciliation, then clean its safe runtime path.
+  public async deleteOrphanInstance(
+    instance: RuntimeInstance,
+  ): Promise<OrphanCleanupResult> {
+    const container = this.docker.getContainer(instance.containerId);
+    let containerRemoved = false;
+    try {
+      const inspection = await container.inspect();
+      const labels = inspection.Config.Labels ?? {};
+      const inspectedInstanceId = labels["orchestrator.instance-id"] ?? "";
+      if (
+        labels["orchestrator.managed"] !== "true" ||
+        inspectedInstanceId !== instance.instanceId
+      ) {
+        throw new Error(
+          `Refusing to delete Docker container ${instance.containerId}: ownership labels changed`,
+        );
+      }
+      await container.remove({ force: true, v: true });
+      containerRemoved = true;
+    } catch (error) {
+      // A container disappearing after the reconciliation snapshot is already converged.
+      if (!isDockerNotFound(error)) throw error;
+    }
+
+    const runtimePath = this.safeOrphanRuntimePath(instance.instanceId);
+    if (!runtimePath) {
+      this.logger.warn("Skipped unsafe orphan runtime directory cleanup", {
+        instanceId: instance.instanceId,
+        containerId: instance.containerId,
+      });
+      return { containerRemoved, runtimeDirectoryRemoved: false };
+    }
+    await rm(runtimePath, { recursive: true, force: true });
+    return { containerRemoved, runtimeDirectoryRemoved: true };
+  }
+
   // Read the runtime state used by reconciliation and diagnostics.
   public async inspectInstance(instanceId: string): Promise<RuntimeState> {
     const existing = await this.findByInstanceId(instanceId);
@@ -158,6 +203,22 @@ export class LocalDockerExecutor implements Executor {
       },
     });
     return containers[0];
+  }
+
+  private safeOrphanRuntimePath(instanceId: string): string | undefined {
+    if (!instanceId) return undefined;
+    const instancesRoot = resolve(this.config.runtimeRoot, "instances");
+    const runtimePath = resolve(instancesRoot, instanceId);
+    const relativePath = relative(instancesRoot, runtimePath);
+    if (
+      !relativePath ||
+      isAbsolute(relativePath) ||
+      relativePath.startsWith("..") ||
+      basename(relativePath) !== relativePath
+    ) {
+      return undefined;
+    }
+    return runtimePath;
   }
 
   // Pull the configured image only when it is not already available locally.

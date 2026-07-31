@@ -3,10 +3,10 @@ import { createDatabase, type SqlClient } from "../../src/db/client.ts";
 import { migrateDatabase } from "../../src/db/migrate.ts";
 import { Matchmaker } from "../../src/services/matchmaker.ts";
 import { QueueService } from "../../src/services/queue-service.ts";
-import { serverGroups, serverVariants, serverInstances, queueEntries, queueEntryPlayers, gameSessions, sessionPlayers, instancePlayers, transferCommands } from "../../src/db/schema.ts";
+import { serverGroups, serverVariants, serverInstances, queueEntries, queueEntryPlayers, gameSessions, sessionPlayers, instancePlayers, transferCommands, events } from "../../src/db/schema.ts";
 import type { TransferService } from "../../src/services/transfer-service.ts";
 import { InstanceController } from "../../src/services/instance-controller.ts";
-import type { Executor } from "../../src/executor/executor.ts";
+import type { Executor, RuntimeInstance } from "../../src/executor/executor.ts";
 import { VariantSelector } from "../../src/services/variant-selector.ts";
 import type { RedisEventBus } from "../../src/events/redis-bus.ts";
 import type { Logger } from "../../src/logger.ts";
@@ -15,6 +15,7 @@ import { eq, inArray } from "drizzle-orm";
 import { nanoid } from "../../src/id.ts";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { CapacityController } from "../../src/services/capacity-controller.ts";
+import { Reconciler } from "../../src/services/reconciler.ts";
 
 const mockLogger = {
   minimum: "debug",
@@ -37,7 +38,7 @@ let db: ReturnType<typeof createDatabase>["db"];
 let matchmaker: Matchmaker;
 
 async function cleanDb() {
-  await sql`TRUNCATE TABLE server_groups CASCADE`;
+  await sql`TRUNCATE TABLE server_groups, events CASCADE`;
 }
 
 async function seedGroup() {
@@ -877,6 +878,10 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       })),
       stopInstance: mock(async () => {}),
       deleteInstance: mock(async () => {}),
+      deleteOrphanInstance: mock(async () => ({
+        containerRemoved: true,
+        runtimeDirectoryRemoved: true,
+      })),
       inspectInstance: mock(async () => ({ exists: true, running: true })),
       listManagedInstances: mock(async () => []),
     } as Executor;
@@ -942,5 +947,162 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     expect(
       activeReplacements.filter((instance) => instance.replacesInstanceId !== null),
     ).toHaveLength(1);
+  });
+
+  test("reconciler removes an orphan once and records one successful cleanup", async () => {
+    const orphan: RuntimeInstance = {
+      instanceId: "orphanInstance01",
+      containerId: "orphan-container-01",
+      groupId: "missing-group",
+      variantId: "missing-variant",
+      running: true,
+      status: "Up",
+    };
+    let runtimeInstances: RuntimeInstance[] = [orphan];
+    const deleteOrphanInstance = mock(async (instance: RuntimeInstance) => {
+      runtimeInstances = runtimeInstances.filter(
+        (candidate) => candidate.containerId !== instance.containerId,
+      );
+      return { containerRemoved: true, runtimeDirectoryRemoved: true };
+    });
+    const executor = {
+      listManagedInstances: mock(async () => runtimeInstances),
+      deleteOrphanInstance,
+    } as unknown as Executor;
+    const reconciler = new Reconciler(db, executor, {} as InstanceController, mockLogger);
+
+    await reconciler.tick();
+    await reconciler.tick();
+
+    expect(deleteOrphanInstance).toHaveBeenCalledTimes(1);
+    const audit = await db.select().from(events);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]?.type).toBe("ORPHAN_DISCOVERED");
+    expect(audit[0]?.payload).toEqual({
+      ...orphan,
+      cleanup: { containerRemoved: true, runtimeDirectoryRemoved: true },
+    });
+  });
+
+  test("reconciler preserves an instance that becomes active before orphan cleanup", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = "raceInstance0001";
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      groupId,
+      variantId,
+      lifecycleState: "STOPPED",
+      availabilityState: "OPEN",
+    });
+    const orphan: RuntimeInstance = {
+      instanceId,
+      containerId: "race-container",
+      groupId,
+      variantId,
+      running: true,
+      status: "Up",
+    };
+    const deleteOrphanInstance = mock(async () => ({
+      containerRemoved: true,
+      runtimeDirectoryRemoved: true,
+    }));
+    const executor = {
+      listManagedInstances: mock(async () => {
+        await Bun.sleep(50);
+        await db.update(serverInstances)
+          .set({ lifecycleState: "RUNNING" })
+          .where(eq(serverInstances.id, instanceId));
+        return [orphan];
+      }),
+      deleteOrphanInstance,
+    } as unknown as Executor;
+    const reconciler = new Reconciler(db, executor, {} as InstanceController, mockLogger);
+
+    await reconciler.tick();
+
+    expect(deleteOrphanInstance).not.toHaveBeenCalled();
+    expect(await db.select().from(events)).toHaveLength(0);
+  });
+
+  test("reconciler cleans a container whose persisted instance is stopped", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = "stoppedInstance1";
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      groupId,
+      variantId,
+      lifecycleState: "STOPPED",
+      availabilityState: "OPEN",
+    });
+    const stoppedRuntime: RuntimeInstance = {
+      instanceId,
+      containerId: "stopped-container",
+      groupId,
+      variantId,
+      running: false,
+      status: "Exited",
+    };
+    const deleteOrphanInstance = mock(async () => ({
+      containerRemoved: true,
+      runtimeDirectoryRemoved: true,
+    }));
+    const executor = {
+      listManagedInstances: mock(async () => [stoppedRuntime]),
+      deleteOrphanInstance,
+    } as unknown as Executor;
+    const reconciler = new Reconciler(db, executor, {} as InstanceController, mockLogger);
+
+    await reconciler.tick();
+
+    expect(deleteOrphanInstance).toHaveBeenCalledWith(stoppedRuntime);
+  });
+
+  test("reconciler isolates cleanup failures and retries only remaining orphans", async () => {
+    const first: RuntimeInstance = {
+      instanceId: "firstOrphan00001",
+      containerId: "first-container",
+      groupId: "missing",
+      variantId: "missing",
+      running: true,
+      status: "Up",
+    };
+    const second: RuntimeInstance = {
+      ...first,
+      instanceId: "secondOrphan0001",
+      containerId: "second-container",
+    };
+    let runtimeInstances = [first, second];
+    let firstAttempts = 0;
+    const deleteOrphanInstance = mock(async (instance: RuntimeInstance) => {
+      if (instance.containerId === first.containerId && firstAttempts++ === 0) {
+        throw new Error("temporary Docker failure");
+      }
+      runtimeInstances = runtimeInstances.filter(
+        (candidate) => candidate.containerId !== instance.containerId,
+      );
+      return { containerRemoved: true, runtimeDirectoryRemoved: true };
+    });
+    const executor = {
+      listManagedInstances: mock(async () => runtimeInstances),
+      deleteOrphanInstance,
+    } as unknown as Executor;
+    const silentLogger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    } as unknown as Logger;
+    const reconciler = new Reconciler(db, executor, {} as InstanceController, silentLogger);
+
+    await reconciler.tick();
+    await reconciler.tick();
+
+    expect(deleteOrphanInstance.mock.calls.map(([instance]) => instance.containerId)).toEqual([
+      "first-container",
+      "second-container",
+      "first-container",
+    ]);
+    expect(await db.select().from(events)).toHaveLength(2);
+    expect(runtimeInstances).toHaveLength(0);
   });
 });
