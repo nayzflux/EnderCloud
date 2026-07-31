@@ -71,6 +71,7 @@ export const serverGroups = pgTable(
     shutdownTimeoutMs: integer("shutdown_timeout_ms").notNull(),
     transferTimeoutMs: integer("transfer_timeout_ms").notNull(),
     playerStaleTimeoutMs: integer("player_stale_timeout_ms").notNull(),
+    instanceLifetimeMs: integer("instance_lifetime_ms"),
     ...auditColumns,
   },
   (table) => [
@@ -86,6 +87,10 @@ export const serverGroups = pgTable(
         AND ${table.minimumPlayersPerTeam} BETWEEN 0 AND ${table.teamSize}
         AND ${table.maximumTeamSpread} BETWEEN 0 AND ${table.teamSize}
       )`,
+    ),
+    check(
+      "server_groups_instance_lifetime_check",
+      sql`${table.instanceLifetimeMs} IS NULL OR ${table.instanceLifetimeMs} > 0`,
     ),
   ],
 );
@@ -155,6 +160,8 @@ export const serverInstances = pgTable(
     endpoint: text("endpoint"),
     playerCount: integer("player_count").notNull().default(0),
     startupDeadline: timestamp("startup_deadline", { withTimezone: true }),
+    renewalDeadline: timestamp("renewal_deadline", { withTimezone: true }),
+    replacesInstanceId: text("replaces_instance_id"),
     drainDeadline: timestamp("drain_deadline", { withTimezone: true }),
     drainReason: text("drain_reason"),
     shutdownDeadline: timestamp("shutdown_deadline", { withTimezone: true }),
@@ -177,6 +184,12 @@ export const serverInstances = pgTable(
       .where(
         sql`${table.sessionId} IS NOT NULL
           AND ${table.lifecycleState} IN ('CREATING', 'STARTING', 'RUNNING', 'DRAINING')`,
+      ),
+    uniqueIndex("server_instances_active_replacement_unique")
+      .on(table.replacesInstanceId)
+      .where(
+        sql`${table.replacesInstanceId} IS NOT NULL
+          AND ${table.lifecycleState} IN ('CREATING', 'STARTING', 'RUNNING')`,
       ),
     check(
       "server_instances_reserved_session_check",

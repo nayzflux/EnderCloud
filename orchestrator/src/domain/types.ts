@@ -60,6 +60,7 @@ export interface TimeoutPolicy {
   readonly shutdownMs: number;
   readonly transferMs: number;
   readonly playerStaleMs: number;
+  readonly instanceLifetimeMs?: number;
   readonly instanceAcquisitionMs?: number;
   readonly lobbyStaleMs?: number;
 }

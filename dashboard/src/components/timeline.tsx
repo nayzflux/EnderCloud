@@ -49,14 +49,19 @@ function DeadlineItem({
           overdue ? "border-destructive" : "border-muted-foreground/60",
         )}
       />
-      <div className="-mt-0.5 flex min-w-0 flex-1 flex-wrap items-baseline justify-between gap-x-3">
-        <span className="text-sm text-muted-foreground">{deadline.label}</span>
-        <span className="font-mono text-xs tabular" title={formatDateTime(deadline.at)}>
+      <div className="-mt-0.5 min-w-0 flex-1">
+        <p className="text-sm font-medium text-foreground">
+          {deadline.label || "Deadline"}
+        </p>
+        <p
+          className="mt-0.5 font-mono text-xs text-muted-foreground tabular"
+          title={formatDateTime(deadline.at)}
+        >
           <Countdown
             value={deadline.at}
             className={cn(overdue && toneTextClass.danger)}
           />
-        </span>
+        </p>
       </div>
     </li>
   );

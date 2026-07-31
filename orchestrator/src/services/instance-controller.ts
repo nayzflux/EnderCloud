@@ -10,7 +10,7 @@ import {
   events,
   transferCommands,
 } from "../db/schema.ts";
-import { eq, and, sql, desc, inArray, isNotNull } from "drizzle-orm";
+import { eq, and, sql, desc, inArray, isNotNull, notInArray } from "drizzle-orm";
 import type postgres from "postgres";
 import type {
   PaperEvent,
@@ -45,6 +45,10 @@ interface StopRow {
   shutdown_timeout_ms: number;
 }
 
+interface ReadyRow extends ServerSnapshot {
+  readonly replacesInstanceId: string | null;
+}
+
 export class InstanceController {
   public constructor(
     private readonly db: Database,
@@ -57,20 +61,84 @@ export class InstanceController {
   ) {}
 
   // Create an unassigned warm instance for the requested server group.
-  public async createWarm(groupId: string): Promise<string> {
+  public async createWarm(
+    groupId: string,
+    replacesInstanceId?: string,
+  ): Promise<string | null> {
     const variant = await this.variants.select(groupId);
     const instanceId = nanoid();
     // Track deletion separately so failed cleanup is visible and retryable.
     const commandId = nanoid();
     // Persist the desired instance and its command before touching Docker. This
     // makes creation recoverable if the orchestrator crashes between the two steps.
-    await this.db.transaction(async (tx) => {
+    const persisted = await this.db.transaction(async (tx) => {
+      const groups = await tx
+        .select({
+          enabled: serverGroups.enabled,
+          maximum_instances: serverGroups.maximumInstances,
+          type: serverGroups.type,
+        })
+        .from(serverGroups)
+        .where(eq(serverGroups.id, groupId))
+        .for("update");
+      const group = groups[0];
+      if (!group?.enabled) return false;
+
+      const counts = await tx
+        .select({
+          active: sql<number>`count(*)::int`,
+        })
+        .from(serverInstances)
+        .where(
+          and(
+            eq(serverInstances.groupId, groupId),
+            notInArray(serverInstances.lifecycleState, ["STOPPED", "FAILED"]),
+          ),
+        );
+      if (Number(counts[0]?.active ?? 0) >= group.maximum_instances) return false;
+
+      if (replacesInstanceId) {
+        if (group.type !== "hub") return false;
+        const sources = await tx
+          .select({ id: serverInstances.id })
+          .from(serverInstances)
+          .where(
+            and(
+              eq(serverInstances.id, replacesInstanceId),
+              eq(serverInstances.groupId, groupId),
+              eq(serverInstances.lifecycleState, "RUNNING"),
+              eq(serverInstances.availabilityState, "OPEN"),
+              sql`${serverInstances.renewalDeadline} <= now()`,
+            ),
+          );
+        if (!sources[0]) return false;
+        const activeReplacements = await tx
+          .select({ id: serverInstances.id })
+          .from(serverInstances)
+          .where(
+            and(
+              eq(serverInstances.groupId, groupId),
+              isNotNull(serverInstances.replacesInstanceId),
+              inArray(serverInstances.lifecycleState, ["CREATING", "STARTING", "RUNNING"]),
+              sql`EXISTS (
+                SELECT 1
+                FROM server_instances source
+                WHERE source.id = ${serverInstances.replacesInstanceId}
+                  AND source.lifecycle_state NOT IN ('STOPPED', 'FAILED')
+              )`,
+            ),
+          )
+          .limit(1);
+        if (activeReplacements[0]) return false;
+      }
+
       await tx.insert(serverInstances).values({
         id: instanceId,
         groupId: groupId,
         variantId: variant.id,
         lifecycleState: "CREATING",
         availabilityState: "OPEN",
+        replacesInstanceId: replacesInstanceId ?? null,
       });
       await tx.insert(commands).values({
         id: commandId,
@@ -78,7 +146,9 @@ export class InstanceController {
         operation: "CREATE",
         state: "PENDING",
       });
+      return true;
     });
+    if (!persisted) return null;
     await this.performCreate(instanceId, commandId);
     return instanceId;
   }
@@ -235,6 +305,11 @@ export class InstanceController {
         lifecycleState: "RUNNING",
         endpoint: sql`COALESCE(${reportedEndpoint ?? null}, ${serverInstances.endpoint})`,
         runningAt: sql`COALESCE(${serverInstances.runningAt}, now())`,
+        renewalDeadline: sql`CASE
+          WHEN ${serverGroups.type} = 'hub' THEN
+            now() + (${serverGroups.instanceLifetimeMs} * interval '1 millisecond')
+          ELSE NULL
+        END`,
         updatedAt: sql`now()`,
       })
       .from(serverGroups)
@@ -255,26 +330,84 @@ export class InstanceController {
         availabilityState: serverInstances.availabilityState,
         playerCount: serverInstances.playerCount,
         maximumPlayers: sql<number>`COALESCE(${serverGroups.maximumPlayersPerInstance}, ${serverGroups.maximumPlayers}, 0)`,
-      })) as unknown as ServerSnapshot[];
+        replacesInstanceId: serverInstances.replacesInstanceId,
+      })) as unknown as ReadyRow[];
     if (rows[0]) {
       // Publish registration only for the transaction that actually performed STARTING -> RUNNING.
       await this.bus.publishRegistry("SERVER_REGISTERED", rows[0]);
+      if (rows[0].replacesInstanceId) {
+        await this.beginDrain(rows[0].replacesInstanceId, "HUB_RENEWAL");
+      }
       return;
     }
     // A repeated SERVER_READY is valid; distinguish idempotency from an invalid lifecycle.
     const current = await this.db
-      .select({ lifecycle_state: serverInstances.lifecycleState })
+      .select({
+        lifecycle_state: serverInstances.lifecycleState,
+        replaces_instance_id: serverInstances.replacesInstanceId,
+      })
       .from(serverInstances)
       .where(eq(serverInstances.id, instanceId));
     if (current[0]?.lifecycle_state !== "RUNNING") {
       throw new Error(`Instance ${instanceId} is unavailable`);
     }
+    if (current[0].replaces_instance_id) {
+      await this.completeHubRenewal(instanceId);
+    }
+  }
+
+  // Resume the durable handoff when a replacement became ready before the old hub drained.
+  public async completeHubRenewal(replacementInstanceId: string): Promise<boolean> {
+    const replacements = (await this.db
+      .select({
+        instanceId: serverInstances.id,
+        variantId: serverInstances.variantId,
+        groupId: serverInstances.groupId,
+        groupType: serverGroups.type,
+        endpoint: serverInstances.endpoint,
+        lifecycleState: serverInstances.lifecycleState,
+        availabilityState: serverInstances.availabilityState,
+        playerCount: serverInstances.playerCount,
+        maximumPlayers: sql<number>`COALESCE(${serverGroups.maximumPlayersPerInstance}, 0)`,
+        replacesInstanceId: serverInstances.replacesInstanceId,
+      })
+      .from(serverInstances)
+      .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
+      .where(
+        and(
+          eq(serverInstances.id, replacementInstanceId),
+          eq(serverInstances.lifecycleState, "RUNNING"),
+          eq(serverGroups.type, "hub"),
+          isNotNull(serverInstances.endpoint),
+          isNotNull(serverInstances.replacesInstanceId),
+        ),
+      )
+      .limit(1)) as unknown as ReadyRow[];
+    const replacement = replacements[0];
+    if (!replacement?.replacesInstanceId) return false;
+
+    const sources = await this.db
+      .select({ id: serverInstances.id })
+      .from(serverInstances)
+      .where(
+        and(
+          eq(serverInstances.id, replacement.replacesInstanceId),
+          eq(serverInstances.groupId, replacement.groupId),
+          eq(serverInstances.lifecycleState, "RUNNING"),
+        ),
+      )
+      .limit(1);
+    if (!sources[0]) return false;
+
+    // Re-registration is idempotent and closes the crash window between registration and drain.
+    await this.bus.publishRegistry("SERVER_REGISTERED", replacement);
+    return this.beginDrain(replacement.replacesInstanceId, "HUB_RENEWAL");
   }
 
   // Remove an eligible instance from routing and start its drain deadline.
   public async beginDrain(
     instanceId: string,
-    reason: "NORMAL" | "SESSION_CANCELLED" = "NORMAL",
+    reason: "NORMAL" | "SESSION_CANCELLED" | "HUB_RENEWAL" = "NORMAL",
   ): Promise<boolean> {
     const rows = await this.db
       .update(serverInstances)

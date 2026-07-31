@@ -234,6 +234,11 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
               <KeyValue label="Player stale">
                 {formatDuration(group.timeouts.playerStaleMs)}
               </KeyValue>
+              {group.timeouts.instanceLifetimeMs !== null ? (
+                <KeyValue label="Instance lifetime">
+                  {formatDuration(group.timeouts.instanceLifetimeMs)}
+                </KeyValue>
+              ) : null}
             </KeyValueGrid>
           </section>
         </div>

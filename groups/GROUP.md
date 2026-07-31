@@ -53,6 +53,9 @@ Hub groups route players to shared lobby servers:
 routing:
   maximum_players_per_instance: 100
   target_players_per_instance: 70
+
+timeouts:
+  instance_lifetime: 4h
 ```
 
 The target must not exceed the maximum. It is a soft aggregate scale-out threshold: reaching the
@@ -60,6 +63,11 @@ combined target capacity of the active and starting instances requests another i
 `maximum_instances`. Players already connected above the target stay in place, and new arrivals
 continue toward the least-loaded hub until the strict maximum is reached. The `hub` group in
 `hub.yml` is the default example and fallback destination used by the proxy.
+
+`instance_lifetime` defaults to `4h`. Once a hub reaches that persisted deadline, EnderCloud
+starts a replacement using the current variant selection and drains the old hub only after the
+replacement is ready. `maximum_instances` remains a strict limit: if the group is full, the
+expired hub stays open until a slot becomes available. Only one renewal runs per group at a time.
 
 ## Minigame groups
 

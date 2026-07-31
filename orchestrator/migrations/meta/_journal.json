@@ -50,6 +50,13 @@
       "when": 1785416400000,
       "tag": "0006_group_timeout_deadlines",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1785502800000,
+      "tag": "0007_hub_instance_renewal",
+      "breakpoints": true
     }
   ]
 }

@@ -86,6 +86,7 @@ function instanceSteps(
 
 const deadlineLabels: Readonly<Record<ActiveDeadlineKind, string>> = {
   INSTANCE_STARTUP: "Startup deadline",
+  INSTANCE_RENEWAL: "Instance renewal deadline",
   INSTANCE_DRAIN: "Drain deadline",
   CANCELLED_INSTANCE_DRAIN: "Cancelled-session drain deadline",
   INSTANCE_SHUTDOWN: "Shutdown deadline",
@@ -368,6 +369,11 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
                 <KeyValue label="Session" mono>
                   {instance.sessionId ?? "None"}
                 </KeyValue>
+                {instance.replacesInstanceId ? (
+                  <KeyValue label="Replaces" mono>
+                    {instance.replacesInstanceId}
+                  </KeyValue>
+                ) : null}
                 <KeyValue label="Age">
                   <Elapsed value={instance.createdAt} />
                 </KeyValue>

@@ -7,13 +7,14 @@ import { serverGroups, serverVariants, serverInstances, queueEntries, queueEntry
 import type { TransferService } from "../../src/services/transfer-service.ts";
 import { InstanceController } from "../../src/services/instance-controller.ts";
 import type { Executor } from "../../src/executor/executor.ts";
-import type { VariantSelector } from "../../src/services/variant-selector.ts";
+import { VariantSelector } from "../../src/services/variant-selector.ts";
 import type { RedisEventBus } from "../../src/events/redis-bus.ts";
 import type { Logger } from "../../src/logger.ts";
 import { HubRouter } from "../../src/services/hub-router.ts";
 import { eq, inArray } from "drizzle-orm";
 import { nanoid } from "../../src/id.ts";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { CapacityController } from "../../src/services/capacity-controller.ts";
 
 const mockLogger = {
   minimum: "debug",
@@ -793,5 +794,153 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     expect(playerHistory[0]!.sessionId).toBe(previousSessionId);
     expect(playerHistory[0]!.state).toBe("TRANSFERRING");
     expect(playerHistory[0]!.queueEntryId).toBe(requeued.entryId);
+  });
+
+  test("renews an expired hub only after strict capacity becomes available", async () => {
+    const groupId = "renewing-hub";
+    const variantId = "renewing-hub-v2";
+    await db.insert(serverGroups).values({
+      id: groupId,
+      type: "hub",
+      enabled: true,
+      minimumInstances: 0,
+      maximumInstances: 3,
+      minimumWarmInstances: 0,
+      maximumWarmInstances: 3,
+      maximumPlayersPerInstance: 100,
+      targetPlayersPerInstance: 70,
+      startupTimeoutMs: 60_000,
+      drainTimeoutMs: 300_000,
+      cancelledDrainTimeoutMs: 10_000,
+      shutdownTimeoutMs: 20_000,
+      transferTimeoutMs: 20_000,
+      playerStaleTimeoutMs: 30_000,
+      instanceLifetimeMs: 1_000,
+    });
+    await db.insert(serverVariants).values({
+      id: variantId,
+      groupId,
+      templatePath: "none",
+      enabled: true,
+      revision: 2,
+      selectionWeight: 100,
+      checksum: "renewal",
+      runtimeSpec: {
+        image: "itzg/minecraft-server:java25",
+        memoryBytes: 1024,
+        cpu: 1,
+        environment: {},
+      },
+    });
+
+    const sourceInstanceId = nanoid();
+    const secondExpiredInstanceId = nanoid();
+    const occupyingInstanceId = nanoid();
+    await db.insert(serverInstances).values([
+      {
+        id: sourceInstanceId,
+        groupId,
+        variantId,
+        lifecycleState: "RUNNING",
+        availabilityState: "OPEN",
+        endpoint: "old-hub:25565",
+        runningAt: new Date(Date.now() - 60_000),
+        renewalDeadline: new Date(Date.now() - 30_000),
+      },
+      {
+        id: secondExpiredInstanceId,
+        groupId,
+        variantId,
+        lifecycleState: "RUNNING",
+        availabilityState: "OPEN",
+        endpoint: "second-old-hub:25565",
+        runningAt: new Date(Date.now() - 30_000),
+        renewalDeadline: new Date(Date.now() - 10_000),
+      },
+      {
+        id: occupyingInstanceId,
+        groupId,
+        variantId,
+        lifecycleState: "RUNNING",
+        availabilityState: "OPEN",
+        endpoint: "other-hub:25565",
+        runningAt: new Date(),
+        renewalDeadline: new Date(Date.now() + 60_000),
+      },
+    ]);
+
+    const executor = {
+      createInstance: mock(async (spec) => ({
+        containerId: `container-${spec.instanceId}`,
+        runtimePath: `runtime/${spec.instanceId}`,
+        endpoint: `${spec.instanceId}:25565`,
+      })),
+      stopInstance: mock(async () => {}),
+      deleteInstance: mock(async () => {}),
+      inspectInstance: mock(async () => ({ exists: true, running: true })),
+      listManagedInstances: mock(async () => []),
+    } as Executor;
+    const registryEvents: Array<{ type: string; instanceId: string }> = [];
+    const bus = {
+      publishRegistry: mock(async (type: string, payload: { instanceId: string }) => {
+        registryEvents.push({ type, instanceId: payload.instanceId });
+      }),
+    } as unknown as RedisEventBus;
+    const controller = new InstanceController(
+      db,
+      executor,
+      new VariantSelector(db),
+      bus,
+      mockTransfers,
+      new HubRouter(db, mockTransfers),
+      mockLogger,
+    );
+    const capacity = new CapacityController(db, controller, mockLogger);
+
+    await capacity.tick();
+    let active = await db.select().from(serverInstances)
+      .where(inArray(serverInstances.lifecycleState, ["CREATING", "STARTING", "RUNNING", "DRAINING"]));
+    expect(active).toHaveLength(3);
+    expect(active.some((instance) => instance.replacesInstanceId === sourceInstanceId)).toBeFalse();
+
+    await db.update(serverInstances)
+      .set({ lifecycleState: "STOPPED" })
+      .where(eq(serverInstances.id, occupyingInstanceId));
+    await capacity.tick();
+
+    active = await db.select().from(serverInstances)
+      .where(inArray(serverInstances.lifecycleState, ["CREATING", "STARTING", "RUNNING", "DRAINING"]));
+    expect(active).toHaveLength(3);
+    const replacement = active.find(
+      (instance) => instance.replacesInstanceId === sourceInstanceId,
+    );
+    expect(replacement?.lifecycleState).toBe("STARTING");
+
+    await controller.handlePaperEvent(replacement!.id, {
+      type: "SERVER_READY",
+      endpoint: "new-hub:25565",
+    });
+
+    const [source, ready] = await Promise.all([
+      db.select().from(serverInstances).where(eq(serverInstances.id, sourceInstanceId)),
+      db.select().from(serverInstances).where(eq(serverInstances.id, replacement!.id)),
+    ]);
+    expect(source[0]?.lifecycleState).toBe("DRAINING");
+    expect(source[0]?.drainReason).toBe("HUB_RENEWAL");
+    expect(ready[0]?.lifecycleState).toBe("RUNNING");
+    expect(ready[0]?.renewalDeadline?.getTime()).toBeGreaterThan(Date.now());
+    expect(registryEvents.slice(-2)).toEqual([
+      { type: "SERVER_REGISTERED", instanceId: replacement!.id },
+      { type: "SERVER_UNREGISTERED", instanceId: sourceInstanceId },
+    ]);
+
+    await capacity.tick();
+    const activeReplacements = await db.select().from(serverInstances)
+      .where(
+        inArray(serverInstances.lifecycleState, ["CREATING", "STARTING", "RUNNING"]),
+      );
+    expect(
+      activeReplacements.filter((instance) => instance.replacesInstanceId !== null),
+    ).toHaveLength(1);
   });
 });

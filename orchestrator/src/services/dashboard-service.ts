@@ -66,6 +66,7 @@ export interface GroupRow {
   shutdown_timeout_ms: number;
   transfer_timeout_ms: number;
   player_stale_timeout_ms: number;
+  instance_lifetime_ms: number | null;
 }
 
 export interface VariantRow {
@@ -91,6 +92,8 @@ export interface InstanceRow {
   starting_at: DatabaseTimestamp | null;
   startup_deadline: DatabaseTimestamp | null;
   running_at: DatabaseTimestamp | null;
+  renewal_deadline: DatabaseTimestamp | null;
+  replaces_instance_id: string | null;
   draining_at: DatabaseTimestamp | null;
   drain_deadline: DatabaseTimestamp | null;
   drain_reason: string | null;
@@ -167,6 +170,8 @@ function toInstance(row: InstanceRow): DashboardInstance {
     startingAt: iso(row.starting_at),
     startupDeadline: iso(row.startup_deadline),
     runningAt: iso(row.running_at),
+    renewalDeadline: iso(row.renewal_deadline),
+    replacesInstanceId: row.replaces_instance_id,
     drainingAt: iso(row.draining_at),
     drainDeadline: iso(row.drain_deadline),
     drainReason: row.drain_reason,
@@ -200,6 +205,9 @@ function toSession(row: SessionRow): DashboardSession {
 export function activeInstanceDeadline(row: InstanceRow): ActiveDeadline | null {
   if (row.lifecycle_state === "STARTING" && row.startup_deadline) {
     return { kind: "INSTANCE_STARTUP", at: requiredIso(row.startup_deadline) };
+  }
+  if (row.lifecycle_state === "RUNNING" && row.renewal_deadline) {
+    return { kind: "INSTANCE_RENEWAL", at: requiredIso(row.renewal_deadline) };
   }
   if (row.lifecycle_state === "DRAINING" && row.drain_deadline) {
     return {
@@ -324,6 +332,7 @@ export function assembleClusterSnapshot(
         shutdownMs: group.shutdown_timeout_ms,
         transferMs: group.transfer_timeout_ms,
         playerStaleMs: group.player_stale_timeout_ms,
+        instanceLifetimeMs: group.instance_lifetime_ms,
         instanceAcquisitionMs: group.instance_acquisition_timeout_ms ?? null,
         lobbyStaleMs: group.lobby_stale_timeout_ms ?? null,
       },
@@ -500,6 +509,8 @@ export class DashboardService {
         starting_at: serverInstances.startingAt,
         startup_deadline: serverInstances.startupDeadline,
         running_at: serverInstances.runningAt,
+        renewal_deadline: serverInstances.renewalDeadline,
+        replaces_instance_id: serverInstances.replacesInstanceId,
         draining_at: serverInstances.drainingAt,
         drain_deadline: serverInstances.drainDeadline,
         drain_reason: serverInstances.drainReason,
@@ -771,6 +782,7 @@ export class DashboardService {
       shutdown_timeout_ms: serverGroups.shutdownTimeoutMs,
       transfer_timeout_ms: serverGroups.transferTimeoutMs,
       player_stale_timeout_ms: serverGroups.playerStaleTimeoutMs,
+      instance_lifetime_ms: serverGroups.instanceLifetimeMs,
     })
     .from(serverGroups)
     .orderBy(asc(serverGroups.type), asc(serverGroups.id));
@@ -800,6 +812,8 @@ export class DashboardService {
       starting_at: serverInstances.startingAt,
       startup_deadline: serverInstances.startupDeadline,
       running_at: serverInstances.runningAt,
+      renewal_deadline: serverInstances.renewalDeadline,
+      replaces_instance_id: serverInstances.replacesInstanceId,
       draining_at: serverInstances.drainingAt,
       drain_deadline: serverInstances.drainDeadline,
       drain_reason: serverInstances.drainReason,

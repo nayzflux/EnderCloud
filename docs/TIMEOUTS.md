@@ -20,6 +20,7 @@ Toutes les durées utilisent `ms`, `s`, `m` ou `h`.
 | `shutdown` | Tous | `20s` | Passage à `STOPPING` | `server_instances.shutdown_deadline` | Délai accordé au serveur Minecraft avant l’arrêt Docker forcé. |
 | `transfer` | Tous | `20s` | Création d’une commande de transfert | `transfer_commands.expires_at` et `session_players.transfer_deadline` | La commande expire et les joueurs de session non arrivés passent à `LEFT`. Le groupe cible fournit la durée. |
 | `player_stale` | Tous | `30s` | Dernière observation d’un joueur | `instance_players.stale_deadline` | Le joueur est retiré du comptage et marqué parti de sa session. |
+| `instance_lifetime` | Hub | `4h` | Passage du hub à `RUNNING` | `server_instances.renewal_deadline` | Démarre un remplaçant si une place est disponible, puis met l’ancien hub en drain lorsque le nouveau est prêt. |
 | `instance_acquisition` | Minigame | `45s` | Session éligible sans instance chaude disponible | `game_sessions.instance_acquisition_deadline` | La session est annulée si aucune instance n’a été réservée. |
 | `lobby_stale` | Minigame | `135s` | Début des transferts vers l’instance | `game_sessions.lobby_stale_deadline` | Annule une session qui n’a pas progressé vers `GAME_STARTING`. |
 
@@ -40,6 +41,7 @@ après l’émission d’une commande de transfert.
 
 ```yaml
 timeouts:
+  instance_lifetime: 4h # hubs uniquement
   startup: 90s
   drain: 15m
   cancelled_drain: 10s
@@ -50,7 +52,12 @@ timeouts:
   lobby_stale: 135s
 ```
 
-Les deux dernières clés sont absentes des groupes `hub`.
+`instance_lifetime` est absent des groupes minigame. Les deux dernières clés sont absentes des
+groupes `hub`.
+
+La deadline de renouvellement est persistée au premier passage à `RUNNING` et ne change pas lors
+d’une modification ultérieure du timeout. `maximum_instances` reste une limite absolue : un hub
+expiré continue d’accepter les joueurs si aucune place n’est disponible pour son remplaçant.
 
 ## Compatibilité
 

@@ -218,6 +218,9 @@ export function parseGroup(
   }
 
   if (type === "minigame") {
+    if (timeouts.instance_lifetime !== undefined) {
+      throw new Error(`${source}.timeouts.instance_lifetime is only valid for hub groups`);
+    }
     const matchmaking = object(root.matchmaking, `${source}.matchmaking`);
     const legacyWaitingMs = matchmaking.waiting_timeout === undefined
       ? undefined
@@ -339,8 +342,15 @@ export function parseGroup(
   if (targetPlayersPerInstance > maximumPlayersPerInstance) {
     throw new Error(`${source} target routing capacity exceeds its maximum`);
   }
+  const instanceLifetimeMs = timeouts.instance_lifetime === undefined
+    ? 4 * 60 * 60 * 1_000
+    : parseDuration(timeouts.instance_lifetime, `${source}.timeouts.instance_lifetime`);
   return {
     ...parsed,
+    timeouts: {
+      ...parsed.timeouts,
+      instanceLifetimeMs,
+    },
     routing: { maximumPlayersPerInstance, targetPlayersPerInstance },
   };
 }
@@ -497,6 +507,7 @@ export async function synchronizeConfiguration(
         shutdownTimeoutMs: group.timeouts.shutdownMs,
         transferTimeoutMs: group.timeouts.transferMs,
         playerStaleTimeoutMs: group.timeouts.playerStaleMs,
+        instanceLifetimeMs: group.timeouts.instanceLifetimeMs ?? null,
         updatedAt: sql`now()`,
       }).onConflictDoUpdate({
         target: serverGroups.id,
@@ -524,6 +535,7 @@ export async function synchronizeConfiguration(
           shutdownTimeoutMs: group.timeouts.shutdownMs,
           transferTimeoutMs: group.timeouts.transferMs,
           playerStaleTimeoutMs: group.timeouts.playerStaleMs,
+          instanceLifetimeMs: group.timeouts.instanceLifetimeMs ?? null,
           updatedAt: sql`now()`,
         }
       });

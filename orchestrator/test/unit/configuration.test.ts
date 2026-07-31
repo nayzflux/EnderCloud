@@ -8,6 +8,52 @@ describe("configuration", () => {
     expect(parseDuration("15m", "test")).toBe(900_000);
   });
 
+  test("defaults and validates the hub instance lifetime", () => {
+    const base = {
+      id: "hub",
+      type: "hub",
+      capacity: {
+        minimum_instances: 1,
+        maximum_instances: 3,
+        minimum_warm_instances: 1,
+        maximum_warm_instances: 2,
+      },
+      routing: {
+        maximum_players_per_instance: 100,
+        target_players_per_instance: 70,
+      },
+      timeouts: {
+        startup: "90s",
+        drain: "5m",
+        cancelled_drain: "10s",
+        shutdown: "20s",
+        transfer: "20s",
+        player_stale: "30s",
+      },
+    } as const;
+    expect(parseGroup(base, "hub.yml").timeouts.instanceLifetimeMs).toBe(14_400_000);
+    expect(parseGroup({
+      ...base,
+      timeouts: { ...base.timeouts, instance_lifetime: "6h" },
+    }, "hub.yml").timeouts.instanceLifetimeMs).toBe(21_600_000);
+    expect(() => parseGroup({
+      ...base,
+      type: "minigame",
+      matchmaking: {
+        minimum_players: 2,
+        maximum_players: 4,
+        team_count: 2,
+        team_size: 2,
+      },
+      timeouts: {
+        ...base.timeouts,
+        instance_lifetime: "4h",
+        instance_acquisition: "45s",
+        lobby_stale: "135s",
+      },
+    }, "minigame.yml")).toThrow("only valid for hub groups");
+  });
+
   test("validates a minigame group", () => {
     const group = parseGroup(
       {

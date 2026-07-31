@@ -208,6 +208,7 @@ describe("mockInstance and mockSession", () => {
       }
     }
     expect(kinds).toEqual(new Set([
+      "INSTANCE_RENEWAL",
       "INSTANCE_STARTUP",
       "INSTANCE_DRAIN",
       "CANCELLED_INSTANCE_DRAIN",

@@ -42,6 +42,7 @@ export interface DashboardVariant {
 
 export type ActiveDeadlineKind =
   | "INSTANCE_STARTUP"
+  | "INSTANCE_RENEWAL"
   | "INSTANCE_DRAIN"
   | "CANCELLED_INSTANCE_DRAIN"
   | "INSTANCE_SHUTDOWN"
@@ -67,6 +68,8 @@ export interface DashboardInstance {
   readonly startingAt: string | null;
   readonly startupDeadline: string | null;
   readonly runningAt: string | null;
+  readonly renewalDeadline: string | null;
+  readonly replacesInstanceId: string | null;
   readonly drainingAt: string | null;
   readonly drainDeadline: string | null;
   readonly drainReason: string | null;
@@ -115,6 +118,7 @@ export interface DashboardGroup {
     readonly shutdownMs: number;
     readonly transferMs: number;
     readonly playerStaleMs: number;
+    readonly instanceLifetimeMs: number | null;
     readonly instanceAcquisitionMs: number | null;
     readonly lobbyStaleMs: number | null;
   };

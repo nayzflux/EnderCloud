@@ -34,6 +34,7 @@ function rows(): DashboardRows {
         shutdown_timeout_ms: 20_000,
         transfer_timeout_ms: 20_000,
         player_stale_timeout_ms: 30_000,
+        instance_lifetime_ms: null,
       },
       {
         id: "disabled-hub",
@@ -57,6 +58,7 @@ function rows(): DashboardRows {
         shutdown_timeout_ms: 20_000,
         transfer_timeout_ms: 20_000,
         player_stale_timeout_ms: 30_000,
+        instance_lifetime_ms: 14_400_000,
       },
     ],
     variants: [
@@ -116,6 +118,8 @@ function instance(
     startup_deadline:
       lifecycle === "STARTING" ? "2026-07-27T12:01:30.000Z" : null,
     running_at: lifecycle === "RUNNING" ? now.toISOString() : null,
+    renewal_deadline: null,
+    replaces_instance_id: null,
     draining_at: null,
     drain_deadline: null,
     drain_reason: null,
@@ -194,6 +198,13 @@ describe("dashboard snapshot", () => {
       at: "2026-07-27T12:01:30.000Z",
     });
     expect(activeInstanceDeadline(instance("ready", "RUNNING", "OPEN", null))).toBeNull();
+    expect(activeInstanceDeadline({
+      ...instance("renewing", "RUNNING", "OPEN", null),
+      renewal_deadline: "2026-07-27T16:00:00.000Z",
+    })).toEqual({
+      kind: "INSTANCE_RENEWAL",
+      at: "2026-07-27T16:00:00.000Z",
+    });
 
     expect(activeInstanceDeadline({
       ...starting,

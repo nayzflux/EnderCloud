@@ -19,6 +19,7 @@ export class CapacityController {
     if (this.running) return;
     this.running = true;
     try {
+      await this.initializeHubRenewalDeadlines();
       const groups = await this.db.select().from(serverGroups);
       // Reconcile groups independently so one broken configuration does not block every pool.
       for (const group of groups) {
@@ -29,6 +30,8 @@ export class CapacityController {
               lifecycle_state: serverInstances.lifecycleState,
               availability_state: serverInstances.availabilityState,
               player_count: serverInstances.playerCount,
+              renewal_deadline: serverInstances.renewalDeadline,
+              replaces_instance_id: serverInstances.replacesInstanceId,
             })
             .from(serverInstances)
             .where(
@@ -41,6 +44,49 @@ export class CapacityController {
               sql`${serverInstances.runningAt} ASC NULLS LAST`,
               asc(serverInstances.createdAt)
             );
+
+          const byId = new Map(current.map((instance) => [instance.id, instance]));
+          const activeRenewals = current
+            .filter((replacement) => {
+              if (!replacement.replaces_instance_id) return false;
+              const source = byId.get(replacement.replaces_instance_id);
+              return source !== undefined;
+            });
+          const readyReplacement = activeRenewals.find((replacement) => {
+            const source = byId.get(replacement.replaces_instance_id!);
+            return (
+              replacement.lifecycle_state === "RUNNING" &&
+              source?.lifecycle_state === "RUNNING"
+            );
+          });
+          if (readyReplacement) {
+            await this.instances.completeHubRenewal(readyReplacement.id);
+            // Refresh capacity on the next tick after the durable handoff changed lifecycle state.
+            continue;
+          }
+
+          const dueHub = group.enabled && group.type === "hub" && activeRenewals.length === 0
+            ? current.find(
+                (instance) =>
+                  instance.lifecycle_state === "RUNNING" &&
+                  instance.availability_state === "OPEN" &&
+                  instance.renewal_deadline !== null &&
+                  instance.renewal_deadline.getTime() <= Date.now(),
+              )
+            : undefined;
+          if (dueHub && current.length < group.maximumInstances) {
+            const created = await this.instances.createWarm(group.id, dueHub.id);
+            if (created) {
+              this.logger.info("Hub renewal replacement started", {
+                groupId: group.id,
+                sourceInstanceId: dueHub.id,
+                replacementInstanceId: created,
+              });
+              // The renewal consumes the available slot before regular autoscaling.
+              continue;
+            }
+          }
+
           const decision = decideCapacity(
             {
               minimumInstances: group.minimumInstances,
@@ -65,10 +111,17 @@ export class CapacityController {
             await this.instances.createWarm(group.id);
           }
           // Only open, fully running instances can be removed without stealing a reservation.
+          const protectedInstanceIds = new Set(
+            activeRenewals.flatMap((replacement) => [
+              replacement.id,
+              replacement.replaces_instance_id!,
+            ]),
+          );
           const drainCandidates = current.filter(
             (instance) =>
               instance.lifecycle_state === "RUNNING" &&
               instance.availability_state === "OPEN" &&
+              !protectedInstanceIds.has(instance.id) &&
               (
                 group.type !== "hub" ||
                 !group.enabled ||
@@ -91,6 +144,27 @@ export class CapacityController {
     } finally {
       this.running = false;
     }
+  }
+
+  private async initializeHubRenewalDeadlines(): Promise<void> {
+    await this.db
+      .update(serverInstances)
+      .set({
+        renewalDeadline: sql`${serverInstances.runningAt}
+          + (${serverGroups.instanceLifetimeMs} * interval '1 millisecond')`,
+        updatedAt: sql`now()`,
+      })
+      .from(serverGroups)
+      .where(
+        and(
+          eq(serverInstances.groupId, serverGroups.id),
+          eq(serverGroups.type, "hub"),
+          eq(serverInstances.lifecycleState, "RUNNING"),
+          sql`${serverInstances.renewalDeadline} IS NULL`,
+          sql`${serverInstances.runningAt} IS NOT NULL`,
+          sql`${serverGroups.instanceLifetimeMs} IS NOT NULL`,
+        ),
+      );
   }
 
   private async requiredHubInstances(

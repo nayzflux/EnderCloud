@@ -96,7 +96,7 @@ interface InstanceBlueprint {
   /** Fraction of `maximumPlayers` currently connected. */
   readonly load?: number;
   readonly ageSeconds: number;
-  readonly drainReason?: "NORMAL" | "SESSION_CANCELLED";
+  readonly drainReason?: "NORMAL" | "SESSION_CANCELLED" | "HUB_RENEWAL";
   readonly session?: SessionBlueprint;
 }
 
@@ -535,6 +535,11 @@ function buildWorld(now: number): MockWorld {
         startupDeadline:
           spec.lifecycleState === "STARTING" ? ago(now, -2) : null,
         runningAt: running ? ago(now, spec.ageSeconds - 24) : null,
+        renewalDeadline:
+          running && blueprint.type === "hub"
+            ? ago(now, spec.ageSeconds - 24 - 4 * 60 * 60)
+            : null,
+        replacesInstanceId: null,
         drainingAt: draining ? ago(now, Math.min(spec.ageSeconds, 180)) : null,
         drainDeadline: draining ? ago(now, -420) : null,
         drainReason: draining ? (spec.drainReason ?? "NORMAL") : null,
@@ -622,6 +627,7 @@ function buildWorld(now: number): MockWorld {
         shutdownMs: 20_000,
         transferMs: 20_000,
         playerStaleMs: 30_000,
+        instanceLifetimeMs: blueprint.type === "hub" ? 4 * 60 * 60 * 1_000 : null,
         instanceAcquisitionMs: blueprint.type === "minigame" ? 45_000 : null,
         lobbyStaleMs: blueprint.type === "minigame" ? 135_000 : null,
       },
@@ -939,6 +945,9 @@ export function mockInstance(
     activeDeadline:
       record.instance.lifecycleState === "STARTING" && record.instance.startupDeadline
         ? { kind: "INSTANCE_STARTUP", at: record.instance.startupDeadline }
+        : record.instance.lifecycleState === "RUNNING" &&
+            record.instance.renewalDeadline
+          ? { kind: "INSTANCE_RENEWAL", at: record.instance.renewalDeadline }
         : record.instance.lifecycleState === "DRAINING" && record.instance.drainDeadline
           ? {
               kind:
