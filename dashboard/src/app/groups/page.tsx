@@ -3,6 +3,7 @@
 import {
   BoxesIcon,
   Gamepad2Icon,
+  GitBranchIcon,
   Layers3Icon,
   ListOrderedIcon,
   ServerIcon,
@@ -104,14 +105,25 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
             : "Matchmaking group: parties queue up and are placed on a reserved instance."}
         </CardDescription>
         <CardAction>
-          <Button
-            variant="outline"
-            size="sm"
-            nativeButton={false}
-            render={<Link href="/instances" />}
-          >
-            View instances
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              nativeButton={false}
+              render={<Link href={`/groups/${group.id}/variants`} />}
+            >
+              <GitBranchIcon data-icon="inline-start" />
+              View layers
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              nativeButton={false}
+              render={<Link href="/instances" />}
+            >
+              View instances
+            </Button>
+          </div>
         </CardAction>
       </CardHeader>
 

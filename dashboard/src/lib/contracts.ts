@@ -40,6 +40,33 @@ export interface DashboardVariant {
   readonly runtime: VariantRuntimeSpec;
 }
 
+export interface VariantRuntimePatch {
+  readonly image?: string;
+  readonly memoryBytes?: number;
+  readonly cpu?: number;
+  readonly environment: Readonly<Record<string, string>>;
+}
+
+export interface DashboardVariantGraph {
+  readonly schemaVersion: 1;
+  readonly generatedAt: string;
+  readonly groupId: string;
+  readonly layers: readonly {
+    readonly id: string;
+    readonly checksum: string;
+    readonly runtime: VariantRuntimePatch;
+    readonly files: {
+      readonly fileCount: number;
+      readonly totalBytes: number;
+      readonly roots: readonly string[];
+    };
+  }[];
+  readonly variants: readonly (DashboardVariant & {
+    readonly checksum: string;
+    readonly layers: readonly string[];
+  })[];
+}
+
 export type ActiveDeadlineKind =
   | "INSTANCE_STARTUP"
   | "INSTANCE_RENEWAL"

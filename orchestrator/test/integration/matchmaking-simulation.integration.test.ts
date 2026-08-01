@@ -3,7 +3,7 @@ import { createDatabase, type SqlClient } from "../../src/db/client.ts";
 import { migrateDatabase } from "../../src/db/migrate.ts";
 import { Matchmaker } from "../../src/services/matchmaker.ts";
 import { QueueService } from "../../src/services/queue-service.ts";
-import { serverGroups, serverVariants, serverInstances, gameSessions, sessionPlayers, queueEntries } from "../../src/db/schema.ts";
+import { serverGroups, serverGroupVariants, serverVariantLayers, serverVariants, templateLayers, serverInstances, gameSessions, sessionPlayers, queueEntries } from "../../src/db/schema.ts";
 import type { TransferService } from "../../src/services/transfer-service.ts";
 import type { Logger } from "../../src/logger.ts";
 import { nanoid } from "../../src/id.ts";
@@ -34,7 +34,7 @@ let matchmaker: Matchmaker;
 let queueService: QueueService;
 
 async function cleanDb() {
-  await sql`TRUNCATE TABLE server_groups CASCADE`;
+  await sql`TRUNCATE TABLE template_layers, server_groups CASCADE`;
 }
 
 describe("Mega Simulation End-to-End Matchmaking", () => {
@@ -94,15 +94,31 @@ describe("Mega Simulation End-to-End Matchmaking", () => {
       playerStaleTimeoutMs: 30000,
     });
     
+    const runtime = {
+      image: "itzg/minecraft-server:java25",
+      memoryBytes: 1024,
+      cpu: 1,
+      environment: {},
+    };
+    await db.insert(templateLayers).values({
+      id: variantId,
+      templatePath: "none",
+      checksum: "none",
+      runtimePatch: runtime,
+      fileSummary: { fileCount: 0, totalBytes: 0, roots: [] },
+    });
     await db.insert(serverVariants).values({
       id: variantId,
-      groupId,
-      templatePath: "none",
-      enabled: true,
       revision: 1,
-      selectionWeight: 100,
       checksum: "none",
-      runtimeSpec: {},
+      runtimeSpec: runtime,
+    });
+    await db.insert(serverVariantLayers).values({ variantId, layerId: variantId, ordinal: 0 });
+    await db.insert(serverGroupVariants).values({
+      groupId,
+      variantId,
+      enabled: true,
+      selectionWeight: 100,
     });
 
     const warmInstanceId = nanoid();

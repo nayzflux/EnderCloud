@@ -240,6 +240,68 @@ test.describe("topology", () => {
   });
 });
 
+test.describe("variant layers", () => {
+  async function visitSkywarsVariants(page: Page) {
+    await visit(page, "/groups");
+    const layersLink = page.locator('a[href="/groups/skywars-solo/variants"]');
+    await expect(layersLink).toHaveCount(1);
+    await layersLink.click();
+    await page.waitForURL((url) => url.pathname === "/groups/skywars-solo/variants");
+    await expect(
+      page.getByRole("application", { name: "Variant inheritance map" }),
+    ).toBeVisible({ timeout: 30_000 });
+  }
+
+  test("navigates from Groups and explores the resolved graph", async ({ page }) => {
+    await visitSkywarsVariants(page);
+
+    await expect(
+      page.getByRole("button", { name: "Inspect layer minecraft-paper" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Inspect layer skywars-solo" }),
+    ).toBeVisible();
+
+    const japan = page.getByRole("button", {
+      name: "Inspect final variant skywars-japan",
+    });
+    await japan.press("Enter");
+    await expect(japan).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator("aside").getByRole("heading", { name: "skywars-japan" }))
+      .toBeVisible();
+    await expect(page.locator("aside").getByText("60 weight · 60%", { exact: true }))
+      .toBeVisible();
+
+    await page.getByLabel("Filter variants").click();
+    await page.getByRole("option", { name: "All variants" }).click();
+    await expect(
+      page.getByRole("button", { name: "Inspect final variant skywars-legacy" }),
+    ).toBeVisible();
+
+    await page.getByLabel("Search variants and layers").fill("nordic");
+    await expect(japan).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Inspect final variant skywars-nordic" }),
+    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Resolved stacks/ })).toBeVisible();
+  });
+
+  test("places the selected layer detail below the graph on phones", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile");
+    await visitSkywarsVariants(page);
+
+    const graph = page.getByRole("application", { name: "Variant inheritance map" });
+    const details = page.locator("aside");
+    const graphBox = await graph.boundingBox();
+    const detailsBox = await details.boundingBox();
+
+    expect(graphBox).not.toBeNull();
+    expect(detailsBox).not.toBeNull();
+    expect(detailsBox!.y).toBeGreaterThanOrEqual(graphBox!.y + graphBox!.height);
+    await expect(page.getByText("Resolved stacks", { exact: false })).toBeVisible();
+  });
+});
+
 test.describe("shell", () => {
   test("navigates through the sidebar", async ({ page }) => {
     test.skip(!desktopOnly(page), "the sidebar is off-canvas on a phone");

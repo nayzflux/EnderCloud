@@ -10,10 +10,19 @@ to the database.
 id: skywars-solo       # lowercase letters, numbers and hyphens
 type: minigame         # hub or minigame
 enabled: true          # defaults to true when omitted
+
+variants:
+  - id: skywars-solo-japan
+    enabled: true
+    weight: 60
+  - id: skywars-solo-dome
+    enabled: true
+    weight: 40
 ```
 
-The `id` must be unique. A template selects its group with `group` in `variant.yml`; a minigame
-group must have at least one enabled, complete variant before it can accept players.
+The `id` must be unique. A group references final variants directly and owns their selection
+state and weight. A group enabled for traffic must have at least one enabled, complete variant.
+The same final variant may be referenced by several groups with different weights.
 
 ## Capacity and timeouts
 
@@ -118,9 +127,10 @@ matchmaking:
 
 1. Copy an existing YAML file and choose a unique `id`.
 2. Use the schema for its `type` (`routing` for hubs or `matchmaking` for minigames).
-3. Add or update a matching template `variant.yml`.
-4. Make sure the map, server settings and required plugins are present in the template.
+3. Add the final variant id to `variants` with a positive weight.
+4. Add or update its ordered template layers and make sure their resolved content is complete.
 5. Set `enabled: true` only when the group is ready, then restart the orchestrator.
 
-Configuration errors prevent startup. After changing a variant, increment its `revision`; do not
-modify a template used by a running instance.
+Configuration errors prevent startup. After changing a final variant, increment its `revision`;
+changing a parent automatically changes every dependent effective checksum. Running instances
+keep their already-materialized data.

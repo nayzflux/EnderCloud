@@ -5,7 +5,10 @@ export interface InstanceSpec {
   readonly groupId: string;
   readonly variantId: string;
   readonly sessionId?: string;
-  readonly templatePath: string;
+  readonly templateLayers: readonly {
+    readonly id: string;
+    readonly templatePath: string;
+  }[];
   readonly runtime: VariantRuntimeSpec;
   readonly environment: Readonly<Record<string, string>>;
 }

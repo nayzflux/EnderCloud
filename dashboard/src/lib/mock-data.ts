@@ -8,11 +8,13 @@ import type {
   DashboardSession,
   DashboardSessionDetail,
   DashboardVariant,
+  DashboardVariantGraph,
   ActiveDeadlineKind,
   GroupType,
   LifecycleState,
   SessionPlayerState,
   SessionState,
+  VariantRuntimePatch,
 } from "./contracts";
 
 /**
@@ -929,6 +931,48 @@ export function mockQueue(
     totalPlayers: entries.reduce((total, entry) => total + entry.players.length, 0),
     truncated: entries.length > limit,
     entries: entries.slice(0, limit),
+  };
+}
+
+export function mockVariantGraph(
+  groupId: string,
+  now = Date.now(),
+): DashboardVariantGraph | null {
+  const world = buildWorld(now);
+  const group = world.groups.find((candidate) => candidate.id === groupId);
+  if (!group) return null;
+
+  const shared = group.type === "minigame" ? ["minecraft-paper", group.id.split("-")[0]!, group.id] : [];
+  const layerIds = [...new Set([...shared, ...group.variants.map((variant) => variant.id)])];
+  return {
+    schemaVersion: 1,
+    generatedAt: world.generatedAt,
+    groupId,
+    layers: layerIds.map((id, index) => {
+      const runtime: VariantRuntimePatch = index === 0 || shared.length === 0
+        ? {
+            image: group.variants[0]!.runtime.image,
+            memoryBytes: group.variants[0]!.runtime.memoryBytes,
+            cpu: group.variants[0]!.runtime.cpu,
+            environment: { TYPE: "CUSTOM" },
+          }
+        : { environment: id === group.id ? { MODE_ID: groupId } : {} };
+      return {
+        id,
+        checksum: `${(index + 1).toString(16)}`.repeat(64).slice(0, 64),
+        runtime,
+        files: {
+          fileCount: id === group.id ? 3 : id.includes("minecraft") ? 8 : 5,
+          totalBytes: id === group.id ? 24_000 : 18_500_000,
+          roots: id === group.id ? ["config"] : ["config", "plugins"],
+        },
+      };
+    }),
+    variants: group.variants.map((variant, index) => ({
+      ...variant,
+      checksum: `${(index + 10).toString(16)}`.repeat(64).slice(0, 64),
+      layers: [...shared, variant.id],
+    })),
   };
 }
 

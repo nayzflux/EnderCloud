@@ -4,6 +4,8 @@ import type {
   LifecycleState,
   SessionPlayerState,
   SessionState,
+  TemplateFileSummary,
+  VariantRuntimePatch,
   VariantRuntimeSpec,
 } from "./types.ts";
 
@@ -19,6 +21,22 @@ export interface DashboardVariant {
   readonly revision: number;
   readonly weight: number;
   readonly runtime: VariantRuntimeSpec;
+}
+
+export interface DashboardVariantGraph {
+  readonly schemaVersion: 1;
+  readonly generatedAt: string;
+  readonly groupId: string;
+  readonly layers: readonly {
+    readonly id: string;
+    readonly checksum: string;
+    readonly runtime: VariantRuntimePatch;
+    readonly files: TemplateFileSummary;
+  }[];
+  readonly variants: readonly (DashboardVariant & {
+    readonly checksum: string;
+    readonly layers: readonly string[];
+  })[];
 }
 
 export type ActiveDeadlineKind =

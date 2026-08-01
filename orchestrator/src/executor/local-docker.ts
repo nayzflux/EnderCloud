@@ -1,4 +1,4 @@
-import { cp, mkdir, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, rename, rm } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import Docker from "dockerode";
 import type { AppConfig } from "../config.ts";
@@ -21,6 +21,27 @@ function isDockerNotFound(error: unknown): boolean {
 
 export function instanceName(variantId: string, instanceId: string): string {
   return `endercloud-${variantId}-${instanceId}`;
+}
+
+export async function materializeLayers(
+  layers: InstanceSpec["templateLayers"],
+  destination: string,
+): Promise<void> {
+  for (const layer of layers) {
+    for (const entry of await readdir(layer.templatePath, { withFileTypes: true })) {
+      if (entry.name === "variant.yml") continue;
+      await cp(
+        join(layer.templatePath, entry.name),
+        join(destination, entry.name),
+        {
+          recursive: true,
+          force: true,
+          errorOnExist: false,
+          verbatimSymlinks: true,
+        },
+      );
+    }
+  }
 }
 
 export class LocalDockerExecutor implements Executor {
@@ -50,14 +71,17 @@ export class LocalDockerExecutor implements Executor {
     }
 
     // Rebuild runtime data from the immutable template to avoid leftovers from failed attempts.
-    await mkdir(join(this.config.runtimeRoot, "instances"), { recursive: true });
-    await rm(runtimePath, { recursive: true, force: true });
-    await cp(spec.templatePath, runtimePath, {
-      recursive: true,
-      errorOnExist: true,
-      force: false,
-      verbatimSymlinks: true,
-    });
+    const instancesRoot = join(this.config.runtimeRoot, "instances");
+    await mkdir(instancesRoot, { recursive: true });
+    const stagingPath = await mkdtemp(join(instancesRoot, `${spec.instanceId}-staging-`));
+    try {
+      await materializeLayers(spec.templateLayers, stagingPath);
+      await rm(runtimePath, { recursive: true, force: true });
+      await rename(stagingPath, runtimePath);
+    } catch (error) {
+      await rm(stagingPath, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
     await this.ensureImage(spec.runtime.image);
 
     // Labels are the durable ownership metadata used for discovery after orchestrator restarts.

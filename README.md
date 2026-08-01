@@ -91,10 +91,10 @@ réussisse.
 
 ## Enable a group
 
-1. Build the Paper bridge and place its shaded JAR in the template's `plugins/` directory.
-2. Add the complete map, server settings and game plugin to that template.
-3. Add a `variant.yml` following `templates/README.md`.
-4. Change the matching group to `enabled: true`.
+1. Build the Paper bridge and place its shaded JAR in a shared template layer's `plugins/` directory.
+2. Add mode-specific configuration and map layers as needed.
+3. Add a final `variant.yml` with its ordered `parents`, following `templates/VARIANT.md`.
+4. Reference the final id from the group with `enabled` and `weight`, then enable the group.
 5. Restart the orchestrator so it validates and synchronizes the YAML.
 
 Never modify a template used by a running orchestrator. Increment `revision` after changing a

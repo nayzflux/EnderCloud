@@ -4,6 +4,7 @@ import type {
   DashboardInstanceDetail,
   DashboardQueueDetail,
   DashboardSessionDetail,
+  DashboardVariantGraph,
 } from "./contracts";
 
 export class DashboardApiError extends Error {
@@ -48,6 +49,10 @@ export function fetchQueue(
   return readJson(
     `/api/groups/${encodeURIComponent(groupId)}/queue?limit=${limit}`,
   );
+}
+
+export function fetchVariants(groupId: string): Promise<DashboardVariantGraph> {
+  return readJson(`/api/groups/${encodeURIComponent(groupId)}/variants`);
 }
 
 export function fetchInstance(

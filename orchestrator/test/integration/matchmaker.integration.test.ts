@@ -3,7 +3,7 @@ import { createDatabase, type SqlClient } from "../../src/db/client.ts";
 import { migrateDatabase } from "../../src/db/migrate.ts";
 import { Matchmaker } from "../../src/services/matchmaker.ts";
 import { QueueService } from "../../src/services/queue-service.ts";
-import { serverGroups, serverVariants, serverInstances, queueEntries, queueEntryPlayers, gameSessions, sessionPlayers, instancePlayers, transferCommands, events } from "../../src/db/schema.ts";
+import { serverGroups, serverGroupVariants, serverVariantLayers, serverVariants, templateLayers, serverInstances, queueEntries, queueEntryPlayers, gameSessions, sessionPlayers, instancePlayers, transferCommands, events } from "../../src/db/schema.ts";
 import type { TransferService } from "../../src/services/transfer-service.ts";
 import { InstanceController } from "../../src/services/instance-controller.ts";
 import type { Executor, RuntimeInstance } from "../../src/executor/executor.ts";
@@ -37,8 +37,37 @@ let sql: ReturnType<typeof createDatabase>["sql"];
 let db: ReturnType<typeof createDatabase>["db"];
 let matchmaker: Matchmaker;
 
+async function seedVariant(groupId: string, variantId: string, revision = 1) {
+  const runtime = {
+    image: "itzg/minecraft-server:java25",
+    memoryBytes: 1024,
+    cpu: 1,
+    environment: {},
+  };
+  await db.insert(templateLayers).values({
+    id: variantId,
+    templatePath: "none",
+    checksum: "none",
+    runtimePatch: runtime,
+    fileSummary: { fileCount: 0, totalBytes: 0, roots: [] },
+  });
+  await db.insert(serverVariants).values({
+    id: variantId,
+    revision,
+    checksum: "none",
+    runtimeSpec: runtime,
+  });
+  await db.insert(serverVariantLayers).values({ variantId, layerId: variantId, ordinal: 0 });
+  await db.insert(serverGroupVariants).values({
+    groupId,
+    variantId,
+    enabled: true,
+    selectionWeight: 100,
+  });
+}
+
 async function cleanDb() {
-  await sql`TRUNCATE TABLE server_groups, events CASCADE`;
+  await sql`TRUNCATE TABLE template_layers, server_groups, events CASCADE`;
 }
 
 async function seedGroup() {
@@ -66,16 +95,7 @@ async function seedGroup() {
   });
   
   const variantId = "test-variant";
-  await db.insert(serverVariants).values({
-    id: variantId,
-    groupId,
-    templatePath: "none",
-    enabled: true,
-    revision: 1,
-    selectionWeight: 100,
-    checksum: "none",
-    runtimeSpec: {},
-  });
+  await seedVariant(groupId, variantId);
   
   return { groupId, variantId };
 }
@@ -673,16 +693,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       transferTimeoutMs: 20_000,
       playerStaleTimeoutMs: 30_000,
     });
-    await db.insert(serverVariants).values({
-      id: hubVariantId,
-      groupId: hubGroupId,
-      templatePath: "none",
-      enabled: true,
-      revision: 1,
-      selectionWeight: 100,
-      checksum: "none",
-      runtimeSpec: {},
-    });
+    await seedVariant(hubGroupId, hubVariantId);
     const sourceInstanceId = nanoid();
     const hubInstanceId = nanoid();
     const sessionId = nanoid();
@@ -821,16 +832,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
         transferTimeoutMs: 20_000,
         playerStaleTimeoutMs: 30_000,
       });
-      await db.insert(serverVariants).values({
-        id: hubVariantId,
-        groupId: hubGroupId,
-        templatePath: "none",
-        enabled: true,
-        revision: 1,
-        selectionWeight: 100,
-        checksum: "none",
-        runtimeSpec: {},
-      });
+      await seedVariant(hubGroupId, hubVariantId);
       await db.insert(serverInstances).values({
         id: hubInstanceId,
         groupId: hubGroupId,
@@ -863,16 +865,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       transferTimeoutMs: 20_000,
       playerStaleTimeoutMs: 30_000,
     });
-    await db.insert(serverVariants).values({
-      id: overloadedVariantId,
-      groupId: overloadedGroupId,
-      templatePath: "none",
-      enabled: true,
-      revision: 1,
-      selectionWeight: 100,
-      checksum: "none",
-      runtimeSpec: {},
-    });
+    await seedVariant(overloadedGroupId, overloadedVariantId);
     await db.insert(serverInstances).values({
       id: overloadedInstanceId,
       groupId: overloadedGroupId,
@@ -997,21 +990,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       playerStaleTimeoutMs: 30_000,
       instanceLifetimeMs: 1_000,
     });
-    await db.insert(serverVariants).values({
-      id: variantId,
-      groupId,
-      templatePath: "none",
-      enabled: true,
-      revision: 2,
-      selectionWeight: 100,
-      checksum: "renewal",
-      runtimeSpec: {
-        image: "itzg/minecraft-server:java25",
-        memoryBytes: 1024,
-        cpu: 1,
-        environment: {},
-      },
-    });
+    await seedVariant(groupId, variantId, 2);
 
     const sourceInstanceId = nanoid();
     const secondExpiredInstanceId = nanoid();

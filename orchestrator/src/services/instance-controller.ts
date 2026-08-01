@@ -2,7 +2,9 @@ import type { Database } from "../db/client.ts";
 import {
   serverInstances,
   commands,
+  serverVariantLayers,
   serverVariants,
+  templateLayers,
   serverGroups,
   gameSessions,
   sessionPlayers,
@@ -10,7 +12,7 @@ import {
   events,
   transferCommands,
 } from "../db/schema.ts";
-import { eq, and, sql, desc, inArray, isNotNull, notInArray } from "drizzle-orm";
+import { asc, eq, and, sql, desc, inArray, isNotNull, notInArray } from "drizzle-orm";
 import type postgres from "postgres";
 import type {
   PaperEvent,
@@ -35,7 +37,6 @@ interface CreateRow {
   group_id: string;
   variant_id: string;
   session_id: string | null;
-  template_path: string;
   runtime_spec: VariantRuntimeSpec;
 }
 
@@ -182,7 +183,6 @@ export class InstanceController {
         group_id: serverInstances.groupId,
         variant_id: serverInstances.variantId,
         session_id: serverInstances.sessionId,
-        template_path: serverVariants.templatePath,
         runtime_spec: serverVariants.runtimeSpec,
       })
       .from(serverInstances)
@@ -200,6 +200,15 @@ export class InstanceController {
       .set({ state: "RUNNING", attempts: sql`${commands.attempts} + 1` })
       .where(and(eq(commands.id, commandId), sql`${commands.state} <> 'SUCCEEDED'`));
     try {
+      const templateLayersForVariant = await this.db
+        .select({ id: templateLayers.id, templatePath: templateLayers.templatePath })
+        .from(serverVariantLayers)
+        .innerJoin(templateLayers, eq(templateLayers.id, serverVariantLayers.layerId))
+        .where(eq(serverVariantLayers.variantId, row.variant_id))
+        .orderBy(asc(serverVariantLayers.ordinal));
+      if (templateLayersForVariant.length === 0) {
+        throw new Error(`Variant ${row.variant_id} has no materialization layers`);
+      }
       // Executor creation is idempotent: an existing managed container is reused
       // when reconciliation resumes a partially completed CREATE command.
       const created = await this.executor.createInstance({
@@ -207,7 +216,7 @@ export class InstanceController {
         groupId: row.group_id,
         variantId: row.variant_id,
         ...(row.session_id ? { sessionId: row.session_id } : {}),
-        templatePath: row.template_path,
+        templateLayers: templateLayersForVariant,
         runtime: row.runtime_spec,
         environment: {},
       });

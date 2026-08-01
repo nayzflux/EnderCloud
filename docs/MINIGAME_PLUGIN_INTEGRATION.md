@@ -30,7 +30,7 @@ La variante EnderCloud doit contenir :
 - EnderCloudPaper-0.1.0.jar dans plugins/ ;
 - le plugin du mini-jeu ;
 - la map et la configuration complète du mode ;
-- un variant.yml dont group correspond à un groupe de type minigame.
+- un variant final référencé par un groupe de type minigame, avec ses couches ordonnées.
 
 Le bridge Paper utilise :
 
@@ -303,6 +303,11 @@ Exemple SkyWars Solo :
     type: minigame
     enabled: true
 
+    variants:
+      - id: skywars-solo-japan
+        enabled: true
+        weight: 100
+
     matchmaking:
       minimum_players: 4
       maximum_players: 12
@@ -337,10 +342,10 @@ Exemple BedWars 4v4v4v4 avec équilibrage des équipes :
 Exemple de variante :
 
     id: skywars-solo-japan
-    group: skywars-solo
-    enabled: true
     revision: 1
-    weight: 100
+    parents:
+      - skywars
+      - skywars-solo
 
 La capacité maximale doit respecter maximum_players <= team_count * team_size. Une party
 supérieure à team_size est refusée à l’inscription.

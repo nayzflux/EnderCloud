@@ -21,6 +21,11 @@ import {
   sessionPlayerStates,
   sessionStates,
 } from "../domain/types.ts";
+import type {
+  TemplateFileSummary,
+  VariantRuntimePatch,
+  VariantRuntimeSpec,
+} from "../domain/types.ts";
 
 export const groupTypeEnum = pgEnum("group_type", ["hub", "minigame"]);
 export const lifecycleStateEnum = pgEnum("lifecycle_state", lifecycleStates);
@@ -95,24 +100,59 @@ export const serverGroups = pgTable(
   ],
 );
 
+export const templateLayers = pgTable(
+  "template_layers",
+  {
+    id: text("id").primaryKey(),
+    templatePath: text("template_path").notNull(),
+    checksum: text("checksum").notNull(),
+    runtimePatch: jsonb("runtime_patch").$type<VariantRuntimePatch>().notNull(),
+    fileSummary: jsonb("file_summary").$type<TemplateFileSummary>().notNull(),
+    ...auditColumns,
+  },
+);
+
 export const serverVariants = pgTable(
   "server_variants",
   {
-    id: text("id").primaryKey(),
-    groupId: text("group_id")
-      .notNull()
-      .references(() => serverGroups.id),
-    templatePath: text("template_path").notNull(),
-    enabled: boolean("enabled").notNull().default(true),
+    id: text("id").primaryKey().references(() => templateLayers.id),
     revision: integer("revision").notNull(),
-    selectionWeight: integer("selection_weight").notNull(),
     checksum: text("checksum").notNull(),
-    runtimeSpec: jsonb("runtime_spec").notNull(),
+    runtimeSpec: jsonb("runtime_spec").$type<VariantRuntimeSpec>().notNull(),
     ...auditColumns,
   },
+);
+
+export const serverVariantLayers = pgTable(
+  "server_variant_layers",
+  {
+    variantId: text("variant_id").notNull().references(() => serverVariants.id, {
+      onDelete: "cascade",
+    }),
+    layerId: text("layer_id").notNull().references(() => templateLayers.id),
+    ordinal: integer("ordinal").notNull(),
+  },
   (table) => [
-    index("server_variants_group_idx").on(table.groupId),
-    check("server_variants_weight_check", sql`${table.selectionWeight} > 0`),
+    primaryKey({ columns: [table.variantId, table.ordinal] }),
+    uniqueIndex("server_variant_layers_layer_unique").on(table.variantId, table.layerId),
+    check("server_variant_layers_ordinal_check", sql`${table.ordinal} >= 0`),
+  ],
+);
+
+export const serverGroupVariants = pgTable(
+  "server_group_variants",
+  {
+    groupId: text("group_id").notNull().references(() => serverGroups.id, {
+      onDelete: "cascade",
+    }),
+    variantId: text("variant_id").notNull().references(() => serverVariants.id),
+    enabled: boolean("enabled").notNull().default(true),
+    selectionWeight: integer("selection_weight").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.groupId, table.variantId] }),
+    index("server_group_variants_variant_idx").on(table.variantId),
+    check("server_group_variants_weight_check", sql`${table.selectionWeight} > 0`),
   ],
 );
 
@@ -350,7 +390,10 @@ export const proxyHeartbeats = pgTable("proxy_heartbeats", {
 
 export const schema = {
   serverGroups,
+  templateLayers,
   serverVariants,
+  serverVariantLayers,
+  serverGroupVariants,
   gameSessions,
   serverInstances,
   queueEntries,

@@ -69,6 +69,7 @@ export interface ServerGroupConfig {
   readonly id: string;
   readonly type: GroupType;
   readonly enabled: boolean;
+  readonly variants: readonly GroupVariantReference[];
   readonly matchmaking?: MatchmakingPolicy;
   readonly capacity: CapacityPolicy;
   readonly timeouts: TimeoutPolicy;
@@ -85,13 +86,44 @@ export interface VariantRuntimeSpec {
   readonly environment: Readonly<Record<string, string>>;
 }
 
+export interface GroupVariantReference {
+  readonly id: string;
+  readonly enabled: boolean;
+  readonly weight: number;
+}
+
+export interface VariantRuntimePatch {
+  readonly image?: string;
+  readonly memoryBytes?: number;
+  readonly cpu?: number;
+  readonly environment: Readonly<Record<string, string>>;
+}
+
+export interface TemplateFileSummary {
+  readonly fileCount: number;
+  readonly totalBytes: number;
+  readonly roots: readonly string[];
+}
+
 export interface ServerVariantConfig {
   readonly id: string;
-  readonly group: string;
-  readonly enabled: boolean;
+  readonly revision?: number;
+  readonly parents: readonly string[];
+  readonly runtime: VariantRuntimePatch;
+}
+
+export interface TemplateLayerSpec extends ServerVariantConfig {
+  readonly templatePath: string;
+  readonly checksum: string;
+  readonly files: TemplateFileSummary;
+}
+
+export interface ResolvedServerVariantConfig {
+  readonly id: string;
   readonly revision: number;
-  readonly weight: number;
+  readonly checksum: string;
   readonly runtime: VariantRuntimeSpec;
+  readonly layers: readonly TemplateLayerSpec[];
 }
 
 export interface QueueParty {

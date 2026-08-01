@@ -2,12 +2,23 @@ import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { parse } from "yaml";
-import { sql } from "drizzle-orm";
+import { inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
-import { serverGroups, serverVariants } from "../db/schema.ts";
+import {
+  serverGroups,
+  serverGroupVariants,
+  serverVariantLayers,
+  serverVariants,
+  templateLayers,
+} from "../db/schema.ts";
 import type {
+  GroupVariantReference,
+  ResolvedServerVariantConfig,
   ServerGroupConfig,
   ServerVariantConfig,
+  TemplateFileSummary,
+  TemplateLayerSpec,
+  VariantRuntimePatch,
   VariantRuntimeSpec,
 } from "../domain/types.ts";
 import type { Logger } from "../logger.ts";
@@ -158,13 +169,32 @@ export function parseGroup(
   if (type !== "hub" && type !== "minigame") {
     throw new Error(`${source}.type must be hub or minigame`);
   }
+  if (!Array.isArray(root.variants)) {
+    throw new Error(`${source}.variants must be an array`);
+  }
+  const variants: GroupVariantReference[] = root.variants.map((value, index) => {
+    const item = object(value, `${source}.variants[${index}]`);
+    return {
+      id: validateId(item.id, `${source}.variants[${index}].id`),
+      enabled: boolean(item.enabled, `${source}.variants[${index}].enabled`, true),
+      weight: integer(item.weight, `${source}.variants[${index}].weight`, 1),
+    };
+  });
+  if (new Set(variants.map((variant) => variant.id)).size !== variants.length) {
+    throw new Error(`${source}.variants contains duplicate ids`);
+  }
+  const groupEnabled = boolean(root.enabled, `${source}.enabled`, true);
+  if (groupEnabled && !variants.some((variant) => variant.enabled)) {
+    throw new Error(`${source}.variants must contain at least one enabled variant`);
+  }
   const capacity = object(root.capacity, `${source}.capacity`);
   const timeouts = object(root.timeouts ?? {}, `${source}.timeouts`);
   const lifecycle = object(root.lifecycle ?? {}, `${source}.lifecycle`);
   const parsed: ServerGroupConfig = {
     id,
     type,
-    enabled: boolean(root.enabled, `${source}.enabled`, true),
+    enabled: groupEnabled,
+    variants,
     capacity: {
       minimumInstances: integer(
         capacity.minimum_instances,
@@ -364,14 +394,22 @@ function parseMemory(value: unknown, context: string): number {
   return Number.parseInt(match[1]!, 10) * factors[match[2]!.toUpperCase() as keyof typeof factors];
 }
 
-// Validate a variant descriptor and normalize its Docker runtime specification.
+// Validate one reusable template layer. Whether it is instantiable is decided by groups.
 export function parseVariant(document: unknown, source: string): ServerVariantConfig {
   const root = object(document, source);
-  const docker = object(root.docker, `${source}.docker`);
-  const image = string(docker.image, `${source}.docker.image`);
-  const tag = image.includes("@sha256:") ? image.split("@sha256:")[1] : image.split(":").at(-1);
-  if (!tag || tag === "latest") {
-    throw new Error(`${source}.docker.image must use an explicit tag or digest`);
+  for (const removed of ["group", "enabled", "weight"] as const) {
+    if (root[removed] !== undefined) {
+      throw new Error(`${source}.${removed} is no longer valid; configure it in the group`);
+    }
+  }
+  const docker = object(root.docker ?? {}, `${source}.docker`);
+  let image: string | undefined;
+  if (docker.image !== undefined) {
+    image = string(docker.image, `${source}.docker.image`);
+    const tag = image.includes("@sha256:") ? image.split("@sha256:")[1] : image.split(":").at(-1);
+    if (!tag || tag === "latest") {
+      throw new Error(`${source}.docker.image must use an explicit tag or digest`);
+    }
   }
   const rawEnvironment = object(root.environment ?? {}, `${source}.environment`);
   const environment: Record<string, string> = {};
@@ -382,25 +420,46 @@ export function parseVariant(document: unknown, source: string): ServerVariantCo
     }
     environment[key] = String(value);
   }
-  const runtime: VariantRuntimeSpec = {
-    image,
-    memoryBytes: parseMemory(docker.memory, `${source}.docker.memory`),
-    cpu: positive(docker.cpu, `${source}.docker.cpu`),
+  const runtime: VariantRuntimePatch = {
+    ...(image ? { image } : {}),
+    ...(docker.memory !== undefined
+      ? { memoryBytes: parseMemory(docker.memory, `${source}.docker.memory`) }
+      : {}),
+    ...(docker.cpu !== undefined ? { cpu: positive(docker.cpu, `${source}.docker.cpu`) } : {}),
     environment,
   };
+  if (root.parents !== undefined && !Array.isArray(root.parents)) {
+    throw new Error(`${source}.parents must be an array`);
+  }
+  const parents = (root.parents ?? []).map((value: unknown, index: number) =>
+    validateId(value, `${source}.parents[${index}]`)
+  );
+  if (new Set(parents).size !== parents.length) {
+    throw new Error(`${source}.parents contains duplicate ids`);
+  }
   return {
     id: validateId(root.id, `${source}.id`),
-    group: validateId(root.group, `${source}.group`),
-    enabled: boolean(root.enabled, `${source}.enabled`, true),
-    revision: integer(root.revision, `${source}.revision`, 1),
-    weight: integer(root.weight, `${source}.weight`, 1),
+    ...(root.revision === undefined
+      ? {}
+      : { revision: integer(root.revision, `${source}.revision`, 1) }),
+    parents,
     runtime,
   };
 }
 
-// Produce a deterministic checksum so template revisions can be tracked reliably.
-async function checksumDirectory(root: string): Promise<string> {
+interface InspectedTemplate {
+  readonly checksum: string;
+  readonly files: TemplateFileSummary;
+  readonly manifest: ReadonlyMap<string, "directory" | "file">;
+}
+
+// Hash a layer and collect bounded metadata used by validation and the dashboard.
+async function inspectDirectory(root: string): Promise<InspectedTemplate> {
   const hasher = createHash("sha256");
+  const manifest = new Map<string, "directory" | "file">();
+  const roots = new Set<string>();
+  let fileCount = 0;
+  let totalBytes = 0;
   async function visit(directory: string): Promise<void> {
     const entries = await readdir(directory, { withFileTypes: true });
     // Filesystem enumeration order is unstable; sorting makes the checksum reproducible.
@@ -408,17 +467,60 @@ async function checksumDirectory(root: string): Promise<string> {
     // Hash both relative paths and bytes so renames and content changes alter the revision.
     for (const entry of entries) {
       const path = join(directory, entry.name);
+      const relativePath = relative(root, path).split(sep).join("/");
       if (entry.isSymbolicLink()) {
         throw new Error(`Template symlinks are forbidden: ${path}`);
       }
-      if (entry.isDirectory()) await visit(path);
+      if (entry.isDirectory()) {
+        manifest.set(relativePath, "directory");
+        roots.add(relativePath.split("/")[0]!);
+        await visit(path);
+      }
       else if (entry.isFile()) {
-        hasher.update(relative(root, path).split(sep).join("/"));
+        hasher.update(relativePath);
         hasher.update(await readFile(path));
+        if (relativePath !== "variant.yml") {
+          manifest.set(relativePath, "file");
+          roots.add(relativePath.split("/")[0]!);
+          fileCount += 1;
+          totalBytes += (await stat(path)).size;
+        }
       }
     }
   }
   await visit(root);
+  return {
+    checksum: hasher.digest("hex"),
+    files: { fileCount, totalBytes, roots: [...roots].sort() },
+    manifest,
+  };
+}
+
+function mergeRuntime(layers: readonly TemplateLayerSpec[], context: string): VariantRuntimeSpec {
+  let image: string | undefined;
+  let memoryBytes: number | undefined;
+  let cpu: number | undefined;
+  const environment: Record<string, string> = {};
+  for (const layer of layers) {
+    image = layer.runtime.image ?? image;
+    memoryBytes = layer.runtime.memoryBytes ?? memoryBytes;
+    cpu = layer.runtime.cpu ?? cpu;
+    Object.assign(environment, layer.runtime.environment);
+  }
+  if (!image || memoryBytes === undefined || cpu === undefined) {
+    throw new Error(`${context} does not resolve a complete docker image, memory and cpu runtime`);
+  }
+  return { image, memoryBytes, cpu, environment };
+}
+
+function effectiveChecksum(layers: readonly TemplateLayerSpec[]): string {
+  const hasher = createHash("sha256");
+  for (const layer of layers) {
+    hasher.update(layer.id);
+    hasher.update("\0");
+    hasher.update(layer.checksum);
+    hasher.update("\0");
+  }
   return hasher.digest("hex");
 }
 
@@ -437,7 +539,8 @@ export async function loadConfiguration(
       parseGroup(parse(await readFile(path, "utf8")), path, timeoutFallbacks)
     ),
   );
-  const variants: Array<ServerVariantConfig & { templatePath: string; checksum: string }> = [];
+  const layers: TemplateLayerSpec[] = [];
+  const manifests = new Map<string, ReadonlyMap<string, "directory" | "file">>();
   // Each template directory is optional until it contains a valid variant.yml descriptor.
   for (const entry of await readdir(templatesRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -450,16 +553,58 @@ export async function loadConfiguration(
       continue;
     }
     const variant = parseVariant(parse(await readFile(descriptor, "utf8")), descriptor);
-    variants.push({ ...variant, templatePath, checksum: await checksumDirectory(templatePath) });
+    const inspected = await inspectDirectory(templatePath);
+    layers.push({
+      ...variant,
+      templatePath,
+      checksum: inspected.checksum,
+      files: inspected.files,
+    });
+    manifests.set(variant.id, inspected.manifest);
   }
-  const groupIds = new Set(groups.map((group) => group.id));
-  // Reject dangling variant references before writing any configuration to the database.
-  for (const variant of variants) {
-    if (!groupIds.has(variant.group)) {
-      throw new Error(`Variant ${variant.id} references unknown group ${variant.group}`);
+  const layersById = new Map<string, TemplateLayerSpec>();
+  for (const layer of layers) {
+    if (layersById.has(layer.id)) throw new Error(`Duplicate template layer id ${layer.id}`);
+    layersById.set(layer.id, layer);
+  }
+
+  const finalIds = new Set(groups.flatMap((group) => group.variants.map((variant) => variant.id)));
+  const variants: ResolvedServerVariantConfig[] = [];
+  for (const id of finalIds) {
+    const finalLayer = layersById.get(id);
+    if (!finalLayer) throw new Error(`Group references unknown final variant ${id}`);
+    if (finalLayer.revision === undefined) {
+      throw new Error(`Final variant ${id} must define revision`);
     }
+    if (finalLayer.parents.includes(id)) throw new Error(`Final variant ${id} cannot parent itself`);
+    const parents = finalLayer.parents.map((parentId) => {
+      const parent = layersById.get(parentId);
+      if (!parent) throw new Error(`Final variant ${id} references unknown parent ${parentId}`);
+      if (parent.parents.length > 0) {
+        throw new Error(`Parent layer ${parentId} cannot declare parents in flat inheritance`);
+      }
+      return parent;
+    });
+    const stack = [...parents, finalLayer];
+    const observed = new Map<string, "directory" | "file">();
+    for (const layer of stack) {
+      for (const [path, kind] of manifests.get(layer.id) ?? []) {
+        const previous = observed.get(path);
+        if (previous && previous !== kind) {
+          throw new Error(`Variant ${id} has a file/directory conflict at ${path}`);
+        }
+        observed.set(path, kind);
+      }
+    }
+    variants.push({
+      id,
+      revision: finalLayer.revision,
+      checksum: effectiveChecksum(stack),
+      runtime: mergeRuntime(stack, `Final variant ${id}`),
+      layers: stack,
+    });
   }
-  return { groups, variants };
+  return { groups, layers, variants };
 }
 
 // Upsert the filesystem configuration into the database as one atomic snapshot.
@@ -540,35 +685,78 @@ export async function synchronizeConfiguration(
         }
       });
     }
-    // Variant metadata changes in place; existing instances keep their selected variant id.
+    for (const layer of configuration.layers) {
+      await tx.insert(templateLayers).values({
+        id: layer.id,
+        templatePath: layer.templatePath,
+        checksum: layer.checksum,
+        runtimePatch: layer.runtime,
+        fileSummary: layer.files,
+        updatedAt: sql`now()`,
+      }).onConflictDoUpdate({
+        target: templateLayers.id,
+        set: {
+          templatePath: layer.templatePath,
+          checksum: layer.checksum,
+          runtimePatch: layer.runtime,
+          fileSummary: layer.files,
+          updatedAt: sql`now()`,
+        },
+      });
+    }
+
+    // Effective variant metadata changes in place; existing instances keep their variant id.
     for (const variant of configuration.variants) {
       await tx.insert(serverVariants).values({
         id: variant.id,
-        groupId: variant.group,
-        templatePath: variant.templatePath,
-        enabled: variant.enabled,
         revision: variant.revision,
-        selectionWeight: variant.weight,
         checksum: variant.checksum,
         runtimeSpec: variant.runtime,
         updatedAt: sql`now()`,
       }).onConflictDoUpdate({
         target: serverVariants.id,
         set: {
-          groupId: variant.group,
-          templatePath: variant.templatePath,
-          enabled: variant.enabled,
           revision: variant.revision,
-          selectionWeight: variant.weight,
           checksum: variant.checksum,
           runtimeSpec: variant.runtime,
           updatedAt: sql`now()`,
         }
       });
     }
+
+    const finalIds = configuration.variants.map((variant) => variant.id);
+    if (finalIds.length > 0) {
+      await tx.delete(serverVariantLayers).where(inArray(serverVariantLayers.variantId, finalIds));
+    }
+    for (const variant of configuration.variants) {
+      await tx.insert(serverVariantLayers).values(
+        variant.layers.map((layer, ordinal) => ({
+          variantId: variant.id,
+          layerId: layer.id,
+          ordinal,
+        })),
+      );
+    }
+
+    const groupIds = configuration.groups.map((group) => group.id);
+    if (groupIds.length > 0) {
+      await tx.delete(serverGroupVariants).where(inArray(serverGroupVariants.groupId, groupIds));
+    }
+    for (const group of configuration.groups) {
+      if (group.variants.length === 0) continue;
+      await tx.insert(serverGroupVariants).values(
+        group.variants.map((variant) => ({
+          groupId: group.id,
+          variantId: variant.id,
+          enabled: variant.enabled,
+          selectionWeight: variant.weight,
+        })),
+      );
+    }
   });
   logger.info("Configuration synchronized", {
     groups: configuration.groups.length,
+    layers: configuration.layers.length,
     variants: configuration.variants.length,
   });
 }

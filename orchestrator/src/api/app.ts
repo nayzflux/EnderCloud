@@ -110,6 +110,26 @@ export function createApp(dependencies: ApiDependencies) {
           },
         })
         .get(
+          "/dashboard/groups/:groupId/variants",
+          async ({ params, set, store }) => {
+            const detail = await dependencies.dashboard.getVariants(params.groupId);
+            if (detail) return detail;
+            set.status = 404;
+            return {
+              error: "NOT_FOUND",
+              message: `Server group ${params.groupId} was not found`,
+              requestId: (store as { requestId?: string }).requestId,
+            };
+          },
+          {
+            params: t.Object({ groupId }),
+            detail: {
+              tags: ["Dashboard"],
+              summary: "Read the layered variants configured for a server group",
+            },
+          },
+        )
+        .get(
           "/dashboard/groups/:groupId/queue",
           async ({ params, query, set, store }) => {
             const detail = await dependencies.dashboard.getQueue(

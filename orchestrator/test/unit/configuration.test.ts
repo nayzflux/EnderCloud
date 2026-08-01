@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { parseDuration, parseGroup, parseVariant } from "../../src/configuration/sync.ts";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadConfiguration, parseDuration, parseGroup, parseVariant } from "../../src/configuration/sync.ts";
 import { jsonParameter } from "../../src/db/json.ts";
 
 describe("configuration", () => {
@@ -12,6 +15,7 @@ describe("configuration", () => {
     const base = {
       id: "hub",
       type: "hub",
+      variants: [{ id: "hub-main", enabled: true, weight: 100 }],
       capacity: {
         minimum_instances: 1,
         maximum_instances: 3,
@@ -60,6 +64,7 @@ describe("configuration", () => {
         id: "skywars-solo",
         type: "minigame",
         enabled: true,
+        variants: [{ id: "skywars-map", enabled: true, weight: 100 }],
         matchmaking: {
           minimum_players: 4,
           maximum_players: 12,
@@ -107,6 +112,7 @@ describe("configuration", () => {
       {
         id: "bedwars-4v4v4v4",
         type: "minigame",
+        variants: [{ id: "bedwars-map", enabled: true, weight: 100 }],
         matchmaking: {
           minimum_players: 8,
           maximum_players: 16,
@@ -151,6 +157,7 @@ describe("configuration", () => {
     const legacy = {
       id: "legacy-hub",
       type: "hub",
+      variants: [{ id: "legacy-map", enabled: true, weight: 100 }],
       capacity: {
         minimum_instances: 0,
         maximum_instances: 2,
@@ -193,6 +200,7 @@ describe("configuration", () => {
         {
           id: "invalid-minigame",
           type: "minigame",
+          variants: [{ id: "invalid-map", enabled: true, weight: 100 }],
           capacity: {
             minimum_instances: 0,
             maximum_instances: 2,
@@ -227,9 +235,7 @@ describe("configuration", () => {
       parseVariant(
         {
           id: "map",
-          group: "group",
           revision: 1,
-          weight: 100,
           docker: { image: "itzg/minecraft-server:latest", memory: "4G", cpu: 2 },
           environment: {},
         },
@@ -247,5 +253,96 @@ describe("configuration", () => {
     });
     expect(typeof serialized).toBe("string");
     expect(JSON.parse(serialized).environment.EULA).toBe("TRUE");
+  });
+
+  test("resolves ordered layers and propagates parent checksums", async () => {
+    const root = await mkdtemp(join(tmpdir(), "endercloud-layers-"));
+    const groups = join(root, "groups");
+    const templates = join(root, "templates");
+    try {
+      await mkdir(groups);
+      await mkdir(templates);
+      await writeFile(join(groups, "skywars.yml"), `
+id: skywars-solo
+type: hub
+enabled: true
+variants:
+  - id: map-one
+    enabled: true
+    weight: 60
+capacity:
+  minimum_instances: 0
+  maximum_instances: 2
+  minimum_warm_instances: 0
+  maximum_warm_instances: 1
+routing:
+  maximum_players_per_instance: 12
+  target_players_per_instance: 10
+timeouts:
+  startup: 90s
+  drain: 5m
+  cancelled_drain: 10s
+  shutdown: 20s
+  transfer: 20s
+  player_stale: 30s
+`);
+      for (const id of ["skywars", "skywars-solo", "map-one"]) {
+        await mkdir(join(templates, id));
+      }
+      await writeFile(join(templates, "skywars", "variant.yml"), `
+id: skywars
+docker:
+  image: itzg/minecraft-server:java25
+  memory: 2G
+  cpu: 2
+environment:
+  MODE: base
+`);
+      await mkdir(join(templates, "skywars", "plugins"));
+      await writeFile(join(templates, "skywars", "plugins", "common.jar"), "v1");
+      await writeFile(join(templates, "skywars-solo", "variant.yml"), `
+id: skywars-solo
+environment:
+  MODE: solo
+`);
+      await writeFile(join(templates, "map-one", "variant.yml"), `
+id: map-one
+revision: 3
+parents: [skywars, skywars-solo]
+environment:
+  MAP_ID: one
+`);
+
+      const first = await loadConfiguration(groups, templates);
+      expect(first.variants[0]?.layers.map((layer) => layer.id)).toEqual([
+        "skywars",
+        "skywars-solo",
+        "map-one",
+      ]);
+      expect(first.variants[0]?.runtime).toMatchObject({
+        image: "itzg/minecraft-server:java25",
+        memoryBytes: 2 * 1024 ** 3,
+        cpu: 2,
+        environment: { MODE: "solo", MAP_ID: "one" },
+      });
+      const checksum = first.variants[0]?.checksum;
+      await writeFile(join(templates, "skywars", "plugins", "common.jar"), "v2");
+      const second = await loadConfiguration(groups, templates);
+      expect(second.variants[0]?.checksum).not.toBe(checksum);
+      await writeFile(join(templates, "skywars-solo", "variant.yml"), `
+id: skywars-solo
+parents: [skywars]
+`);
+      await expect(loadConfiguration(groups, templates)).rejects.toThrow(
+        "cannot declare parents",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects legacy ownership fields", () => {
+    expect(() => parseVariant({ id: "legacy", group: "skywars" }, "variant.yml"))
+      .toThrow("no longer valid");
   });
 });

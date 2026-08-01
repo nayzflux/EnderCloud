@@ -1,13 +1,16 @@
 import type { Database } from "../db/client.ts";
 import { sql, eq, and } from "drizzle-orm";
-import { serverVariants, serverInstances } from "../db/schema.ts";
+import {
+  serverGroupVariants,
+  serverInstances,
+  serverVariants,
+} from "../db/schema.ts";
 import type { VariantRuntimeSpec } from "../domain/types.ts";
 import { selectVariant } from "../domain/variant-selection.ts";
 
 interface VariantRow {
   id: string;
   group_id: string;
-  template_path: string;
   selection_weight: number;
   runtime_spec: VariantRuntimeSpec;
   warm_count: number;
@@ -18,27 +21,33 @@ export class VariantSelector {
 
   // Select the best enabled variant using current weighted representation.
   public async select(groupId: string): Promise<VariantRow> {
-    const rows = await this.db
+    const rows = (await this.db
       .select({
         id: serverVariants.id,
-        group_id: serverVariants.groupId,
-        template_path: serverVariants.templatePath,
-        selection_weight: serverVariants.selectionWeight,
+        group_id: serverGroupVariants.groupId,
+        selection_weight: serverGroupVariants.selectionWeight,
         runtime_spec: serverVariants.runtimeSpec,
         warm_count: sql<number>`count(${serverInstances.id}) FILTER (
           WHERE ${serverInstances.lifecycleState} IN ('CREATING', 'STARTING', 'RUNNING')
             AND ${serverInstances.availabilityState} = 'OPEN'
         )::int`.mapWith(Number),
       })
-      .from(serverVariants)
-      .leftJoin(serverInstances, eq(serverInstances.variantId, serverVariants.id))
-      .where(
+      .from(serverGroupVariants)
+      .innerJoin(serverVariants, eq(serverVariants.id, serverGroupVariants.variantId))
+      .leftJoin(
+        serverInstances,
         and(
-          eq(serverVariants.groupId, groupId),
-          eq(serverVariants.enabled, true),
+          eq(serverInstances.variantId, serverVariants.id),
+          eq(serverInstances.groupId, groupId),
         ),
       )
-      .groupBy(serverVariants.id) as unknown as VariantRow[];
+      .where(
+        and(
+          eq(serverGroupVariants.groupId, groupId),
+          eq(serverGroupVariants.enabled, true),
+        ),
+      )
+      .groupBy(serverVariants.id, serverGroupVariants.groupId, serverGroupVariants.selectionWeight)) as unknown as VariantRow[];
 
     const selected = selectVariant(
       rows.map((row) => ({

@@ -57,6 +57,13 @@
       "when": 1785502800000,
       "tag": "0007_hub_instance_renewal",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1785597014872,
+      "tag": "0008_variant_layers",
+      "breakpoints": true
     }
   ]
 }

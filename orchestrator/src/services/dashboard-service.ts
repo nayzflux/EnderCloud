@@ -3,7 +3,10 @@ import type { Database } from "../db/client.ts";
 import { sql, eq, ne, and, isNotNull, inArray, desc, asc, or, notInArray } from "drizzle-orm";
 import {
   serverGroups,
+  serverGroupVariants,
+  serverVariantLayers,
   serverVariants,
+  templateLayers,
   serverInstances,
   gameSessions,
   queueEntries,
@@ -24,6 +27,7 @@ import type {
   DashboardSession,
   DashboardSessionDetail,
   DashboardVariant,
+  DashboardVariantGraph,
   ActiveDeadline,
 } from "../domain/dashboard.ts";
 import type {
@@ -491,6 +495,75 @@ export class DashboardService {
     });
   }
 
+  public async getVariants(groupId: string): Promise<DashboardVariantGraph | null> {
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`);
+      const groups = await tx.select({ id: serverGroups.id })
+        .from(serverGroups)
+        .where(eq(serverGroups.id, groupId));
+      if (!groups[0]) return null;
+
+      const variants = await tx.select({
+        id: serverVariants.id,
+        enabled: serverGroupVariants.enabled,
+        revision: serverVariants.revision,
+        selection_weight: serverGroupVariants.selectionWeight,
+        checksum: serverVariants.checksum,
+        runtime_spec: serverVariants.runtimeSpec,
+      })
+        .from(serverGroupVariants)
+        .innerJoin(serverVariants, eq(serverVariants.id, serverGroupVariants.variantId))
+        .where(eq(serverGroupVariants.groupId, groupId))
+        .orderBy(asc(serverVariants.id));
+
+      const variantIds = variants.map((variant) => variant.id);
+      const layerRows = variantIds.length === 0
+        ? []
+        : await tx.select({
+          variant_id: serverVariantLayers.variantId,
+          ordinal: serverVariantLayers.ordinal,
+          id: templateLayers.id,
+          checksum: templateLayers.checksum,
+          runtime_patch: templateLayers.runtimePatch,
+          file_summary: templateLayers.fileSummary,
+        })
+          .from(serverVariantLayers)
+          .innerJoin(templateLayers, eq(templateLayers.id, serverVariantLayers.layerId))
+          .where(inArray(serverVariantLayers.variantId, variantIds))
+          .orderBy(asc(serverVariantLayers.variantId), asc(serverVariantLayers.ordinal));
+
+      const uniqueLayers = new Map<string, DashboardVariantGraph["layers"][number]>();
+      const layerIdsByVariant = new Map<string, string[]>();
+      for (const layer of layerRows) {
+        uniqueLayers.set(layer.id, {
+          id: layer.id,
+          checksum: layer.checksum,
+          runtime: layer.runtime_patch,
+          files: layer.file_summary,
+        });
+        const ids = layerIdsByVariant.get(layer.variant_id) ?? [];
+        ids.push(layer.id);
+        layerIdsByVariant.set(layer.variant_id, ids);
+      }
+
+      return {
+        schemaVersion: 1,
+        generatedAt: new Date().toISOString(),
+        groupId,
+        layers: [...uniqueLayers.values()],
+        variants: variants.map((variant) => ({
+          id: variant.id,
+          enabled: variant.enabled,
+          revision: variant.revision,
+          weight: variant.selection_weight,
+          checksum: variant.checksum,
+          runtime: variant.runtime_spec,
+          layers: layerIdsByVariant.get(variant.id) ?? [],
+        })),
+      };
+    });
+  }
+
   public async getInstance(instanceId: string): Promise<DashboardInstanceDetail | null> {
     return this.db.transaction(async (tx) => {
       await tx.execute(sql`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`);
@@ -523,14 +596,21 @@ export class DashboardService {
         runtime_path: serverInstances.runtimePath,
         stopped_at: serverInstances.stoppedAt,
         checksum: serverVariants.checksum,
-        variant_enabled: serverVariants.enabled,
+        variant_enabled: sql<boolean>`coalesce(${serverGroupVariants.enabled}, false)`,
         revision: serverVariants.revision,
-        selection_weight: serverVariants.selectionWeight,
+        selection_weight: sql<number>`coalesce(${serverGroupVariants.selectionWeight}, 0)::int`,
         runtime_spec: serverVariants.runtimeSpec,
       })
       .from(serverInstances)
       .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
       .innerJoin(serverVariants, eq(serverVariants.id, serverInstances.variantId))
+      .leftJoin(
+        serverGroupVariants,
+        and(
+          eq(serverGroupVariants.groupId, serverInstances.groupId),
+          eq(serverGroupVariants.variantId, serverInstances.variantId),
+        ),
+      )
       .where(eq(serverInstances.id, instanceId));
       
       const instance = instances[0];
@@ -789,14 +869,15 @@ export class DashboardService {
 
     const variants = await tx.select({
       id: serverVariants.id,
-      group_id: serverVariants.groupId,
-      enabled: serverVariants.enabled,
+      group_id: serverGroupVariants.groupId,
+      enabled: serverGroupVariants.enabled,
       revision: serverVariants.revision,
-      selection_weight: serverVariants.selectionWeight,
+      selection_weight: serverGroupVariants.selectionWeight,
       runtime_spec: serverVariants.runtimeSpec,
     })
-    .from(serverVariants)
-    .orderBy(asc(serverVariants.groupId), asc(serverVariants.id));
+    .from(serverGroupVariants)
+    .innerJoin(serverVariants, eq(serverVariants.id, serverGroupVariants.variantId))
+    .orderBy(asc(serverGroupVariants.groupId), asc(serverVariants.id));
 
     const instances = await tx.select({
       id: serverInstances.id,

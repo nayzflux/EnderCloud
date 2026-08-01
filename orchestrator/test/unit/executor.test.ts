@@ -1,10 +1,10 @@
 import { expect, mock, test } from "bun:test";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AppConfig } from "../../src/config.ts";
 import type { RuntimeInstance } from "../../src/executor/executor.ts";
-import { instanceName, LocalDockerExecutor } from "../../src/executor/local-docker.ts";
+import { instanceName, LocalDockerExecutor, materializeLayers } from "../../src/executor/local-docker.ts";
 import type { Logger } from "../../src/logger.ts";
 
 function config(runtimeRoot: string): AppConfig {
@@ -86,6 +86,38 @@ test("Docker instance names include the variant and unique instance id", () => {
   ).toBe(
     "endercloud-skywars-solo-japan-aB3dE5fG7hJ9kL2m",
   );
+});
+
+test("ordered layers merge recursively and omit control descriptors", async () => {
+  const root = await mkdtemp(join(tmpdir(), "endercloud-materialize-"));
+  try {
+    const base = join(root, "base");
+    const final = join(root, "final");
+    const runtime = join(root, "runtime");
+    await mkdir(join(base, "plugins"), { recursive: true });
+    await mkdir(join(base, "config"), { recursive: true });
+    await mkdir(join(final, "config"), { recursive: true });
+    await mkdir(join(final, "world"), { recursive: true });
+    await mkdir(runtime);
+    await writeFile(join(base, "variant.yml"), "id: base");
+    await writeFile(join(base, "plugins", "shared.jar"), "plugin");
+    await writeFile(join(base, "config", "game.yml"), "mode: base");
+    await writeFile(join(final, "variant.yml"), "id: final");
+    await writeFile(join(final, "config", "game.yml"), "mode: final");
+    await writeFile(join(final, "world", "level.dat"), "world");
+
+    await materializeLayers(
+      [{ id: "base", templatePath: base }, { id: "final", templatePath: final }],
+      runtime,
+    );
+
+    expect(await readFile(join(runtime, "config", "game.yml"), "utf8")).toBe("mode: final");
+    expect(await readFile(join(runtime, "plugins", "shared.jar"), "utf8")).toBe("plugin");
+    expect(await readFile(join(runtime, "world", "level.dat"), "utf8")).toBe("world");
+    expect(await exists(join(runtime, "variant.yml"))).toBeFalse();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("orphan cleanup removes the exact observed container and its runtime directory", async () => {
