@@ -276,6 +276,9 @@ export class InstanceController {
         await this.playerLeft(instanceId, event.playerId, event.sessionId);
         await this.publishRoutingUpdate(instanceId);
         break;
+      case "PLAYER_ELIMINATED":
+        await this.playerEliminated(instanceId, event.playerId, event.sessionId);
+        break;
       case "HEARTBEAT":
         await this.heartbeat(instanceId, event.playerIds);
         await this.publishRoutingUpdate(instanceId);
@@ -812,6 +815,50 @@ export class InstanceController {
         if (changed.length > 0) await this.bumpAssignmentRevision(tx, effectiveSessionId);
       }
     });
+  }
+
+  // Release an eliminated player from a running session without disconnecting the spectator.
+  private async playerEliminated(
+    instanceId: string,
+    playerId: string,
+    sessionId: string,
+  ): Promise<void> {
+    const accepted = await this.db.transaction(async (tx) => {
+      await this.validateEventSession(tx, instanceId, sessionId);
+      const rows = await tx
+        .select({
+          sessionState: gameSessions.state,
+          playerState: sessionPlayers.state,
+        })
+        .from(sessionPlayers)
+        .innerJoin(gameSessions, eq(gameSessions.id, sessionPlayers.sessionId))
+        .where(
+          and(
+            eq(sessionPlayers.sessionId, sessionId),
+            eq(sessionPlayers.playerId, playerId),
+          ),
+        )
+        .for("update", { of: sessionPlayers });
+      const player = rows[0];
+      if (!player) return false;
+      if (player.sessionState !== "RUNNING") return false;
+      if (player.playerState === "LEFT") return true;
+
+      const changed = await tx
+        .update(sessionPlayers)
+        .set({ state: "LEFT", leftAt: sql`now()` })
+        .where(
+          and(
+            eq(sessionPlayers.sessionId, sessionId),
+            eq(sessionPlayers.playerId, playerId),
+            sql`${sessionPlayers.state} <> 'LEFT'`,
+          ),
+        )
+        .returning({ playerId: sessionPlayers.playerId });
+      if (changed.length > 0) await this.bumpAssignmentRevision(tx, sessionId);
+      return true;
+    });
+    if (!accepted) throw this.invalidSessionEvent(instanceId, sessionId);
   }
 
   // Reconcile the authoritative player list reported by the game server.

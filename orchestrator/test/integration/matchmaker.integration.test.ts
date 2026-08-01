@@ -11,7 +11,7 @@ import { VariantSelector } from "../../src/services/variant-selector.ts";
 import type { RedisEventBus } from "../../src/events/redis-bus.ts";
 import type { Logger } from "../../src/logger.ts";
 import { HubRouter } from "../../src/services/hub-router.ts";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { nanoid } from "../../src/id.ts";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { CapacityController } from "../../src/services/capacity-controller.ts";
@@ -471,6 +471,185 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const commands = await db.select().from(transferCommands);
     expect(sessions[0]!.state).toBe("STARTING");
     expect(commands[0]!.state).toBe("CANCELLED");
+  });
+
+  test("an eliminated spectator can requeue without leaving the running instance", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = nanoid();
+    const sessionId = nanoid();
+    const eliminatedPlayerId = crypto.randomUUID();
+    const activePlayerId = crypto.randomUUID();
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      groupId,
+      variantId,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "localhost:25565",
+      playerCount: 2,
+    });
+    await db.insert(gameSessions).values({
+      id: sessionId,
+      groupId,
+      instanceId,
+      state: "RUNNING",
+      startedAt: new Date(),
+    });
+    await db.update(serverInstances)
+      .set({ sessionId, availabilityState: "RESERVED" })
+      .where(eq(serverInstances.id, instanceId));
+    await db.insert(sessionPlayers).values([
+      {
+        sessionId,
+        playerId: eliminatedPlayerId,
+        partyId: "original-party",
+        state: "CONNECTED",
+      },
+      {
+        sessionId,
+        playerId: activePlayerId,
+        partyId: "original-party",
+        state: "CONNECTED",
+      },
+    ]);
+    await db.insert(instancePlayers).values([
+      {
+        instanceId,
+        playerId: eliminatedPlayerId,
+        staleDeadline: new Date(Date.now() + 30_000),
+      },
+      {
+        instanceId,
+        playerId: activePlayerId,
+        staleDeadline: new Date(Date.now() + 30_000),
+      },
+    ]);
+    const queues = new QueueService(db);
+    const controller = new InstanceController(
+      db,
+      {} as Executor,
+      {} as VariantSelector,
+      {} as RedisEventBus,
+      {} as TransferService,
+      {} as HubRouter,
+      mockLogger,
+    );
+
+    await expect(queues.enqueue({
+      groupId,
+      partyId: "next-party",
+      players: [eliminatedPlayerId],
+    })).rejects.toThrow("already matchmaking");
+
+    await controller.handlePaperEvent(instanceId, {
+      type: "PLAYER_ELIMINATED",
+      sessionId,
+      playerId: eliminatedPlayerId,
+    });
+    const released = await db.select().from(sessionPlayers).where(and(
+      eq(sessionPlayers.sessionId, sessionId),
+      eq(sessionPlayers.playerId, eliminatedPlayerId),
+    ));
+    const connected = await db.select().from(instancePlayers).where(
+      eq(instancePlayers.instanceId, instanceId),
+    );
+    const revised = await db.select().from(gameSessions).where(eq(gameSessions.id, sessionId));
+    expect(released[0]!.state).toBe("LEFT");
+    expect(released[0]!.leftAt).not.toBeNull();
+    expect(connected.map((player) => player.playerId).toSorted()).toEqual(
+      [activePlayerId, eliminatedPlayerId].toSorted(),
+    );
+    expect(revised[0]!.assignmentRevision).toBe(2);
+
+    const requeued = await queues.enqueue({
+      groupId,
+      partyId: "changed-party",
+      players: [eliminatedPlayerId],
+    });
+    expect(requeued.state).toBe("QUEUED");
+    await expect(queues.enqueue({
+      groupId,
+      partyId: "still-playing",
+      players: [activePlayerId],
+    })).rejects.toThrow("already matchmaking");
+
+    await controller.handlePaperEvent(instanceId, {
+      type: "HEARTBEAT",
+      playerIds: [eliminatedPlayerId, activePlayerId],
+    });
+    await controller.handlePaperEvent(instanceId, {
+      type: "PLAYER_ELIMINATED",
+      sessionId,
+      playerId: eliminatedPlayerId,
+    });
+    const afterHeartbeat = await db.select().from(sessionPlayers).where(and(
+      eq(sessionPlayers.sessionId, sessionId),
+      eq(sessionPlayers.playerId, eliminatedPlayerId),
+    ));
+    const afterRetry = await db.select().from(gameSessions).where(eq(gameSessions.id, sessionId));
+    expect(afterHeartbeat[0]!.state).toBe("LEFT");
+    expect(afterRetry[0]!.assignmentRevision).toBe(2);
+  });
+
+  test("PLAYER_ELIMINATED rejects invalid session ownership, state and membership", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = nanoid();
+    const sessionId = nanoid();
+    const playerId = crypto.randomUUID();
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      groupId,
+      variantId,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "localhost:25565",
+    });
+    await db.insert(gameSessions).values({
+      id: sessionId,
+      groupId,
+      instanceId,
+      state: "WAITING",
+    });
+    await db.update(serverInstances)
+      .set({ sessionId, availabilityState: "RESERVED" })
+      .where(eq(serverInstances.id, instanceId));
+    await db.insert(sessionPlayers).values({
+      sessionId,
+      playerId,
+      partyId: "waiting-party",
+      state: "CONNECTED",
+    });
+    const controller = new InstanceController(
+      db,
+      {} as Executor,
+      {} as VariantSelector,
+      {} as RedisEventBus,
+      {} as TransferService,
+      {} as HubRouter,
+      mockLogger,
+    );
+
+    await expect(controller.handlePaperEvent(instanceId, {
+      type: "PLAYER_ELIMINATED",
+      sessionId,
+      playerId,
+    })).rejects.toThrow("unavailable");
+    await db.update(gameSessions).set({ state: "RUNNING" }).where(eq(gameSessions.id, sessionId));
+    await expect(controller.handlePaperEvent(instanceId, {
+      type: "PLAYER_ELIMINATED",
+      sessionId,
+      playerId: crypto.randomUUID(),
+    })).rejects.toThrow("unavailable");
+    await expect(controller.handlePaperEvent(instanceId, {
+      type: "PLAYER_ELIMINATED",
+      sessionId: nanoid(),
+      playerId,
+    })).rejects.toThrow("unavailable");
+    await expect(controller.handlePaperEvent(nanoid(), {
+      type: "PLAYER_ELIMINATED",
+      sessionId,
+      playerId,
+    })).rejects.toThrow("unavailable");
   });
 
   test("GAME_CANCELLED rapidly drains connected minigame players to an available hub", async () => {

@@ -22,6 +22,11 @@ const paperEventSchema = t.Union([
     playerId: playerUuid,
     sessionId: t.Optional(internalId),
   }),
+  t.Object({
+    type: t.Literal("PLAYER_ELIMINATED"),
+    playerId: playerUuid,
+    sessionId: internalId,
+  }),
   t.Object({ type: t.Literal("HEARTBEAT"), playerIds: t.Array(playerUuid) }),
   t.Object({ type: t.Literal("GAME_STARTING"), sessionId: internalId }),
   t.Object({ type: t.Literal("GAME_STARTED"), sessionId: internalId }),

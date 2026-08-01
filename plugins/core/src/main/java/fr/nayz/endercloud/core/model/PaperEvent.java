@@ -28,6 +28,12 @@ public record PaperEvent(
         return new PaperEvent("PLAYER_LEFT", null, playerId, sessionId, null, null, null);
     }
 
+    public static PaperEvent playerEliminated(UUID playerId, String sessionId) {
+        return new PaperEvent(
+                "PLAYER_ELIMINATED", null, playerId, sessionId, null, null, null
+        );
+    }
+
     public static PaperEvent heartbeat(List<UUID> playerIds) {
         return new PaperEvent("HEARTBEAT", null, null, null, List.copyOf(playerIds), null, null);
     }

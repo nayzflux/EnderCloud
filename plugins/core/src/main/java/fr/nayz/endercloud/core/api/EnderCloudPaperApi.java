@@ -26,6 +26,8 @@ public interface EnderCloudPaperApi {
 
     CompletableFuture<Void> reportGameStarted(String sessionId);
 
+    CompletableFuture<Void> reportPlayerEliminated(String sessionId, UUID playerId);
+
     CompletableFuture<Void> reportGameCancelled(String sessionId, String reason);
 
     CompletableFuture<Void> reportGameFinished(String sessionId, Map<String, Object> results);

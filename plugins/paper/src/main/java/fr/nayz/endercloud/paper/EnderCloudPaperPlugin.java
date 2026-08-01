@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -138,6 +139,14 @@ public final class EnderCloudPaperPlugin extends JavaPlugin
     @Override
     public CompletableFuture<Void> reportGameStarted(String sessionId) {
         return orchestrator.publishEvent(instanceId, PaperEvent.gameStarted(sessionId));
+    }
+
+    @Override
+    public CompletableFuture<Void> reportPlayerEliminated(String sessionId, UUID playerId) {
+        return orchestrator.publishEvent(
+                instanceId,
+                PaperEvent.playerEliminated(playerId, sessionId)
+        );
     }
 
     @Override

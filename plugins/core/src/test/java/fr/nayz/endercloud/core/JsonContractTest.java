@@ -29,6 +29,20 @@ class JsonContractTest {
         assertEquals("PLAYER_JOINED", JsonCodec.readTree(json).path("type").asText());
         assertEquals(playerId.toString(), JsonCodec.readTree(json).path("playerId").asText());
 
+        String eliminated = JsonCodec.write(PaperEvent.playerEliminated(playerId, "session"));
+        assertEquals(
+                "PLAYER_ELIMINATED",
+                JsonCodec.readTree(eliminated).path("type").asText()
+        );
+        assertEquals(
+                "session",
+                JsonCodec.readTree(eliminated).path("sessionId").asText()
+        );
+        assertEquals(
+                playerId.toString(),
+                JsonCodec.readTree(eliminated).path("playerId").asText()
+        );
+
         String cancelled = JsonCodec.write(
                 PaperEvent.gameCancelled("session", "not enough teams")
         );

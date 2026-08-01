@@ -129,6 +129,7 @@ export type PaperEvent =
   | { readonly type: "SERVER_READY"; readonly endpoint?: string }
   | { readonly type: "PLAYER_JOINED"; readonly playerId: string; readonly sessionId?: string }
   | { readonly type: "PLAYER_LEFT"; readonly playerId: string; readonly sessionId?: string }
+  | { readonly type: "PLAYER_ELIMINATED"; readonly playerId: string; readonly sessionId: string }
   | { readonly type: "HEARTBEAT"; readonly playerIds: readonly string[] }
   | { readonly type: "GAME_STARTING"; readonly sessionId: string }
   | { readonly type: "GAME_STARTED"; readonly sessionId: string }

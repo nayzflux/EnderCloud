@@ -68,6 +68,7 @@ de Paper.
         Optional<SessionAssignment> currentAssignment();
         CompletableFuture<Void> reportGameStarting(String sessionId);
         CompletableFuture<Void> reportGameStarted(String sessionId);
+        CompletableFuture<Void> reportPlayerEliminated(String sessionId, UUID playerId);
         CompletableFuture<Void> reportGameFinished(
                 String sessionId,
                 Map<String, Object> results);
@@ -201,6 +202,32 @@ Après la préparation finale :
 
 Ne pas envoyer GAME_STARTED avant GAME_STARTING. Chaque notification doit être envoyée une
 seule fois pour une session.
+
+## Libérer un joueur éliminé
+
+Lorsqu’un joueur est définitivement éliminé d’une partie en cours, le plugin doit le libérer de
+la session avant de tenter une nouvelle inscription :
+
+    cloud.reportPlayerEliminated(sessionId, playerId)
+            .thenCompose(ignored -> cloud.enqueue(new QueueRequest(
+                    "skywars-solo",
+                    nextPartyId,
+                    List.of(playerId)
+            )))
+            .exceptionally(error -> {
+                getLogger().warning("Unable to requeue eliminated player: "
+                        + error.getMessage());
+                return null;
+            });
+
+Il faut attendre la réussite de `reportPlayerEliminated` avant d’appeler `enqueue`. EnderCloud
+marque alors le joueur comme sorti de l’ancienne session, mais le conserve dans le comptage du
+serveur : il peut donc rester spectateur jusqu’au transfert vers sa prochaine partie. L’événement
+n’est accepté que pour un joueur appartenant à une session `RUNNING` de cette instance.
+
+EnderCloud ne reconstruit pas la composition précédente de la party. La nouvelle demande est
+validée uniquement à partir des UUID qu’elle contient ; le plugin mini-jeu reste responsable de
+la cohérence de cette composition.
 
 ## Annuler la partie
 
