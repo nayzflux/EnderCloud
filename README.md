@@ -130,6 +130,8 @@ OpenAPI is available at `/openapi` inside the private network. Important routes 
 
 - `GET /api/v1/proxy/servers`
 - `GET /api/v1/dashboard/cluster`
+- `GET /api/v1/dashboard/monitoring/summary`
+- `GET /api/v1/dashboard/groups/{groupId}/monitoring?range=1h|6h|24h|7d`
 - `GET /api/v1/dashboard/groups/{groupId}/queue`
 - `GET /api/v1/dashboard/instances/{instanceId}`
 - `GET /api/v1/dashboard/sessions/{sessionId}`
@@ -138,6 +140,11 @@ OpenAPI is available at `/openapi` inside the private network. Important routes 
 - `POST /api/v1/instances/{id}/events`
 - `POST /api/v1/instances/{id}/hub-transfers`
 - `GET /api/v1/instances/{id}/assignment`
+
+Paper heartbeats may include `tps.oneMinute`, `tps.fiveMinutes` and
+`tps.fifteenMinutes`. The field remains optional for older plugin versions.
+The orchestrator aggregates these samples per minute and retains seven days of
+monitoring history.
 
 Redis uses `minecraft:proxy:registry` and `minecraft:proxy:transfers`. Subscribers connect before
 loading their HTTP snapshot and reload it after any malformed event or reconnection.

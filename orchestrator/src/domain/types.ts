@@ -157,12 +157,22 @@ export interface ServerSnapshot {
   readonly maximumPlayers: number;
 }
 
+export interface TpsSnapshot {
+  readonly oneMinute: number;
+  readonly fiveMinutes: number;
+  readonly fifteenMinutes: number;
+}
+
 export type PaperEvent =
   | { readonly type: "SERVER_READY"; readonly endpoint?: string }
   | { readonly type: "PLAYER_JOINED"; readonly playerId: string; readonly sessionId?: string }
   | { readonly type: "PLAYER_LEFT"; readonly playerId: string; readonly sessionId?: string }
   | { readonly type: "PLAYER_ELIMINATED"; readonly playerId: string; readonly sessionId: string }
-  | { readonly type: "HEARTBEAT"; readonly playerIds: readonly string[] }
+  | {
+      readonly type: "HEARTBEAT";
+      readonly playerIds: readonly string[];
+      readonly tps?: TpsSnapshot;
+    }
   | { readonly type: "GAME_STARTING"; readonly sessionId: string }
   | { readonly type: "GAME_STARTED"; readonly sessionId: string }
   | { readonly type: "GAME_CANCELLED"; readonly sessionId: string; readonly reason?: string }

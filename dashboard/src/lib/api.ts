@@ -5,6 +5,9 @@ import type {
   DashboardQueueDetail,
   DashboardSessionDetail,
   DashboardVariantGraph,
+  DashboardMonitoringSeries,
+  DashboardMonitoringSummary,
+  MonitoringRange,
 } from "./contracts";
 
 export class DashboardApiError extends Error {
@@ -48,6 +51,19 @@ export function fetchQueue(
 ): Promise<DashboardQueueDetail> {
   return readJson(
     `/api/groups/${encodeURIComponent(groupId)}/queue?limit=${limit}`,
+  );
+}
+
+export function fetchMonitoringSummary(): Promise<DashboardMonitoringSummary> {
+  return readJson("/api/monitoring/summary");
+}
+
+export function fetchGroupMonitoring(
+  groupId: string,
+  range: MonitoringRange,
+): Promise<DashboardMonitoringSeries> {
+  return readJson(
+    `/api/groups/${encodeURIComponent(groupId)}/monitoring?range=${range}`,
   );
 }
 

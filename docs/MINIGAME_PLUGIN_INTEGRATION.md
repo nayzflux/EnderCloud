@@ -271,12 +271,15 @@ Le bridge Paper publie automatiquement :
 
 - PLAYER_JOINED lors de l’arrivée d’un joueur ;
 - PLAYER_LEFT lors de sa déconnexion ;
-- HEARTBEAT périodiquement avec la liste complète des joueurs présents.
+- HEARTBEAT périodiquement avec la liste complète des joueurs présents et les moyennes TPS
+  Paper sur 1, 5 et 15 minutes.
 
 Le plugin de mini-jeu n’a normalement pas besoin de republier ces événements. Il doit seulement
 écouter les événements Bukkit nécessaires à sa logique.
 
 Le heartbeat permet à EnderCloud de corriger les états après une déconnexion ou un redémarrage.
+Le bloc TPS reste optionnel dans le contrat afin que les anciennes versions du bridge restent
+compatibles.
 
 ## Backfill et changement de revision
 

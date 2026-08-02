@@ -14,6 +14,7 @@ import { Bar, BarChart, CartesianGrid, Cell, XAxis, YAxis } from "recharts";
 import { ClusterGate } from "@/components/cluster-gate";
 import { useDetailPanel } from "@/components/detail-panel";
 import { PageHeader } from "@/components/page-header";
+import { OverviewMonitoringAlerts } from "@/components/monitoring-alerts";
 import { StatCard } from "@/components/stat-card";
 import {
   GroupTypeBadge,
@@ -457,6 +458,8 @@ export default function OverviewPage() {
                   hint={`${summary.queuedPlayers} queued`}
                 />
               </div>
+
+              <OverviewMonitoringAlerts />
 
               <div className="grid gap-4 lg:grid-cols-2">
                 <Card className="gap-0">

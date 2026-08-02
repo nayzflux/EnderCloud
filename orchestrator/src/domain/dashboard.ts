@@ -158,6 +158,63 @@ export interface DashboardClusterSnapshot {
   readonly groups: readonly DashboardGroup[];
 }
 
+export const monitoringRanges = ["1h", "6h", "24h", "7d"] as const;
+export type MonitoringRange = (typeof monitoringRanges)[number];
+
+export interface DashboardMonitoringSeries {
+  readonly schemaVersion: 1;
+  readonly generatedAt: string;
+  readonly groupId: string;
+  readonly range: MonitoringRange;
+  readonly resolutionMs: number;
+  readonly thresholds: {
+    readonly tps: number;
+    readonly startupBootMs: number;
+  };
+  readonly variants: readonly {
+    readonly variantId: string;
+    readonly enabled: boolean;
+    readonly startup: readonly {
+      readonly at: string;
+      readonly totalAverageMs: number;
+      readonly bootAverageMs: number;
+      readonly sampleCount: number;
+    }[];
+    readonly tps: readonly {
+      readonly at: string;
+      readonly oneMinute: number;
+      readonly fiveMinutes: number;
+      readonly fifteenMinutes: number;
+      readonly sampleCount: number;
+    }[];
+  }[];
+}
+
+export type DashboardMonitoringAlert =
+  | {
+      readonly metric: "TPS_5M";
+      readonly groupId: string;
+      readonly variantId: string;
+      readonly value: number;
+      readonly threshold: number;
+      readonly observedAt: string;
+    }
+  | {
+      readonly metric: "STARTUP_BOOT_60M";
+      readonly groupId: string;
+      readonly variantId: string;
+      readonly valueMs: number;
+      readonly thresholdMs: number;
+      readonly sampleCount: number;
+      readonly observedAt: string;
+    };
+
+export interface DashboardMonitoringSummary {
+  readonly schemaVersion: 1;
+  readonly generatedAt: string;
+  readonly alerts: readonly DashboardMonitoringAlert[];
+}
+
 export interface DashboardQueueDetail {
   readonly schemaVersion: 2;
   readonly generatedAt: string;

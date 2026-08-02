@@ -18,6 +18,7 @@ import { SessionController } from "./services/session-controller.ts";
 import { TransferService } from "./services/transfer-service.ts";
 import { VariantSelector } from "./services/variant-selector.ts";
 import { HubRouter } from "./services/hub-router.ts";
+import { MonitoringService } from "./services/monitoring-service.ts";
 
 const config = loadConfig();
 const logger = new Logger(config.logLevel);
@@ -56,6 +57,7 @@ const executor = new LocalDockerExecutor(config, logger);
 const variants = new VariantSelector(db);
 const transfers = new TransferService(db, bus, logger);
 const hubs = new HubRouter(db, transfers);
+const monitoring = new MonitoringService(db, logger);
 const instances = new InstanceController(
   db,
   executor,
@@ -64,6 +66,7 @@ const instances = new InstanceController(
   transfers,
   hubs,
   logger,
+  monitoring,
 );
 const queues = new QueueService(db);
 const dashboard = new DashboardService(db);
@@ -83,6 +86,7 @@ const app = createApp({
   instances,
   hubs,
   dashboard,
+  monitoring,
   logger,
   isReady: () => ready,
 });
@@ -97,6 +101,7 @@ scheduler.every("matchmaking", config.matchmakingIntervalMs, () => matchmaker.ti
 scheduler.every("sessions", config.matchmakingIntervalMs, () => sessions.tick());
 scheduler.every("transfers", config.matchmakingIntervalMs, () => transfers.tick());
 scheduler.every("reconciliation", config.reconcileIntervalMs, () => reconciler.tick());
+scheduler.every("monitoring-retention", 60 * 60 * 1_000, () => monitoring.prune());
 
 logger.info("EnderCloud orchestrator started", {
   url: server.url.toString(),

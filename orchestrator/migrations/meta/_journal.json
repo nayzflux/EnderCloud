@@ -64,6 +64,13 @@
       "when": 1785597014872,
       "tag": "0008_variant_layers",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1785603600000,
+      "tag": "0009_monitoring_metrics",
+      "breakpoints": true
     }
   ]
 }

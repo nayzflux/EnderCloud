@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import {
   isMockEnabled,
   mockCluster,
+  mockGroupMonitoring,
   mockInstance,
+  mockMonitoringSummary,
   mockQueue,
   mockSession,
 } from "../src/lib/mock-data";
@@ -29,6 +31,24 @@ describe("isMockEnabled", () => {
     delete process.env.DASHBOARD_MOCK_DATA;
     expect(isMockEnabled()).toBe(false);
     restore();
+  });
+});
+
+describe("mock monitoring", () => {
+  test("keeps series bounded and deterministic for every range", () => {
+    const expectedPoints = { "1h": 61, "6h": 73, "24h": 97, "7d": 169 } as const;
+    for (const range of ["1h", "6h", "24h", "7d"] as const) {
+      const data = mockGroupMonitoring("skywars-solo", range, now);
+      expect(data?.variants[0]?.startup).toHaveLength(expectedPoints[range]);
+      expect(data?.variants[0]?.tps).toHaveLength(expectedPoints[range]);
+    }
+  });
+
+  test("provides compact overview alerts", () => {
+    expect(mockMonitoringSummary(now).alerts.map((alert) => alert.metric)).toEqual([
+      "TPS_5M",
+      "STARTUP_BOOT_60M",
+    ]);
   });
 });
 

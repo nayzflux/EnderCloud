@@ -2,6 +2,7 @@ import {
   bigint,
   boolean,
   check,
+  doublePrecision,
   index,
   integer,
   jsonb,
@@ -388,6 +389,25 @@ export const proxyHeartbeats = pgTable("proxy_heartbeats", {
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const serverTpsMetrics = pgTable(
+  "server_tps_metrics",
+  {
+    groupId: text("group_id").notNull(),
+    variantId: text("variant_id").notNull(),
+    bucketAt: timestamp("bucket_at", { withTimezone: true }).notNull(),
+    oneMinuteSum: doublePrecision("one_minute_sum").notNull(),
+    fiveMinutesSum: doublePrecision("five_minutes_sum").notNull(),
+    fifteenMinutesSum: doublePrecision("fifteen_minutes_sum").notNull(),
+    sampleCount: integer("sample_count").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.groupId, table.variantId, table.bucketAt] }),
+    index("server_tps_metrics_bucket_idx").on(table.bucketAt),
+    index("server_tps_metrics_group_bucket_idx").on(table.groupId, table.bucketAt),
+    check("server_tps_metrics_sample_count_check", sql`${table.sampleCount} > 0`),
+  ],
+);
+
 export const schema = {
   serverGroups,
   templateLayers,
@@ -405,6 +425,7 @@ export const schema = {
   nodes,
   events,
   proxyHeartbeats,
+  serverTpsMetrics,
 };
 
 export type DatabaseSchema = typeof schema;

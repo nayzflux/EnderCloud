@@ -5,11 +5,17 @@ import type { DashboardService } from "../services/dashboard-service.ts";
 import type { InstanceController } from "../services/instance-controller.ts";
 import type { QueueService } from "../services/queue-service.ts";
 import type { HubRouter } from "../services/hub-router.ts";
+import type { MonitoringService } from "../services/monitoring-service.ts";
 import { nanoid } from "../id.ts";
 
 const playerUuid = t.String({ format: "uuid" });
 const internalId = t.String({ pattern: "^[A-Za-z0-9]{16}$" });
 const groupId = t.String({ pattern: "^[a-z0-9][a-z0-9-]{1,62}$" });
+const tpsSnapshot = t.Object({
+  oneMinute: t.Number({ minimum: 0, maximum: 100 }),
+  fiveMinutes: t.Number({ minimum: 0, maximum: 100 }),
+  fifteenMinutes: t.Number({ minimum: 0, maximum: 100 }),
+});
 const paperEventSchema = t.Union([
   t.Object({ type: t.Literal("SERVER_READY"), endpoint: t.Optional(t.String()) }),
   t.Object({
@@ -27,7 +33,11 @@ const paperEventSchema = t.Union([
     playerId: playerUuid,
     sessionId: internalId,
   }),
-  t.Object({ type: t.Literal("HEARTBEAT"), playerIds: t.Array(playerUuid) }),
+  t.Object({
+    type: t.Literal("HEARTBEAT"),
+    playerIds: t.Array(playerUuid),
+    tps: t.Optional(tpsSnapshot),
+  }),
   t.Object({ type: t.Literal("GAME_STARTING"), sessionId: internalId }),
   t.Object({ type: t.Literal("GAME_STARTED"), sessionId: internalId }),
   t.Object({
@@ -47,6 +57,7 @@ export interface ApiDependencies {
   readonly instances: InstanceController;
   readonly hubs: HubRouter;
   readonly dashboard: DashboardService;
+  readonly monitoring: MonitoringService;
   readonly logger: Logger;
   readonly isReady: () => boolean;
 }
@@ -109,6 +120,47 @@ export function createApp(dependencies: ApiDependencies) {
             summary: "Read the current cluster topology",
           },
         })
+        .get(
+          "/dashboard/monitoring/summary",
+          () => dependencies.monitoring.getSummary(),
+          {
+            detail: {
+              tags: ["Dashboard"],
+              summary: "Read compact performance alerts",
+            },
+          },
+        )
+        .get(
+          "/dashboard/groups/:groupId/monitoring",
+          async ({ params, query, set, store }) => {
+            const detail = await dependencies.monitoring.getGroupSeries(
+              params.groupId,
+              query.range,
+            );
+            if (detail) return detail;
+            set.status = 404;
+            return {
+              error: "NOT_FOUND",
+              message: `Server group ${params.groupId} was not found`,
+              requestId: (store as { requestId?: string }).requestId,
+            };
+          },
+          {
+            params: t.Object({ groupId }),
+            query: t.Object({
+              range: t.Union([
+                t.Literal("1h"),
+                t.Literal("6h"),
+                t.Literal("24h"),
+                t.Literal("7d"),
+              ]),
+            }),
+            detail: {
+              tags: ["Dashboard"],
+              summary: "Read startup and TPS time series for a server group",
+            },
+          },
+        )
         .get(
           "/dashboard/groups/:groupId/variants",
           async ({ params, set, store }) => {

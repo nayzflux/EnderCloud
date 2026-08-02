@@ -16,6 +16,7 @@ import fr.nayz.endercloud.core.model.HubTransferResult;
 import fr.nayz.endercloud.core.model.QueueRequest;
 import fr.nayz.endercloud.core.model.QueueResult;
 import fr.nayz.endercloud.core.model.SessionAssignment;
+import fr.nayz.endercloud.core.model.TpsSnapshot;
 
 import java.net.URI;
 import java.util.List;
@@ -184,7 +185,11 @@ public final class EnderCloudPaperPlugin extends JavaPlugin
         List<java.util.UUID> playerIds = Bukkit.getOnlinePlayers().stream()
                 .map(player -> player.getUniqueId())
                 .toList();
-        publish(PaperEvent.heartbeat(playerIds));
+        double[] tps = Bukkit.getTPS();
+        publish(PaperEvent.heartbeat(
+                playerIds,
+                new TpsSnapshot(tps[0], tps[1], tps[2])
+        ));
     }
 
     private void refreshAssignment() {

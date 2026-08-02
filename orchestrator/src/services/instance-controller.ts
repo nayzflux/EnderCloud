@@ -31,6 +31,7 @@ import {
 } from "../domain/matchmaking.ts";
 import type { TransferService } from "./transfer-service.ts";
 import type { HubRouter } from "./hub-router.ts";
+import type { MonitoringService } from "./monitoring-service.ts";
 
 interface CreateRow {
   id: string;
@@ -59,6 +60,7 @@ export class InstanceController {
     private readonly transfers: TransferService,
     private readonly hubs: HubRouter,
     private readonly logger: Logger,
+    private readonly monitoring?: MonitoringService,
   ) {}
 
   // Create an unassigned warm instance for the requested server group.
@@ -290,6 +292,7 @@ export class InstanceController {
         break;
       case "HEARTBEAT":
         await this.heartbeat(instanceId, event.playerIds);
+        await this.monitoring?.recordTps(instanceId, event.tps);
         await this.publishRoutingUpdate(instanceId);
         break;
       case "GAME_STARTING":

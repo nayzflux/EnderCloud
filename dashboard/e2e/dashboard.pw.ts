@@ -48,6 +48,7 @@ test.describe("overview", () => {
 
     await expect(page.getByText("Fleet health", { exact: true })).toBeVisible();
     await expect(page.getByText("Needs attention", { exact: true })).toBeVisible();
+    await expect(page.getByText("2 performance alerts", { exact: true })).toBeVisible();
     // The groups table, not the sidebar entry of the same name.
     await expect(
       page.getByText("Capacity, occupancy and queue pressure", { exact: false }),
@@ -240,6 +241,41 @@ test.describe("topology", () => {
   });
 });
 
+test.describe("monitoring", () => {
+  test("renders shadcn time-series charts and switches their windows", async ({ page }) => {
+    await visit(page, "/monitoring");
+    await expect(page.getByRole("heading", { name: "Performance monitoring" }))
+      .toBeVisible();
+    await expect(page.getByText("Startup latency", { exact: true })).toBeVisible();
+    await expect(page.getByText("Server TPS", { exact: true })).toBeVisible();
+    await expect(page.locator("[data-chart]")).toHaveCount(2);
+    await expect(page.getByText("hub-aurora").first()).toBeVisible();
+
+    const startupChart = page.locator("[data-chart]").first();
+    await startupChart.locator(".recharts-wrapper").hover({
+      position: { x: 180, y: 120 },
+    });
+    await expect(startupChart.locator(".recharts-tooltip-wrapper")).toBeVisible();
+    await expect(startupChart.getByText(/samples?$/).first()).toBeVisible();
+
+    await page.getByRole("button", { name: "Minecraft boot" }).click();
+    await expect(page.getByText("alert", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "15m", exact: true }).click();
+    await expect(page.getByRole("button", { name: "15m", exact: true }))
+      .toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "6h", exact: true }).click();
+    await expect(page.getByRole("button", { name: "6h", exact: true }))
+      .toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("filters monitoring by group", async ({ page }) => {
+    await visit(page, "/monitoring");
+    await page.getByLabel("Filter by group").click();
+    await page.getByRole("option", { name: "hub", exact: true }).click();
+    await expect(page.getByText("hub-aurora").first()).toBeVisible();
+  });
+});
+
 test.describe("variant layers", () => {
   async function visitSkywarsVariants(page: Page) {
     await visit(page, "/groups");
@@ -308,6 +344,7 @@ test.describe("shell", () => {
     await visit(page, "/");
 
     for (const [label, href, heading] of [
+      ["Monitoring", "/monitoring", "Performance monitoring"],
       ["Groups", "/groups", "Groups"],
       ["Queues", "/queues", "Matchmaking queues"],
       ["Sessions", "/sessions", "Sessions"],

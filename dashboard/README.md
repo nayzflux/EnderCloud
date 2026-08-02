@@ -14,6 +14,7 @@ Next.js, TanStack Query, React Flow and shadcn/ui.
 | `/sessions`  | Matches formed by the matchmaker, their assigned instance and connection progress |
 | `/queues`    | Queue pressure per matchmaking group: parties, wait-time distribution and the queued parties themselves |
 | `/topology`  | React Flow map wiring each group's queue and warm pool to its instances and sessions |
+| `/monitoring` | Startup readiness and Paper TPS time series, grouped by variant with shared alert thresholds |
 
 Selecting an instance or a session anywhere in the console opens the same detail
 panel, with its players, commands, events, teams and transfers. Its **Lifecycle**
@@ -74,8 +75,8 @@ bun run dev
 ```
 
 The console is served on `http://localhost:3000`. `ORCHESTRATOR_URL` stays a
-server-side variable: the browser only ever talks to the dashboard's four
-read-only proxy routes.
+server-side variable: the browser only ever talks to the dashboard's read-only
+proxy routes.
 
 ### Synthetic data
 
@@ -92,7 +93,8 @@ The sidebar shows a **Synthetic data** marker whenever the flag is on. The world
 is rebuilt from a fixed seed on every request, so identifiers stay stable across
 refreshes while ages, deadlines and queue waits keep ticking. It covers four
 groups (a hub, two live minigames and a disabled one), healthy and degraded
-instances, running and stalled sessions, and populated queues. See
+instances, running and stalled sessions, populated queues, and deterministic
+monitoring series with alerts. See
 `src/lib/mock-data.ts`.
 
 ## Validation

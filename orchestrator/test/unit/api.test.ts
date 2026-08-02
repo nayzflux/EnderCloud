@@ -5,8 +5,16 @@ import type { DashboardService } from "../../src/services/dashboard-service.ts";
 import type { InstanceController } from "../../src/services/instance-controller.ts";
 import type { QueueService } from "../../src/services/queue-service.ts";
 import type { HubRouter } from "../../src/services/hub-router.ts";
+import type { MonitoringService } from "../../src/services/monitoring-service.ts";
 
-function testApp(hubs: HubRouter = {} as HubRouter) {
+function testApp(
+  hubs: HubRouter = {} as HubRouter,
+  instances: InstanceController = {} as InstanceController,
+  monitoring: MonitoringService = {
+    getSummary: async () => ({ schemaVersion: 1, generatedAt: new Date().toISOString(), alerts: [] }),
+    getGroupSeries: async () => null,
+  } as unknown as MonitoringService,
+) {
   const dashboard = {
     getCluster: async () => ({
       schemaVersion: 2 as const,
@@ -31,8 +39,9 @@ function testApp(hubs: HubRouter = {} as HubRouter) {
   } as unknown as DashboardService;
   return createApp({
     dashboard,
+    monitoring,
     queues: {} as unknown as QueueService,
-    instances: {} as unknown as InstanceController,
+    instances,
     hubs,
     logger: { error: () => {} } as unknown as Logger,
     isReady: () => true,
@@ -48,6 +57,85 @@ test("dashboard cluster endpoint returns a versioned snapshot", async () => {
     schemaVersion: 2,
     summary: { activeInstances: 0 },
   });
+});
+
+test("Paper heartbeats accept optional TPS and reject invalid samples", async () => {
+  const received: unknown[] = [];
+  const instances = {
+    handlePaperEvent: async (_instanceId: string, event: unknown) => {
+      received.push(event);
+    },
+  } as unknown as InstanceController;
+  const endpoint = "http://endercloud/api/v1/instances/abcdefghijklmnop/events";
+
+  for (const body of [
+    { type: "HEARTBEAT", playerIds: [] },
+    {
+      type: "HEARTBEAT",
+      playerIds: [],
+      tps: { oneMinute: 19.9, fiveMinutes: 19.8, fifteenMinutes: 19.7 },
+    },
+  ]) {
+    const response = await testApp({} as HubRouter, instances).handle(
+      new Request(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+    expect(response.status).toBe(202);
+  }
+  expect(received).toHaveLength(2);
+
+  const invalid = await testApp({} as HubRouter, instances).handle(
+    new Request(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "HEARTBEAT",
+        playerIds: [],
+        tps: { oneMinute: -1, fiveMinutes: 20, fifteenMinutes: 20 },
+      }),
+    }),
+  );
+  expect(invalid.status).toBe(400);
+});
+
+test("monitoring endpoints expose summaries and validate ranges", async () => {
+  const monitoring = {
+    getSummary: async () => ({
+      schemaVersion: 1 as const,
+      generatedAt: "2026-08-01T12:00:00.000Z",
+      alerts: [],
+    }),
+    getGroupSeries: async (groupId: string, range: string) => ({
+      schemaVersion: 1 as const,
+      generatedAt: "2026-08-01T12:00:00.000Z",
+      groupId,
+      range,
+      resolutionMs: 60_000,
+      thresholds: { tps: 19, startupBootMs: 54_000 },
+      variants: [],
+    }),
+  } as unknown as MonitoringService;
+
+  const summary = await testApp({} as HubRouter, {} as InstanceController, monitoring)
+    .handle(new Request("http://endercloud/api/v1/dashboard/monitoring/summary"));
+  expect(summary.status).toBe(200);
+  expect(await summary.json()).toMatchObject({ schemaVersion: 1, alerts: [] });
+
+  const series = await testApp({} as HubRouter, {} as InstanceController, monitoring)
+    .handle(new Request(
+      "http://endercloud/api/v1/dashboard/groups/skywars-solo/monitoring?range=24h",
+    ));
+  expect(series.status).toBe(200);
+  expect(await series.json()).toMatchObject({ groupId: "skywars-solo", range: "24h" });
+
+  const invalid = await testApp({} as HubRouter, {} as InstanceController, monitoring)
+    .handle(new Request(
+      "http://endercloud/api/v1/dashboard/groups/skywars-solo/monitoring?range=30d",
+    ));
+  expect(invalid.status).toBe(400);
 });
 
 test("Paper can schedule a balanced hub transfer", async () => {

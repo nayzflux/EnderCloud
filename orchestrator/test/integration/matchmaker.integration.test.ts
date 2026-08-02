@@ -3,7 +3,7 @@ import { createDatabase, type SqlClient } from "../../src/db/client.ts";
 import { migrateDatabase } from "../../src/db/migrate.ts";
 import { Matchmaker } from "../../src/services/matchmaker.ts";
 import { QueueService } from "../../src/services/queue-service.ts";
-import { serverGroups, serverGroupVariants, serverVariantLayers, serverVariants, templateLayers, serverInstances, queueEntries, queueEntryPlayers, gameSessions, sessionPlayers, instancePlayers, transferCommands, events } from "../../src/db/schema.ts";
+import { serverGroups, serverGroupVariants, serverVariantLayers, serverVariants, templateLayers, serverInstances, queueEntries, queueEntryPlayers, gameSessions, sessionPlayers, instancePlayers, transferCommands, events, serverTpsMetrics } from "../../src/db/schema.ts";
 import type { TransferService } from "../../src/services/transfer-service.ts";
 import { InstanceController } from "../../src/services/instance-controller.ts";
 import type { Executor, RuntimeInstance } from "../../src/executor/executor.ts";
@@ -16,6 +16,7 @@ import { nanoid } from "../../src/id.ts";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { CapacityController } from "../../src/services/capacity-controller.ts";
 import { Reconciler } from "../../src/services/reconciler.ts";
+import { MonitoringService } from "../../src/services/monitoring-service.ts";
 
 const mockLogger = {
   minimum: "debug",
@@ -67,7 +68,7 @@ async function seedVariant(groupId: string, variantId: string, revision = 1) {
 }
 
 async function cleanDb() {
-  await sql`TRUNCATE TABLE template_layers, server_groups, events CASCADE`;
+  await sql`TRUNCATE TABLE template_layers, server_groups, events, server_tps_metrics CASCADE`;
 }
 
 async function seedGroup() {
@@ -1262,5 +1263,86 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     ]);
     expect(await db.select().from(events)).toHaveLength(2);
     expect(runtimeInstances).toHaveLength(0);
+  });
+
+  test("monitoring aggregates heartbeats and derives rolling startup metrics", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const now = Date.now();
+    const instanceId = "metricInstance01";
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      groupId,
+      variantId,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      createdAt: new Date(now - 90_000),
+      startingAt: new Date(now - 70_000),
+      runningAt: new Date(now - 10_000),
+    });
+    const monitoring = new MonitoringService(db, mockLogger);
+
+    await monitoring.recordTps(instanceId, {
+      oneMinute: 18.2,
+      fiveMinutes: 18.4,
+      fifteenMinutes: 19.1,
+    });
+    await monitoring.recordTps(instanceId, {
+      oneMinute: 18.6,
+      fiveMinutes: 18.8,
+      fifteenMinutes: 19.3,
+    });
+
+    const buckets = await db.select().from(serverTpsMetrics);
+    expect(buckets).toHaveLength(1);
+    expect(buckets[0]).toMatchObject({ sampleCount: 2, fiveMinutesSum: 37.2 });
+
+    const series = await monitoring.getGroupSeries(groupId, "1h");
+    expect(series?.resolutionMs).toBe(60_000);
+    const variant = series?.variants.find((candidate) => candidate.variantId === variantId);
+    expect(variant?.startup.at(-1)).toMatchObject({
+      totalAverageMs: 80_000,
+      bootAverageMs: 60_000,
+      sampleCount: 1,
+    });
+    expect(variant?.tps.at(-1)).toMatchObject({
+      oneMinute: 18.4,
+      fiveMinutes: 18.6,
+      fifteenMinutes: 19.2,
+      sampleCount: 2,
+    });
+
+    const summary = await monitoring.getSummary();
+    expect(summary.alerts.map((alert) => alert.metric).sort()).toEqual([
+      "STARTUP_BOOT_60M",
+      "TPS_5M",
+    ]);
+  });
+
+  test("monitoring retention removes only TPS buckets older than seven days", async () => {
+    await db.insert(serverTpsMetrics).values([
+      {
+        groupId: "old-group",
+        variantId: "old-variant",
+        bucketAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1_000),
+        oneMinuteSum: 20,
+        fiveMinutesSum: 20,
+        fifteenMinutesSum: 20,
+        sampleCount: 1,
+      },
+      {
+        groupId: "new-group",
+        variantId: "new-variant",
+        bucketAt: new Date(),
+        oneMinuteSum: 20,
+        fiveMinutesSum: 20,
+        fifteenMinutesSum: 20,
+        sampleCount: 1,
+      },
+    ]);
+
+    await new MonitoringService(db, mockLogger).prune();
+
+    const buckets = await db.select().from(serverTpsMetrics);
+    expect(buckets.map((bucket) => bucket.groupId)).toEqual(["new-group"]);
   });
 });

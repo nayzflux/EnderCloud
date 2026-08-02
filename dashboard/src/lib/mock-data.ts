@@ -9,6 +9,9 @@ import type {
   DashboardSessionDetail,
   DashboardVariant,
   DashboardVariantGraph,
+  DashboardMonitoringSeries,
+  DashboardMonitoringSummary,
+  MonitoringRange,
   ActiveDeadlineKind,
   GroupType,
   LifecycleState,
@@ -931,6 +934,94 @@ export function mockQueue(
     totalPlayers: entries.reduce((total, entry) => total + entry.players.length, 0),
     truncated: entries.length > limit,
     entries: entries.slice(0, limit),
+  };
+}
+
+const monitoringRangeConfig: Record<
+  MonitoringRange,
+  { readonly durationMs: number; readonly resolutionMs: number }
+> = {
+  "1h": { durationMs: 60 * 60 * 1_000, resolutionMs: 60 * 1_000 },
+  "6h": { durationMs: 6 * 60 * 60 * 1_000, resolutionMs: 5 * 60 * 1_000 },
+  "24h": { durationMs: 24 * 60 * 60 * 1_000, resolutionMs: 15 * 60 * 1_000 },
+  "7d": { durationMs: 7 * 24 * 60 * 60 * 1_000, resolutionMs: 60 * 60 * 1_000 },
+};
+
+export function mockMonitoringSummary(now = Date.now()): DashboardMonitoringSummary {
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date(now).toISOString(),
+    alerts: [
+      {
+        metric: "TPS_5M",
+        groupId: "skywars-solo",
+        variantId: "skywars-legacy",
+        value: 18.72,
+        threshold: 19,
+        observedAt: new Date(now - 30_000).toISOString(),
+      },
+      {
+        metric: "STARTUP_BOOT_60M",
+        groupId: "skywars-solo",
+        variantId: "skywars-legacy",
+        valueMs: 58_400,
+        thresholdMs: 54_000,
+        sampleCount: 4,
+        observedAt: new Date(now - 8 * 60_000).toISOString(),
+      },
+    ],
+  };
+}
+
+export function mockGroupMonitoring(
+  groupId: string,
+  range: MonitoringRange,
+  now = Date.now(),
+): DashboardMonitoringSeries | null {
+  const group = mockCluster(now).groups.find((candidate) => candidate.id === groupId);
+  if (!group) return null;
+  const configuration = monitoringRangeConfig[range];
+  const pointCount = Math.floor(
+    configuration.durationMs / configuration.resolutionMs,
+  ) + 1;
+
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date(now).toISOString(),
+    groupId,
+    range,
+    resolutionMs: configuration.resolutionMs,
+    thresholds: {
+      tps: 19,
+      startupBootMs: group.timeouts.startupMs * 0.6,
+    },
+    variants: group.variants.map((variant, variantIndex) => ({
+      variantId: variant.id,
+      enabled: variant.enabled,
+      startup: Array.from({ length: pointCount }, (_unused, pointIndex) => {
+        const at = now - (pointCount - pointIndex - 1) * configuration.resolutionMs;
+        const wave = Math.sin(pointIndex / 5 + variantIndex * 0.9);
+        const legacyPenalty = variant.id.includes("legacy") ? 25_000 : 0;
+        return {
+          at: new Date(at).toISOString(),
+          totalAverageMs: Math.round(42_000 + legacyPenalty + wave * 4_500),
+          bootAverageMs: Math.round(29_000 + legacyPenalty + wave * 3_500),
+          sampleCount: 2 + ((pointIndex + variantIndex) % 5),
+        };
+      }),
+      tps: Array.from({ length: pointCount }, (_unused, pointIndex) => {
+        const at = now - (pointCount - pointIndex - 1) * configuration.resolutionMs;
+        const wave = Math.sin(pointIndex / 6 + variantIndex);
+        const legacyPenalty = variant.id.includes("legacy") ? 1.25 : 0;
+        return {
+          at: new Date(at).toISOString(),
+          oneMinute: Math.round((19.82 - legacyPenalty + wave * 0.25) * 100) / 100,
+          fiveMinutes: Math.round((19.88 - legacyPenalty + wave * 0.16) * 100) / 100,
+          fifteenMinutes: Math.round((19.92 - legacyPenalty + wave * 0.08) * 100) / 100,
+          sampleCount: 6 + ((pointIndex + variantIndex) % 4),
+        };
+      }),
+    })),
   };
 }
 

@@ -10,6 +10,7 @@ import fr.nayz.endercloud.core.model.HubTransferResult;
 import fr.nayz.endercloud.core.model.ServerSnapshot;
 import fr.nayz.endercloud.core.model.LifecycleState;
 import fr.nayz.endercloud.core.model.AvailabilityState;
+import fr.nayz.endercloud.core.model.TpsSnapshot;
 import fr.nayz.endercloud.core.json.JsonCodec;
 
 import java.io.IOException;
@@ -54,6 +55,20 @@ class JsonContractTest {
                 "not enough teams",
                 JsonCodec.readTree(cancelled).path("reason").asText()
         );
+    }
+
+    @Test
+    void heartbeatKeepsTpsBackwardCompatible() {
+        String legacy = JsonCodec.write(PaperEvent.heartbeat(List.of()));
+        assertEquals(false, JsonCodec.readTree(legacy).has("tps"));
+
+        String measured = JsonCodec.write(PaperEvent.heartbeat(
+                List.of(),
+                new TpsSnapshot(19.9, 19.8, 19.7)
+        ));
+        assertEquals(19.9, JsonCodec.readTree(measured).path("tps").path("oneMinute").asDouble());
+        assertEquals(19.8, JsonCodec.readTree(measured).path("tps").path("fiveMinutes").asDouble());
+        assertEquals(19.7, JsonCodec.readTree(measured).path("tps").path("fifteenMinutes").asDouble());
     }
 
     @Test

@@ -39,6 +39,7 @@ const pageTitles: Record<string, string> = {
   sessions: "Sessions",
   queues: "Queues",
   topology: "Topology",
+  monitoring: "Monitoring",
 };
 
 function LiveIndicator() {
