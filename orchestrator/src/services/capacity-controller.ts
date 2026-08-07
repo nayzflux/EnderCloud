@@ -24,6 +24,7 @@ export class CapacityController {
       // Reconcile groups independently so one broken configuration does not block every pool.
       for (const group of groups) {
         try {
+          // Select all active instances for group
           const current = await this.db
             .select({
               id: serverInstances.id,
@@ -37,21 +38,29 @@ export class CapacityController {
             .where(
               and(
                 eq(serverInstances.groupId, group.id),
-                notInArray(serverInstances.lifecycleState, ['STOPPED', 'FAILED'])
-              )
+                notInArray(serverInstances.lifecycleState, [
+                  "STOPPED",
+                  "FAILED",
+                ]),
+              ),
             )
             .orderBy(
               sql`${serverInstances.runningAt} ASC NULLS LAST`,
-              asc(serverInstances.createdAt)
+              asc(serverInstances.createdAt),
             );
 
-          const byId = new Map(current.map((instance) => [instance.id, instance]));
-          const activeRenewals = current
-            .filter((replacement) => {
-              if (!replacement.replaces_instance_id) return false;
-              const source = byId.get(replacement.replaces_instance_id);
-              return source !== undefined;
-            });
+          const byId = new Map(
+            current.map((instance) => [instance.id, instance]),
+          );
+
+          // Find active replacement instances
+          const activeRenewals = current.filter((replacement) => {
+            if (!replacement.replaces_instance_id) return false;
+            const source = byId.get(replacement.replaces_instance_id);
+            return source !== undefined;
+          });
+
+          // Find a ready replacement instance
           const readyReplacement = activeRenewals.find((replacement) => {
             const source = byId.get(replacement.replaces_instance_id!);
             return (
@@ -59,23 +68,33 @@ export class CapacityController {
               source?.lifecycle_state === "RUNNING"
             );
           });
+
+          // If the replacement instance is ready, complete the renewal
           if (readyReplacement) {
             await this.instances.completeHubRenewal(readyReplacement.id);
             // Refresh capacity on the next tick after the durable handoff changed lifecycle state.
             continue;
           }
 
-          const dueHub = group.enabled && group.type === "hub" && activeRenewals.length === 0
-            ? current.find(
-                (instance) =>
-                  instance.lifecycle_state === "RUNNING" &&
-                  instance.availability_state === "OPEN" &&
-                  instance.renewal_deadline !== null &&
-                  instance.renewal_deadline.getTime() <= Date.now(),
-              )
-            : undefined;
+          // Find an active hub instance that need renewal
+          const dueHub =
+            group.enabled && group.type === "hub" && activeRenewals.length === 0
+              ? current.find(
+                  (instance) =>
+                    instance.lifecycle_state === "RUNNING" &&
+                    instance.availability_state === "OPEN" &&
+                    instance.renewal_deadline !== null &&
+                    instance.renewal_deadline.getTime() <= Date.now(),
+                )
+              : undefined;
+
+          // If need renewall and we are below max instances, start renewal
           if (dueHub && current.length < group.maximumInstances) {
-            const created = await this.instances.createWarm(group.id, dueHub.id);
+            const created = await this.instances.createWarm(
+              group.id,
+              dueHub.id,
+            );
+
             if (created) {
               this.logger.info("Hub renewal replacement started", {
                 groupId: group.id,
@@ -122,11 +141,9 @@ export class CapacityController {
               instance.lifecycle_state === "RUNNING" &&
               instance.availability_state === "OPEN" &&
               !protectedInstanceIds.has(instance.id) &&
-              (
-                group.type !== "hub" ||
+              (group.type !== "hub" ||
                 !group.enabled ||
-                instance.player_count === 0
-              ),
+                instance.player_count === 0),
           );
           // The earlier SQL ordering makes this slice the deterministic scale-down set.
           for (const candidate of drainCandidates.slice(0, decision.drain)) {
