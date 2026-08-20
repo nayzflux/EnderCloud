@@ -14,10 +14,11 @@ the central host and every execution host.
 - Velocity and players must reach `AGENT_GAME_ADDRESS` on the configured game-port range.
 - PostgreSQL, Redis, Docker sockets and control ports must not be publicly reachable.
 
-The standalone compose file publishes the agent API only on `AGENT_BIND_ADDRESS`. Set this to a
-private interface, never `0.0.0.0` on an Internet-facing machine. The main compose binds the
-orchestrator to loopback by default. Set `ORCHESTRATOR_BIND_ADDRESS` to its private interface when
-remote agents need to reach it.
+The standalone Compose file publishes the agent API only on `AGENT_BIND_ADDRESS`. Set it to a
+private interface, never `0.0.0.0` on an Internet-facing machine. The main `compose.yml` currently
+publishes ports `8080` and `3000` on every host interface. Restrict those mappings in
+`compose.yml`, or enforce the same restriction with the host firewall. Remote agents need access
+to port `8080`; they do not need dashboard access.
 
 ## Central host
 
@@ -26,6 +27,7 @@ Required agent settings in the root `.env`:
 | Variable | Meaning |
 | --- | --- |
 | `AGENT_ID` | Stable lowercase host id. Do not change it after containers exist. |
+| `AGENT_PUBLIC_URL` | Agent control URL reached by the orchestrator. Use `http://agent:8090` for the main Compose stack. |
 | `AGENT_GAME_ADDRESS` | Private address returned in Minecraft endpoints. |
 | `AGENT_CPU` | Allocatable vCPU advertised to the scheduler. |
 | `AGENT_MEMORY_BYTES` | Allocatable memory advertised to the scheduler. |
@@ -42,9 +44,14 @@ The `agent` service uses the same image as the orchestrator but starts
 `src/agent/index.ts`. It mounts the Docker socket, runtime directory and a persistent template
 cache. The orchestrator does not mount any of them.
 
+`ORCHESTRATOR_URL=http://orchestrator:8080` is valid inside the main Compose network and is used
+by both the primary agent and dashboard. It is different from the URL configured on a remote host,
+which must resolve to the central machine's private address.
+
 ## Remote hosts
 
-Copy `.env.agent.example` to `.env.agent` on the remote host, then adjust at least:
+Copy the repository to the remote host, then copy `.env.agent.example` to `.env.agent`. Adjust at
+least these values:
 
 ```dotenv
 AGENT_ID=game-paris-02
@@ -66,8 +73,15 @@ Then start only the agent:
 docker compose --env-file .env.agent -f compose.agent.yml up --build -d
 ```
 
-The configured Docker network must also be used by the Minecraft containers and exist on that
-Docker host. The agent creates the network attachment but does not create cross-host routing.
+The configured Docker network is local to that Docker host. The agent attaches Minecraft
+containers to it. Compose can create the local bridge, but it does not create routing between
+machines. The addresses in `AGENT_PUBLIC_URL`, `ORCHESTRATOR_URL` and `AGENT_GAME_ADDRESS` must
+therefore use the private routed network, VPN or overlay network, not Docker service names from
+another host.
+
+`RUNTIME_LOCAL_PATH` is the directory mounted into the agent. `RUNTIME_HOST_ROOT` is the same
+directory as the Docker daemon sees it when it binds instance data into Minecraft containers.
+They are usually identical on Linux and can differ with Docker Desktop or a remote daemon.
 
 ## Placement and reservations
 
@@ -83,16 +97,18 @@ different host without overcommitting the original one.
 ## Failure and recovery
 
 Agents heartbeat every five seconds by default. A host becomes `OFFLINE` after 30 seconds without
-a heartbeat or successful control call. These values are configured with
+a heartbeat or successful control call. The orchestrator checks this on its reconciliation loop.
+These values are configured with
 `AGENT_HEARTBEAT_INTERVAL_MS`, `HOST_RECONCILE_INTERVAL_MS` and `HOST_OFFLINE_AFTER_MS`.
 
 When an agent returns, its host remains `RECOVERING`. The orchestrator inventories its containers,
 removes owned orphans and resolves missing desired instances before marking it `ONLINE`. Pending
 deletions are retained while the host is unreachable.
 
-Template layers are cached under `layerId/checksum`. Downloads are streamed as gzip-compressed tar archives,
-extracted into a temporary directory, checked for path traversal, verified with the canonical
-checksum and renamed atomically. The MVP does not evict valid cached layers.
+Template layers are cached under `layerId/checksum`. The agent streams each download as a
+gzip-compressed tar archive, extracts it into a temporary directory, rejects unsafe paths,
+verifies the canonical checksum and renames it atomically. The current implementation does not
+evict valid cached layers, so monitor the cache volume on long-lived hosts.
 
 ## Maintenance
 
@@ -122,3 +138,11 @@ docker compose -f compose.yml -f compose.multi-host.test.yml up --build
 Set `SECONDARY_RUNTIME_HOST_ROOT` to the absolute host path for `runtime-secondary`. This scenario
 is a deployment smoke test, not a substitute for validating private routing and firewalls between
 two physical hosts.
+
+Both agents advertise the `AGENT_GAME_ADDRESS` from the root `.env`, but use separate port ranges.
+That address must be reachable by the Velocity process used for the smoke test. Stop the combined
+stack with the same file set:
+
+```powershell
+docker compose -f compose.yml -f compose.multi-host.test.yml down
+```

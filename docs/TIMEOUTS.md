@@ -5,8 +5,9 @@ EnderCloud distingue deux notions :
 - un **timeout** est une durée configurée dans le server group ;
 - une **deadline** est l’instant UTC absolu calculé et persisté lorsque l’étape commence.
 
-Une deadline déjà créée ne change pas lors d’un rechargement de configuration. La nouvelle durée
-s’applique uniquement aux opérations suivantes.
+L'orchestrateur lit les groupes au démarrage. Après une modification, il faut donc le redémarrer
+pour synchroniser la nouvelle durée. Une deadline déjà persistée ne change pas. La nouvelle durée
+s'applique seulement aux opérations créées après la synchronisation.
 
 ## Timeouts configurables par server group
 
@@ -80,8 +81,12 @@ dépréciés pour les anciens fichiers. Les nouveaux groupes doivent déclarer l
 
 | Délai | Valeur actuelle | Rôle |
 | --- | ---: | --- |
-| Proxy dashboard → orchestrateur | `8s` | Annule une lecture dashboard bloquée. |
+| Proxy dashboard vers orchestrateur | `8s` | Annule une requête dashboard bloquée. |
 | Client HTTP Java | `10s` | Timeout de connexion et de requête des plugins Paper/Velocity. |
+| Sonde orchestrateur vers agent | `3s` par défaut | Borne les inventaires et sondes courtes. Configurable avec `AGENT_PROBE_TIMEOUT_MS`. |
+| Opération orchestrateur vers agent | `10m` par défaut | Borne une création ou suppression longue. Configurable avec `AGENT_OPERATION_TIMEOUT_MS`. |
+| Heartbeat agent | `5s` par défaut | Fréquence d'annonce d'un agent. Configurable avec `AGENT_HEARTBEAT_INTERVAL_MS`. |
+| Détection d'un hôte hors ligne | `30s` par défaut | Passe un hôte sans activité à `OFFLINE`. Configurable avec `HOST_OFFLINE_AFTER_MS`. |
 | Connexion PostgreSQL | `10s` | Borne l’établissement d’une connexion. |
 | Connexion PostgreSQL inactive | `20s` | Ferme une connexion inutilisée du pool. |
 | Fermeture PostgreSQL | `10s` | Borne l’arrêt gracieux de l’orchestrateur. |
@@ -89,5 +94,6 @@ dépréciés pour les anciens fichiers. Les nouveaux groupes doivent déclarer l
 | Retry d’un transfert | `2s`, puis maximum `30s` | Réémet une commande durable jusqu’à son expiration. |
 | Healthchecks Compose | `3s` | Borne chaque sonde d’infrastructure. |
 
-Les intervalles `CAPACITY_INTERVAL_MS`, `MATCHMAKING_INTERVAL_MS` et `RECONCILE_INTERVAL_MS`
-pilotent la fréquence des boucles de contrôle ; ce ne sont pas des deadlines.
+Les intervalles `CAPACITY_INTERVAL_MS`, `MATCHMAKING_INTERVAL_MS` et
+`HOST_RECONCILE_INTERVAL_MS` pilotent la fréquence des boucles de contrôle. Ce ne sont pas des
+deadlines. `RECONCILE_INTERVAL_MS` n'est plus utilisé.

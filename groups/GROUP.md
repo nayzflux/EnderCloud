@@ -12,17 +12,22 @@ type: minigame         # hub or minigame
 enabled: true          # defaults to true when omitted
 
 variants:
-  - id: skywars-solo-japan
+  - id: sw-1s-japan
     enabled: true
     weight: 60
-  - id: skywars-solo-dome
+  - id: sw-1s-dome
     enabled: true
     weight: 40
 ```
 
-The `id` must be unique. A group references final variants directly and owns their selection
-state and weight. A group enabled for traffic must have at least one enabled, complete variant.
-The same final variant may be referenced by several groups with different weights.
+The `id` must be unique and contain 2 to 63 lowercase letters, digits or hyphens. `enabled`
+defaults to `true` for both groups and variant references. A group enabled for traffic must have at
+least one enabled final variant. The same final variant may belong to several groups with
+different weights.
+
+Weights are relative. EnderCloud first selects the variants that are underrepresented in the
+current warm pool, then uses their weights to break ties. A weight of `2` can therefore maintain
+about twice as many warm instances as a weight of `1`; it is not a percentage.
 
 ## Capacity and timeouts
 
@@ -44,8 +49,9 @@ timeouts:
   player_stale: 30s
 ```
 
-`minimum_instances` and `maximum_instances` bound the total number of instances. Warm instances
-are ready instances kept available for new work. The limits must satisfy:
+`minimum_instances` and `maximum_instances` bound instances in `CREATING`, `STARTING`, `RUNNING`
+or `DRAINING`. Warm instances are open instances that are ready, or are being prepared, for new
+work. The limits must satisfy:
 
 ```text
 minimum_instances <= maximum_instances
@@ -56,7 +62,7 @@ Durations use `ms`, `s`, `m` or `h`, for example `500ms`, `45s` or `5m`.
 
 ## Hub groups
 
-Hub groups route players to shared lobby servers:
+Hub groups route players to shared lobby servers. Add these keys to the common fields above:
 
 ```yaml
 routing:
@@ -64,6 +70,12 @@ routing:
   target_players_per_instance: 70
 
 timeouts:
+  startup: 90s
+  drain: 5m
+  cancelled_drain: 10s
+  shutdown: 20s
+  transfer: 20s
+  player_stale: 30s
   instance_lifetime: 4h
 ```
 
@@ -73,7 +85,7 @@ combined target capacity of the active and starting instances requests another i
 continue toward the least-loaded hub until the strict maximum is reached. The `hub` group in
 `hub.yml` is the default example and fallback destination used by the proxy.
 
-`instance_lifetime` defaults to `4h`. Once a hub reaches that persisted deadline, EnderCloud
+`instance_lifetime` defaults to `4h` when omitted. Once a hub reaches that persisted deadline, EnderCloud
 starts a replacement using the current variant selection and drains the old hub only after the
 replacement is ready. `maximum_instances` remains a strict limit: if the group is full, the
 expired hub stays open until a slot becomes available. Only one renewal runs per group at a time.
@@ -97,10 +109,17 @@ matchmaking:
 The first ticket creates a `FORMING` session. Once `minimum_players` and the team-balance profile
 constraints are satisfied, EnderCloud reserves an instance. The game plugin has sole authority
 to emit `GAME_STARTING`; the orchestrator does not impose a partial-start deadline.
-`candidate_window` bounds the FIFO work per tick.
-Minigame groups add their matchmaking deadlines to `timeouts`:
+`candidate_window` defaults to `20` and bounds the number of FIFO candidates evaluated per
+matchmaking tick. Minigame groups add two deadlines to the common `timeouts` block:
 
 ```yaml
+timeouts:
+  startup: 90s
+  drain: 15m
+  cancelled_drain: 10s
+  shutdown: 20s
+  transfer: 20s
+  player_stale: 30s
   instance_acquisition: 45s
   lobby_stale: 135s
 ```
@@ -131,6 +150,8 @@ matchmaking:
 4. Add or update its ordered template layers and make sure their resolved content is complete.
 5. Set `enabled: true` only when the group is ready, then restart the orchestrator.
 
-Configuration errors prevent startup. After changing a final variant, increment its `revision`;
-changing a parent automatically changes every dependent effective checksum. Running instances
-keep their already-materialized data.
+The orchestrator reads and synchronizes every group only during startup. A missing field, invalid
+reference or inconsistent limit prevents startup. Restart the orchestrator after editing YAML.
+After changing a final variant or any of its effective files, increment the final variant's
+`revision`. A parent change updates every dependent checksum, but it does not increment those
+revisions for you. Running instances keep their already-materialized data.

@@ -27,7 +27,7 @@ Bukkit EnderCloudPaperApi, fourni par le bridge Paper EnderCloud.
 
 La variante EnderCloud doit contenir :
 
-- EnderCloudPaper-0.1.0.jar dans plugins/ ;
+- `EnderCloudPaper-0.1.0.jar` dans `plugins/` ;
 - le plugin du mini-jeu ;
 - la map et la configuration complète du mode ;
 - un variant final référencé par un groupe de type minigame, avec ses couches ordonnées.
@@ -36,9 +36,10 @@ Le bridge Paper utilise :
 
     ENDERCLOUD_INSTANCE_ID       Identifiant de l’instance
     ENDERCLOUD_ORCHESTRATOR_URL  URL HTTP privée de l’orchestrateur
-    ENDERCLOUD_REPORTED_ENDPOINT Optionnel, endpoint annoncé à Velocity
+    ENDERCLOUD_REPORTED_ENDPOINT Optionnel, remplace l'endpoint déjà alloué par l'agent
 
-Le plugin du mini-jeu peut déclarer une soft-dépendance envers EnderCloud.
+Le plugin du mini-jeu peut déclarer `softdepend: [EnderCloud]` dans son `plugin.yml`. Il doit
+toutefois désactiver ses fonctions EnderCloud si le service Bukkit est absent.
 
 L’API Java est disponible en compileOnly via plugins/core. Le bridge Paper fournit le service
 à l’exécution.
@@ -69,6 +70,7 @@ de Paper.
         CompletableFuture<Void> reportGameStarting(String sessionId);
         CompletableFuture<Void> reportGameStarted(String sessionId);
         CompletableFuture<Void> reportPlayerEliminated(String sessionId, UUID playerId);
+        CompletableFuture<Void> reportGameCancelled(String sessionId, String reason);
         CompletableFuture<Void> reportGameFinished(
                 String sessionId,
                 Map<String, Object> results);
@@ -152,7 +154,8 @@ partie. La politique de déconnexion/reconnexion appartient au plugin.
 
 ## Lire l’assignation
 
-Le bridge Paper actualise régulièrement l’assignation :
+Le bridge Paper actualise l'assignation chaque seconde et acquitte automatiquement toute nouvelle
+révision. `currentAssignment()` lit ce cache local et ne fait pas de requête réseau :
 
     cloud.currentAssignment().ifPresent(assignment -> {
         String sessionId = assignment.sessionId();
@@ -200,8 +203,9 @@ Après la préparation finale :
                 return null;
             });
 
-Ne pas envoyer GAME_STARTED avant GAME_STARTING. Chaque notification doit être envoyée une
-seule fois pour une session.
+Ne pas envoyer `GAME_STARTED` avant `GAME_STARTING`. L'orchestrateur accepte le même événement
+plusieurs fois pour permettre les retries réseau, mais il refuse une transition sautée, obsolète
+ou liée à une autre instance.
 
 ## Libérer un joueur éliminé
 
@@ -271,7 +275,7 @@ Le bridge Paper publie automatiquement :
 
 - PLAYER_JOINED lors de l’arrivée d’un joueur ;
 - PLAYER_LEFT lors de sa déconnexion ;
-- HEARTBEAT périodiquement avec la liste complète des joueurs présents et les moyennes TPS
+- HEARTBEAT toutes les dix secondes avec la liste complète des joueurs présents et les moyennes TPS
   Paper sur 1, 5 et 15 minutes.
 
 Le plugin de mini-jeu n’a normalement pas besoin de republier ces événements. Il doit seulement
@@ -307,7 +311,7 @@ Exemple SkyWars Solo :
     enabled: true
 
     variants:
-      - id: skywars-solo-japan
+      - id: sw-1s-japan
         enabled: true
         weight: 100
 
@@ -344,7 +348,7 @@ Exemple BedWars 4v4v4v4 avec équilibrage des équipes :
 
 Exemple de variante :
 
-    id: skywars-solo-japan
+    id: sw-1s-japan
     revision: 1
     parents:
       - skywars
@@ -390,5 +394,6 @@ supérieure à team_size est refusée à l’inscription.
 - L’inscription et l’annulation de file ont été testées.
 - Les parties restent indivisibles et l’affectation finale respecte un profil réalisable.
 - Les nouvelles revisions sont prises en compte.
-- GAME_STARTING, GAME_STARTED, GAME_CANCELLED et GAME_FINISHED sont idempotents.
+- Les retries de GAME_STARTING, GAME_STARTED, GAME_CANCELLED et GAME_FINISHED utilisent le même
+  sessionId.
 - Les erreurs réseau sont journalisées sans bloquer Paper.
