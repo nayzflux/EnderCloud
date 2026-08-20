@@ -41,6 +41,23 @@ async function readJson<T>(path: string): Promise<T> {
   return payload;
 }
 
+async function postJson<T>(path: string): Promise<T> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as {
+      message?: string;
+    } | null;
+    throw new DashboardApiError(
+      payload?.message ?? "The operation could not be completed.",
+      response.status,
+    );
+  }
+  return response.json() as Promise<T>;
+}
+
 export function fetchCluster(): Promise<DashboardClusterSnapshot> {
   return readJson("/api/cluster");
 }
@@ -81,4 +98,12 @@ export function fetchSession(
   sessionId: string,
 ): Promise<DashboardSessionDetail> {
   return readJson(`/api/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+export function drainHost(hostId: string): Promise<{ accepted: boolean }> {
+  return postJson(`/api/hosts/${encodeURIComponent(hostId)}/drain`);
+}
+
+export function activateHost(hostId: string): Promise<{ accepted: boolean }> {
+  return postJson(`/api/hosts/${encodeURIComponent(hostId)}/activate`);
 }

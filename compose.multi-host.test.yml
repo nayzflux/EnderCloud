@@ -1,0 +1,50 @@
+name: endercloud
+
+services:
+  agent-secondary:
+    build:
+      context: ./orchestrator
+    command: ["bun", "src/agent/index.ts"]
+    restart: unless-stopped
+    environment:
+      AGENT_ID: secondary-host
+      AGENT_VERSION: ${AGENT_VERSION:-0.1.0}
+      AGENT_PORT: 8090
+      AGENT_PUBLIC_URL: http://agent-secondary:8090
+      AGENT_GAME_ADDRESS: ${AGENT_GAME_ADDRESS:?Set the private game address}
+      AGENT_CPU: ${SECONDARY_AGENT_CPU:-4}
+      AGENT_MEMORY_BYTES: ${SECONDARY_AGENT_MEMORY_BYTES:-8589934592}
+      AGENT_HEARTBEAT_INTERVAL_MS: 5000
+      AGENT_GAME_PORT_START: 25665
+      AGENT_GAME_PORT_END: 25764
+      ORCHESTRATOR_URL: http://orchestrator:8080
+      DOCKER_SOCKET: /var/run/docker.sock
+      DOCKER_NETWORK: endercloud
+      RUNTIME_ROOT: /data/runtime
+      RUNTIME_HOST_ROOT: ${SECONDARY_RUNTIME_HOST_ROOT:?Set the secondary absolute runtime path}
+      TEMPLATE_CACHE_ROOT: /data/template-cache
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./runtime-secondary:/data/runtime
+      - secondary-agent-template-cache:/data/template-cache
+    expose:
+      - "8090"
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const r=await fetch('http://localhost:8090/health/live');process.exit(r.ok?0:1)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    networks:
+      - endercloud
+
+volumes:
+  secondary-agent-template-cache:

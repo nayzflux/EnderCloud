@@ -4,12 +4,8 @@ services:
   postgres:
     image: postgres:18.1-alpine
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-endercloud}
-      POSTGRES_USER: ${POSTGRES_USER:-endercloud}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-endercloud}
-    ports:
-      - "5432:5432"
+    env_file:
+      - .env
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -36,27 +32,11 @@ services:
     build:
       context: ./orchestrator
     restart: unless-stopped
-    environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-endercloud}:${POSTGRES_PASSWORD:-endercloud}@postgres:5432/${POSTGRES_DB:-endercloud}
-      REDIS_URL: redis://redis:6379
-      ORCHESTRATOR_PORT: 8080
-      ORCHESTRATOR_PUBLIC_URL: http://orchestrator:8080
-      DOCKER_SOCKET: /var/run/docker.sock
-      DOCKER_NETWORK: endercloud
-      GROUPS_ROOT: /data/groups
-      TEMPLATES_ROOT: /data/templates
-      RUNTIME_ROOT: /data/runtime
-      RUNTIME_HOST_ROOT: ${RUNTIME_HOST_ROOT:?Set RUNTIME_HOST_ROOT to the absolute host runtime directory}
-      CAPACITY_INTERVAL_MS: ${CAPACITY_INTERVAL_MS:-5000}
-      MATCHMAKING_INTERVAL_MS: ${MATCHMAKING_INTERVAL_MS:-1000}
-      RECONCILE_INTERVAL_MS: ${RECONCILE_INTERVAL_MS:-15000}
-      MAX_INSTANCE_RETRIES: ${MAX_INSTANCE_RETRIES:-2}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
+    env_file:
+      - .env
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
       - ./groups:/data/groups:ro
       - ./templates:/data/templates:ro
-      - ./runtime:/data/runtime
     expose:
       - "8080"
     ports:
@@ -80,15 +60,44 @@ services:
     networks:
       - endercloud
 
+  agent:
+    build:
+      context: ./orchestrator
+    command: ["bun", "src/agent/index.ts"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./runtime:/data/runtime
+      - agent-template-cache:/data/template-cache
+    expose:
+      - "8090"
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const r=await fetch('http://localhost:8090/health/live');process.exit(r.ok?0:1)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    networks:
+      - endercloud
+
   dashboard:
     build:
       context: ./dashboard
     restart: unless-stopped
-    environment:
-      ORCHESTRATOR_URL: ${ORCHESTRATOR_URL:-http://orchestrator:8080}
-      PORT: 3000
+    env_file:
+      - .env
     ports:
-      - "${DASHBOARD_PORT:-3000}:3000"
+      - "3000:3000"
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -108,6 +117,7 @@ services:
 
 volumes:
   postgres-data:
+  agent-template-cache:
 
 networks:
   endercloud:

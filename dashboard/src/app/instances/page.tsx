@@ -89,6 +89,17 @@ export default function InstancesPage() {
         sortValue: ({ instance }) => instance.variantId,
       },
       {
+        id: "host",
+        header: "Host",
+        hideOnMobile: true,
+        cell: ({ instance }) => (
+          <span className="font-mono text-xs text-muted-foreground">
+            {instance.hostId ?? "—"}
+          </span>
+        ),
+        sortValue: ({ instance }) => instance.hostId ?? "",
+      },
+      {
         id: "lifecycle",
         header: "Lifecycle",
         cell: ({ instance }) => (
@@ -159,6 +170,7 @@ export default function InstancesPage() {
             instance.id,
             instance.variantId,
             instance.endpoint ?? "",
+            instance.hostId ?? "",
             instance.sessionId ?? "",
             group.id,
           ].some((value) => value.toLowerCase().includes(needle));

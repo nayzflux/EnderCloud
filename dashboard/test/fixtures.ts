@@ -2,7 +2,7 @@ import type { DashboardClusterSnapshot } from "../src/lib/contracts";
 
 /** Minimal two-group snapshot with one of every interesting shape. */
 export const snapshot: DashboardClusterSnapshot = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   generatedAt: "2026-07-27T12:00:00.000Z",
   summary: {
     enabledGroups: 2,
@@ -16,6 +16,40 @@ export const snapshot: DashboardClusterSnapshot = {
     queuedParties: 2,
     queuedPlayers: 3,
   },
+  hosts: [
+    {
+      id: "host-paris-01",
+      controlUrl: "http://host-paris-01:8090",
+      gameAddress: "10.20.0.11",
+      healthState: "ONLINE",
+      adminState: "ACTIVE",
+      allocatableCpu: 16,
+      reservedCpu: 8,
+      allocatableMemoryBytes: 32 * 1024 ** 3,
+      reservedMemoryBytes: 12 * 1024 ** 3,
+      activeInstanceCount: 2,
+      agentVersion: "0.1.0",
+      lastHeartbeatAt: "2026-07-27T11:59:58.000Z",
+      lastControlContactAt: "2026-07-27T11:59:57.000Z",
+      lastError: null,
+    },
+    {
+      id: "host-paris-02",
+      controlUrl: "http://host-paris-02:8090",
+      gameAddress: "10.20.0.12",
+      healthState: "ONLINE",
+      adminState: "ACTIVE",
+      allocatableCpu: 16,
+      reservedCpu: 8,
+      allocatableMemoryBytes: 32 * 1024 ** 3,
+      reservedMemoryBytes: 12 * 1024 ** 3,
+      activeInstanceCount: 2,
+      agentVersion: "0.1.0",
+      lastHeartbeatAt: "2026-07-27T11:59:58.000Z",
+      lastControlContactAt: "2026-07-27T11:59:57.000Z",
+      lastError: null,
+    },
+  ],
   groups: [
     {
       id: "hub",
@@ -62,6 +96,7 @@ export const snapshot: DashboardClusterSnapshot = {
       instances: [
         {
           id: "hubinstance00001",
+          hostId: "host-paris-01",
           variantId: "hub-aurora",
           sessionId: null,
           lifecycleState: "RUNNING",
@@ -142,6 +177,7 @@ export const snapshot: DashboardClusterSnapshot = {
       instances: [
         {
           id: "skywarsrunning01",
+          hostId: "host-paris-01",
           variantId: "skywars-japan",
           sessionId: "skywarssession01",
           lifecycleState: "RUNNING",
@@ -164,6 +200,7 @@ export const snapshot: DashboardClusterSnapshot = {
         },
         {
           id: "skywarsfailed001",
+          hostId: "host-paris-02",
           variantId: "skywars-japan",
           sessionId: null,
           lifecycleState: "FAILED",
@@ -186,6 +223,7 @@ export const snapshot: DashboardClusterSnapshot = {
         },
         {
           id: "skywarscreating1",
+          hostId: "host-paris-02",
           variantId: "skywars-japan",
           sessionId: null,
           lifecycleState: "CREATING",

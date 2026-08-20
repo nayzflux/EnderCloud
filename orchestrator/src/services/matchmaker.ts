@@ -6,6 +6,7 @@ import {
   queueEntryPlayers,
   serverGroups,
   serverInstances,
+  executionHosts,
   sessionPlayers,
 } from "../db/schema.ts";
 import {
@@ -475,11 +476,14 @@ export class Matchmaker {
     const reservations = (await tx
       .select({ id: serverInstances.id, endpoint: serverInstances.endpoint })
       .from(serverInstances)
+      .innerJoin(executionHosts, eq(executionHosts.id, serverInstances.hostId))
       .where(
         and(
           eq(serverInstances.groupId, groupId),
           eq(serverInstances.lifecycleState, "RUNNING"),
           eq(serverInstances.availabilityState, "OPEN"),
+          eq(executionHosts.healthState, "ONLINE"),
+          eq(executionHosts.adminState, "ACTIVE"),
           isNotNull(serverInstances.endpoint),
         ),
       )

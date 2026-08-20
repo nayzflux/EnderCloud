@@ -447,14 +447,14 @@ export function parseVariant(document: unknown, source: string): ServerVariantCo
   };
 }
 
-interface InspectedTemplate {
+export interface InspectedTemplate {
   readonly checksum: string;
   readonly files: TemplateFileSummary;
   readonly manifest: ReadonlyMap<string, "directory" | "file">;
 }
 
 // Hash a layer and collect bounded metadata used by validation and the dashboard.
-async function inspectDirectory(root: string): Promise<InspectedTemplate> {
+export async function inspectTemplateDirectory(root: string): Promise<InspectedTemplate> {
   const hasher = createHash("sha256");
   const manifest = new Map<string, "directory" | "file">();
   const roots = new Set<string>();
@@ -553,7 +553,7 @@ export async function loadConfiguration(
       continue;
     }
     const variant = parseVariant(parse(await readFile(descriptor, "utf8")), descriptor);
-    const inspected = await inspectDirectory(templatePath);
+    const inspected = await inspectTemplateDirectory(templatePath);
     layers.push({
       ...variant,
       templatePath,

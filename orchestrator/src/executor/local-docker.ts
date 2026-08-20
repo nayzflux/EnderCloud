@@ -1,16 +1,28 @@
 import { cp, mkdir, mkdtemp, readdir, rename, rm } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import Docker from "dockerode";
-import type { AppConfig } from "../config.ts";
 import type { Logger } from "../logger.ts";
 import type {
   CreatedInstance,
   Executor,
   InstanceSpec,
+  InstanceTarget,
   OrphanCleanupResult,
   RuntimeInstance,
   RuntimeState,
 } from "./executor.ts";
+
+export interface LocalDockerConfig {
+  readonly dockerSocket: string;
+  readonly dockerNetwork: string;
+  readonly runtimeRoot: string;
+  readonly runtimeHostRoot: string;
+  readonly publicUrl: string;
+  readonly hostId: string;
+  readonly gameAddress: string;
+  readonly portStart: number;
+  readonly portEnd: number;
+}
 
 function isDockerNotFound(error: unknown): boolean {
   return typeof error === "object" &&
@@ -23,11 +35,23 @@ export function instanceName(variantId: string, instanceId: string): string {
   return `endercloud-${variantId}-${instanceId}`;
 }
 
+export function firstAvailablePort(
+  start: number,
+  end: number,
+  used: ReadonlySet<number>,
+): number | null {
+  for (let port = start; port <= end; port += 1) {
+    if (!used.has(port)) return port;
+  }
+  return null;
+}
+
 export async function materializeLayers(
   layers: InstanceSpec["templateLayers"],
   destination: string,
 ): Promise<void> {
   for (const layer of layers) {
+    if (!layer.templatePath) throw new Error(`Layer ${layer.id} has no local template path`);
     for (const entry of await readdir(layer.templatePath, { withFileTypes: true })) {
       if (entry.name === "variant.yml") continue;
       await cp(
@@ -46,9 +70,10 @@ export async function materializeLayers(
 
 export class LocalDockerExecutor implements Executor {
   private readonly docker: Docker;
+  private creationQueue: Promise<void> = Promise.resolve();
 
   public constructor(
-    private readonly config: AppConfig,
+    private readonly config: LocalDockerConfig,
     private readonly logger: Logger,
   ) {
     this.docker = new Docker({ socketPath: config.dockerSocket });
@@ -56,6 +81,13 @@ export class LocalDockerExecutor implements Executor {
 
   // Materialize a template, create its container, and return the proxy endpoint.
   public async createInstance(spec: InstanceSpec): Promise<CreatedInstance> {
+    const operation = this.creationQueue.then(() => this.createInstanceLocked(spec));
+    this.creationQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private async createInstanceLocked(spec: InstanceSpec): Promise<CreatedInstance> {
+    this.assertHost(spec.hostId);
     const existing = await this.findByInstanceId(spec.instanceId);
     const runtimePath = join(this.config.runtimeRoot, "instances", spec.instanceId);
     const hostRuntimePath = join(this.config.runtimeHostRoot, "instances", spec.instanceId);
@@ -66,7 +98,7 @@ export class LocalDockerExecutor implements Executor {
       return {
         containerId: existing.Id,
         runtimePath,
-        endpoint: `${name}:25565`,
+        endpoint: `${this.config.gameAddress}:${this.portFromContainer(existing)}`,
       };
     }
 
@@ -83,6 +115,7 @@ export class LocalDockerExecutor implements Executor {
       throw error;
     }
     await this.ensureImage(spec.runtime.image);
+    const hostPort = await this.allocatePort();
 
     // Labels are the durable ownership metadata used for discovery after orchestrator restarts.
     const labels: Record<string, string> = {
@@ -90,6 +123,8 @@ export class LocalDockerExecutor implements Executor {
       "orchestrator.instance-id": spec.instanceId,
       "orchestrator.group-id": spec.groupId,
       "orchestrator.variant-id": spec.variantId,
+      "orchestrator.host-id": spec.hostId,
+      "orchestrator.host-port": String(hostPort),
     };
     if (spec.sessionId) labels["orchestrator.session-id"] = spec.sessionId;
     // Explicit request values override variant defaults, then orchestrator identity is enforced.
@@ -111,6 +146,9 @@ export class LocalDockerExecutor implements Executor {
         Memory: spec.runtime.memoryBytes,
         NanoCpus: Math.round(spec.runtime.cpu * 1_000_000_000),
         NetworkMode: this.config.dockerNetwork,
+        PortBindings: {
+          "25565/tcp": [{ HostIp: "0.0.0.0", HostPort: String(hostPort) }],
+        },
       },
     });
     try {
@@ -125,23 +163,32 @@ export class LocalDockerExecutor implements Executor {
       containerId: container.id,
       image: spec.runtime.image,
     });
-    return { containerId: container.id, runtimePath, endpoint: `${name}:25565` };
+    return {
+      containerId: container.id,
+      runtimePath,
+      endpoint: `${this.config.gameAddress}:${hostPort}`,
+    };
   }
 
   // Gracefully stop a managed container when it is still running.
-  public async stopInstance(instanceId: string, timeoutSeconds: number): Promise<void> {
-    const existing = await this.findByInstanceId(instanceId);
+  public async stopInstance(target: InstanceTarget, timeoutSeconds: number): Promise<void> {
+    this.assertHost(target.hostId);
+    const existing = await this.findByInstanceId(target.instanceId);
     if (!existing || existing.State !== "running") return;
     await this.docker.getContainer(existing.Id).stop({ t: timeoutSeconds });
   }
 
   // Remove both the managed container and its generated runtime directory.
-  public async deleteInstance(instanceId: string): Promise<void> {
-    const existing = await this.findByInstanceId(instanceId);
+  public async deleteInstance(target: InstanceTarget): Promise<void> {
+    this.assertHost(target.hostId);
+    const existing = await this.findByInstanceId(target.instanceId);
     if (existing) {
       await this.docker.getContainer(existing.Id).remove({ force: true, v: true });
     }
-    const runtimePath = join(this.config.runtimeRoot, "instances", instanceId);
+    const runtimePath = this.safeOrphanRuntimePath(target.instanceId);
+    if (!runtimePath) {
+      throw new Error(`Refusing to delete unsafe runtime path for ${target.instanceId}`);
+    }
     await rm(runtimePath, { recursive: true, force: true });
   }
 
@@ -149,6 +196,7 @@ export class LocalDockerExecutor implements Executor {
   public async deleteOrphanInstance(
     instance: RuntimeInstance,
   ): Promise<OrphanCleanupResult> {
+    this.assertHost(instance.hostId);
     const container = this.docker.getContainer(instance.containerId);
     let containerRemoved = false;
     try {
@@ -157,7 +205,8 @@ export class LocalDockerExecutor implements Executor {
       const inspectedInstanceId = labels["orchestrator.instance-id"] ?? "";
       if (
         labels["orchestrator.managed"] !== "true" ||
-        inspectedInstanceId !== instance.instanceId
+        inspectedInstanceId !== instance.instanceId ||
+        labels["orchestrator.host-id"] !== this.config.hostId
       ) {
         throw new Error(
           `Refusing to delete Docker container ${instance.containerId}: ownership labels changed`,
@@ -183,8 +232,9 @@ export class LocalDockerExecutor implements Executor {
   }
 
   // Read the runtime state used by reconciliation and diagnostics.
-  public async inspectInstance(instanceId: string): Promise<RuntimeState> {
-    const existing = await this.findByInstanceId(instanceId);
+  public async inspectInstance(target: InstanceTarget): Promise<RuntimeState> {
+    this.assertHost(target.hostId);
+    const existing = await this.findByInstanceId(target.instanceId);
     if (!existing) return { exists: false, running: false };
     const inspection = await this.docker.getContainer(existing.Id).inspect();
     return {
@@ -196,13 +246,20 @@ export class LocalDockerExecutor implements Executor {
   }
 
   // Discover only containers owned by this orchestrator through Docker labels.
-  public async listManagedInstances(): Promise<readonly RuntimeInstance[]> {
+  public async listManagedInstances(hostId: string): Promise<readonly RuntimeInstance[]> {
+    this.assertHost(hostId);
     const containers = await this.docker.listContainers({
       all: true,
-      filters: { label: ["orchestrator.managed=true"] },
+      filters: {
+        label: [
+          "orchestrator.managed=true",
+          `orchestrator.host-id=${this.config.hostId}`,
+        ],
+      },
     });
     // Normalize Docker's shape into the executor contract consumed by reconciliation.
     return containers.map((container) => ({
+      hostId: container.Labels["orchestrator.host-id"] ?? this.config.hostId,
       containerId: container.Id,
       instanceId: container.Labels["orchestrator.instance-id"] ?? "",
       groupId: container.Labels["orchestrator.group-id"] ?? "",
@@ -223,10 +280,43 @@ export class LocalDockerExecutor implements Executor {
         label: [
           "orchestrator.managed=true",
           `orchestrator.instance-id=${instanceId}`,
+          `orchestrator.host-id=${this.config.hostId}`,
         ],
       },
     });
     return containers[0];
+  }
+
+  private assertHost(hostId: string): void {
+    if (hostId !== this.config.hostId) {
+      throw new Error(`Agent ${this.config.hostId} does not own host ${hostId}`);
+    }
+  }
+
+  private portFromContainer(container: Docker.ContainerInfo): number {
+    const raw = container.Labels["orchestrator.host-port"];
+    const port = raw ? Number.parseInt(raw, 10) : Number.NaN;
+    if (!Number.isInteger(port)) {
+      throw new Error(`Managed container ${container.Id} has no host port label`);
+    }
+    return port;
+  }
+
+  private async allocatePort(): Promise<number> {
+    const containers = await this.docker.listContainers({ all: true });
+    const used = new Set<number>();
+    for (const container of containers) {
+      for (const port of container.Ports ?? []) {
+        if (port.PublicPort !== undefined) used.add(port.PublicPort);
+      }
+      const labeled = container.Labels["orchestrator.host-port"];
+      if (labeled) used.add(Number.parseInt(labeled, 10));
+    }
+    const port = firstAvailablePort(this.config.portStart, this.config.portEnd, used);
+    if (port !== null) return port;
+    throw new Error(
+      `No game port is available in ${this.config.portStart}-${this.config.portEnd}`,
+    );
   }
 
   private safeOrphanRuntimePath(instanceId: string): string | undefined {

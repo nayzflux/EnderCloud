@@ -2,37 +2,33 @@ import { expect, mock, test } from "bun:test";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AppConfig } from "../../src/config.ts";
 import type { RuntimeInstance } from "../../src/executor/executor.ts";
-import { instanceName, LocalDockerExecutor, materializeLayers } from "../../src/executor/local-docker.ts";
+import {
+  instanceName,
+  firstAvailablePort,
+  LocalDockerExecutor,
+  materializeLayers,
+  type LocalDockerConfig,
+} from "../../src/executor/local-docker.ts";
 import type { Logger } from "../../src/logger.ts";
 
-function config(runtimeRoot: string): AppConfig {
+function config(runtimeRoot: string): LocalDockerConfig {
   return {
-    databaseUrl: "postgres://localhost/endercloud",
-    redisUrl: "redis://localhost:6379",
-    port: 8080,
     publicUrl: "http://orchestrator:8080",
     dockerSocket: "/var/run/docker.sock",
     dockerNetwork: "endercloud",
-    groupsRoot: "/groups",
-    templatesRoot: "/templates",
     runtimeRoot,
     runtimeHostRoot: runtimeRoot,
-    capacityIntervalMs: 5_000,
-    matchmakingIntervalMs: 1_000,
-    reconcileIntervalMs: 15_000,
-    legacyTransferTimeoutMs: 20_000,
-    legacyCancelledDrainTimeoutMs: 10_000,
-    legacyTransferTimeoutConfigured: false,
-    legacyCancelledDrainTimeoutConfigured: false,
-    maxInstanceRetries: 2,
-    logLevel: "info",
+    hostId: "test-host",
+    gameAddress: "10.0.0.10",
+    portStart: 25565,
+    portEnd: 25570,
   };
 }
 
 function runtime(instanceId: string, containerId = "target-container"): RuntimeInstance {
   return {
+    hostId: "test-host",
     instanceId,
     containerId,
     groupId: "group",
@@ -59,6 +55,7 @@ function executorWithDocker(
         Labels: {
           "orchestrator.managed": "true",
           "orchestrator.instance-id": inspectedInstanceId,
+          "orchestrator.host-id": "test-host",
         },
       },
     })),
@@ -88,6 +85,11 @@ test("Docker instance names include the variant and unique instance id", () => {
   );
 });
 
+test("game ports use the first free value in the configured range", () => {
+  expect(firstAvailablePort(25565, 25568, new Set([25565, 25566]))).toBe(25567);
+  expect(firstAvailablePort(25565, 25566, new Set([25565, 25566]))).toBeNull();
+});
+
 test("ordered layers merge recursively and omit control descriptors", async () => {
   const root = await mkdtemp(join(tmpdir(), "endercloud-materialize-"));
   try {
@@ -107,7 +109,10 @@ test("ordered layers merge recursively and omit control descriptors", async () =
     await writeFile(join(final, "world", "level.dat"), "world");
 
     await materializeLayers(
-      [{ id: "base", templatePath: base }, { id: "final", templatePath: final }],
+      [
+        { id: "base", checksum: "base-checksum", templatePath: base },
+        { id: "final", checksum: "final-checksum", templatePath: final },
+      ],
       runtime,
     );
 

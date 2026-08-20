@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
+    "agent": "bun src/agent/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:unit": "bun test test/unit",
@@ -24,6 +25,7 @@
     "elysia": "^1.4.13",
     "ioredis": "^5.8.1",
     "postgres": "^3.4.7",
+    "tar-stream": "3.2.0",
     "yaml": "^2.8.1"
   },
   "devDependencies": {

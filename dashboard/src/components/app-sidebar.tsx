@@ -8,6 +8,7 @@ import {
   ListOrderedIcon,
   NetworkIcon,
   ServerIcon,
+  ServerCogIcon,
   ChartNoAxesCombinedIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -56,6 +57,12 @@ export function AppSidebar({ mockMode = false }: { readonly mockMode?: boolean }
       label: "Instances",
       icon: ServerIcon,
       badge: summary?.activeInstances,
+    },
+    {
+      href: "/hosts",
+      label: "Hosts",
+      icon: ServerCogIcon,
+      badge: snapshot?.hosts.length,
     },
     {
       href: "/sessions",

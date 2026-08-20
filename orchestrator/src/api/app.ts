@@ -7,6 +7,8 @@ import type { QueueService } from "../services/queue-service.ts";
 import type { HubRouter } from "../services/hub-router.ts";
 import type { MonitoringService } from "../services/monitoring-service.ts";
 import { nanoid } from "../id.ts";
+import type { HostService } from "../services/host-service.ts";
+import type { TemplateArchiveService } from "../services/template-archive-service.ts";
 
 const playerUuid = t.String({ format: "uuid" });
 const internalId = t.String({ pattern: "^[A-Za-z0-9]{16}$" });
@@ -58,6 +60,8 @@ export interface ApiDependencies {
   readonly hubs: HubRouter;
   readonly dashboard: DashboardService;
   readonly monitoring: MonitoringService;
+  readonly hosts: HostService;
+  readonly templates: TemplateArchiveService;
   readonly logger: Logger;
   readonly isReady: () => boolean;
 }
@@ -114,6 +118,56 @@ export function createApp(dependencies: ApiDependencies) {
         .get("/proxy/servers", () => dependencies.instances.listProxyServers(), {
           detail: { tags: ["Proxy"] },
         })
+        .put(
+          "/hosts/:hostId/heartbeat",
+          async ({ params, body, set }) => {
+            await dependencies.hosts.heartbeat(params.hostId, body);
+            set.status = 204;
+          },
+          {
+            params: t.Object({ hostId: groupId }),
+            body: t.Object({
+              controlUrl: t.String({ format: "uri" }),
+              gameAddress: t.String({ minLength: 1, maxLength: 255 }),
+              allocatableCpu: t.Number({ exclusiveMinimum: 0 }),
+              allocatableMemoryBytes: t.Number({ minimum: 1 }),
+              agentVersion: t.String({ minLength: 1, maxLength: 64 }),
+            }),
+            detail: { tags: ["Hosts"] },
+          },
+        )
+        .get(
+          "/template-layers/:layerId/archive",
+          async ({ params, query, set }) => {
+            const response = await dependencies.templates.open(params.layerId, query.checksum);
+            if (response) return response;
+            set.status = 404;
+            return { error: "NOT_FOUND", message: "Template layer or checksum was not found" };
+          },
+          {
+            params: t.Object({ layerId: groupId }),
+            query: t.Object({ checksum: t.String({ pattern: "^[a-f0-9]{64}$" }) }),
+            detail: { tags: ["Hosts"] },
+          },
+        )
+        .post(
+          "/hosts/:hostId/drain",
+          async ({ params, set }) => {
+            const accepted = await dependencies.hosts.requestDrain(params.hostId);
+            if (!accepted) set.status = 409;
+            return { accepted };
+          },
+          { params: t.Object({ hostId: groupId }), detail: { tags: ["Hosts"] } },
+        )
+        .post(
+          "/hosts/:hostId/activate",
+          async ({ params, set }) => {
+            const accepted = await dependencies.hosts.activate(params.hostId);
+            if (!accepted) set.status = 409;
+            return { accepted };
+          },
+          { params: t.Object({ hostId: groupId }), detail: { tags: ["Hosts"] } },
+        )
         .get("/dashboard/cluster", () => dependencies.dashboard.getCluster(), {
           detail: {
             tags: ["Dashboard"],

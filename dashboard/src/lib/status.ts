@@ -1,6 +1,8 @@
 import type {
   AvailabilityState,
   DashboardInstance,
+  ExecutionHostAdminState,
+  ExecutionHostHealthState,
   LifecycleState,
   SessionPlayerState,
   SessionState,
@@ -87,6 +89,18 @@ const availabilityTones: Record<AvailabilityState, Tone> = {
   RESERVED: "info",
 };
 
+const hostHealthTones: Record<ExecutionHostHealthState, Tone> = {
+  RECOVERING: "warning",
+  ONLINE: "success",
+  OFFLINE: "danger",
+};
+
+const hostAdminTones: Record<ExecutionHostAdminState, Tone> = {
+  ACTIVE: "success",
+  DRAINING: "warning",
+  MAINTENANCE: "neutral",
+};
+
 export function lifecycleTone(state: LifecycleState): Tone {
   return lifecycleTones[state] ?? "neutral";
 }
@@ -101,6 +115,14 @@ export function sessionPlayerTone(state: SessionPlayerState): Tone {
 
 export function availabilityTone(state: AvailabilityState): Tone {
   return availabilityTones[state] ?? "neutral";
+}
+
+export function hostHealthTone(state: ExecutionHostHealthState): Tone {
+  return hostHealthTones[state] ?? "neutral";
+}
+
+export function hostAdminTone(state: ExecutionHostAdminState): Tone {
+  return hostAdminTones[state] ?? "neutral";
 }
 
 /** Command and transfer states are open-ended strings in the contract. */

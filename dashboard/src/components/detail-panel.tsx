@@ -357,6 +357,9 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
                 <KeyValue label="Variant" mono>
                   {instance.variantId}
                 </KeyValue>
+                <KeyValue label="Host" mono>
+                  {instance.hostId ?? "Unassigned"}
+                </KeyValue>
                 <KeyValue label="Endpoint" mono>
                   {instance.endpoint ?? "Awaiting registration"}
                 </KeyValue>

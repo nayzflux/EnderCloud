@@ -17,14 +17,22 @@ export function validationErrorResponse(message: string): NextResponse {
   return jsonResponse({ error: "VALIDATION_ERROR", message }, 400);
 }
 
-export async function proxyOrchestrator(path: string): Promise<NextResponse> {
+export async function proxyOrchestrator(
+  path: string,
+  init: Pick<RequestInit, "method" | "body"> = {},
+): Promise<NextResponse> {
   const baseUrl = process.env.ORCHESTRATOR_URL ?? fallbackOrchestratorUrl;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8_000);
   try {
     const response = await fetch(new URL(path, `${baseUrl.replace(/\/+$/, "")}/`), {
       cache: "no-store",
-      headers: { accept: "application/json" },
+      method: init.method ?? "GET",
+      body: init.body,
+      headers: {
+        accept: "application/json",
+        ...(init.body ? { "content-type": "application/json" } : {}),
+      },
       signal: controller.signal,
     });
     const body = await response.text();

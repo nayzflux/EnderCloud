@@ -7,7 +7,26 @@ import type {
   TemplateFileSummary,
   VariantRuntimePatch,
   VariantRuntimeSpec,
+  ExecutionHostAdminState,
+  ExecutionHostHealthState,
 } from "./types.ts";
+
+export interface DashboardHost {
+  readonly id: string;
+  readonly controlUrl: string;
+  readonly gameAddress: string;
+  readonly healthState: ExecutionHostHealthState;
+  readonly adminState: ExecutionHostAdminState;
+  readonly allocatableCpu: number;
+  readonly reservedCpu: number;
+  readonly allocatableMemoryBytes: number;
+  readonly reservedMemoryBytes: number;
+  readonly activeInstanceCount: number;
+  readonly agentVersion: string;
+  readonly lastHeartbeatAt: string;
+  readonly lastControlContactAt: string | null;
+  readonly lastError: string | null;
+}
 
 export interface DashboardQueueSummary {
   readonly partyCount: number;
@@ -56,6 +75,7 @@ export interface ActiveDeadline {
 
 export interface DashboardInstance {
   readonly id: string;
+  readonly hostId: string | null;
   readonly variantId: string;
   readonly sessionId: string | null;
   readonly lifecycleState: LifecycleState;
@@ -141,7 +161,7 @@ export interface DashboardGroup {
 }
 
 export interface DashboardClusterSnapshot {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly generatedAt: string;
   readonly summary: {
     readonly enabledGroups: number;
@@ -155,6 +175,7 @@ export interface DashboardClusterSnapshot {
     readonly queuedParties: number;
     readonly queuedPlayers: number;
   };
+  readonly hosts: readonly DashboardHost[];
   readonly groups: readonly DashboardGroup[];
 }
 
@@ -231,7 +252,7 @@ export interface DashboardQueueDetail {
 }
 
 export interface DashboardInstanceDetail {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly generatedAt: string;
   readonly activeDeadline: ActiveDeadline | null;
   readonly instance: DashboardInstance & {

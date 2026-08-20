@@ -16,6 +16,7 @@ import {
   events,
   sessionPlayers,
   transferCommands,
+  executionHosts,
 } from "../db/schema.ts";
 import type {
   DashboardClusterSnapshot,
@@ -29,6 +30,7 @@ import type {
   DashboardVariant,
   DashboardVariantGraph,
   ActiveDeadline,
+  DashboardHost,
 } from "../domain/dashboard.ts";
 import type {
   AvailabilityState,
@@ -37,6 +39,8 @@ import type {
   SessionPlayerState,
   SessionState,
   VariantRuntimeSpec,
+  ExecutionHostAdminState,
+  ExecutionHostHealthState,
 } from "../domain/types.ts";
 import {
   computeFeasibleProfiles,
@@ -84,6 +88,7 @@ export interface VariantRow {
 
 export interface InstanceRow {
   id: string;
+  host_id?: string | null;
   group_id: string;
   variant_id: string;
   session_id: string | null;
@@ -104,6 +109,23 @@ export interface InstanceRow {
   stopping_at: DatabaseTimestamp | null;
   shutdown_deadline: DatabaseTimestamp | null;
   updated_at: DatabaseTimestamp;
+}
+
+export interface HostRow {
+  id: string;
+  control_url: string;
+  game_address: string;
+  health_state: ExecutionHostHealthState;
+  admin_state: ExecutionHostAdminState;
+  allocatable_cpu: number;
+  reserved_cpu: number;
+  allocatable_memory_bytes: number;
+  reserved_memory_bytes: number;
+  active_instance_count: number;
+  agent_version: string;
+  last_heartbeat_at: DatabaseTimestamp;
+  last_control_contact_at: DatabaseTimestamp | null;
+  last_error: string | null;
 }
 
 export interface SessionRow {
@@ -134,6 +156,7 @@ export interface QueueSummaryRow {
 }
 
 export interface DashboardRows {
+  readonly hosts?: readonly HostRow[];
   readonly groups: readonly GroupRow[];
   readonly variants: readonly VariantRow[];
   readonly instances: readonly InstanceRow[];
@@ -163,6 +186,7 @@ function toVariant(row: VariantRow): DashboardVariant {
 function toInstance(row: InstanceRow): DashboardInstance {
   return {
     id: row.id,
+    hostId: row.host_id ?? null,
     variantId: row.variant_id,
     sessionId: row.session_id,
     lifecycleState: row.lifecycle_state,
@@ -182,6 +206,25 @@ function toInstance(row: InstanceRow): DashboardInstance {
     stoppingAt: iso(row.stopping_at),
     shutdownDeadline: iso(row.shutdown_deadline),
     updatedAt: requiredIso(row.updated_at),
+  };
+}
+
+function toHost(row: HostRow): DashboardHost {
+  return {
+    id: row.id,
+    controlUrl: row.control_url,
+    gameAddress: row.game_address,
+    healthState: row.health_state,
+    adminState: row.admin_state,
+    allocatableCpu: row.allocatable_cpu,
+    reservedCpu: row.reserved_cpu,
+    allocatableMemoryBytes: row.allocatable_memory_bytes,
+    reservedMemoryBytes: row.reserved_memory_bytes,
+    activeInstanceCount: row.active_instance_count,
+    agentVersion: row.agent_version,
+    lastHeartbeatAt: requiredIso(row.last_heartbeat_at),
+    lastControlContactAt: iso(row.last_control_contact_at),
+    lastError: row.last_error,
   };
 }
 
@@ -300,7 +343,10 @@ export function assembleClusterSnapshot(
     const instances = instancesByGroup.get(group.id) ?? [];
     const activeInstances = instances.filter(
       (instance) =>
-        instance.lifecycleState !== "STOPPED" && instance.lifecycleState !== "FAILED",
+        instance.lifecycleState === "CREATING" ||
+        instance.lifecycleState === "STARTING" ||
+        instance.lifecycleState === "RUNNING" ||
+        instance.lifecycleState === "DRAINING",
     );
     const warmInstances = activeInstances.filter(
       (instance) =>
@@ -375,7 +421,7 @@ export function assembleClusterSnapshot(
   const allInstances = groups.flatMap((group) => group.instances);
   const allSessions = groups.flatMap((group) => group.sessions);
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAt: generatedAt.toISOString(),
     summary: {
       enabledGroups: groups.filter((group) => group.enabled).length,
@@ -417,6 +463,7 @@ export function assembleClusterSnapshot(
         0,
       ),
     },
+    hosts: (rows.hosts ?? []).map(toHost),
     groups,
   };
 }
@@ -570,6 +617,7 @@ export class DashboardService {
       
       const instances = await tx.select({
         id: serverInstances.id,
+        host_id: serverInstances.hostId,
         group_id: serverInstances.groupId,
         variant_id: serverInstances.variantId,
         session_id: serverInstances.sessionId,
@@ -661,7 +709,7 @@ export class DashboardService {
       ]);
 
       return {
-        schemaVersion: 2,
+        schemaVersion: 3,
         generatedAt: new Date().toISOString(),
         activeDeadline: activeInstanceDeadline(instance as InstanceRow),
         instance: {
@@ -837,6 +885,38 @@ export class DashboardService {
   private async readClusterRows(
     tx: Extract<Parameters<Parameters<Database["transaction"]>[0]>[0], Function> | any,
   ): Promise<DashboardRows> {
+    const hosts = await tx.select({
+      id: executionHosts.id,
+      control_url: executionHosts.controlUrl,
+      game_address: executionHosts.gameAddress,
+      health_state: executionHosts.healthState,
+      admin_state: executionHosts.adminState,
+      allocatable_cpu: executionHosts.allocatableCpu,
+      reserved_cpu: sql<number>`COALESCE((
+        SELECT sum(instance.reserved_cpu)
+        FROM server_instances instance
+        WHERE instance.host_id = ${executionHosts.id}
+          AND instance.lifecycle_state <> 'STOPPED'
+      ), 0)::float8`.mapWith(Number),
+      allocatable_memory_bytes: executionHosts.allocatableMemoryBytes,
+      reserved_memory_bytes: sql<number>`COALESCE((
+        SELECT sum(instance.reserved_memory_bytes)
+        FROM server_instances instance
+        WHERE instance.host_id = ${executionHosts.id}
+          AND instance.lifecycle_state <> 'STOPPED'
+      ), 0)::float8`.mapWith(Number),
+      active_instance_count: sql<number>`(
+        SELECT count(*)::int
+        FROM server_instances instance
+        WHERE instance.host_id = ${executionHosts.id}
+          AND instance.lifecycle_state IN ('CREATING', 'STARTING', 'RUNNING', 'DRAINING')
+      )`.mapWith(Number),
+      agent_version: executionHosts.agentVersion,
+      last_heartbeat_at: executionHosts.lastHeartbeatAt,
+      last_control_contact_at: executionHosts.lastControlContactAt,
+      last_error: executionHosts.lastError,
+    }).from(executionHosts).orderBy(asc(executionHosts.id));
+
     const groups = await tx.select({
       id: serverGroups.id,
       type: serverGroups.type,
@@ -881,6 +961,7 @@ export class DashboardService {
 
     const instances = await tx.select({
       id: serverInstances.id,
+      host_id: serverInstances.hostId,
       group_id: serverInstances.groupId,
       variant_id: serverInstances.variantId,
       session_id: serverInstances.sessionId,
@@ -952,7 +1033,8 @@ export class DashboardService {
     .where(eq(queueEntries.state, 'QUEUED'))
     .groupBy(queueEntries.groupId);
 
-    return { 
+    return {
+      hosts: hosts as HostRow[],
       groups: groups as GroupRow[], 
       variants: variants as unknown as VariantRow[], 
       instances: instances as InstanceRow[], 

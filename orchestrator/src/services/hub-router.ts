@@ -2,6 +2,7 @@ import { and, eq, gt, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import {
   instancePlayers,
+  executionHosts,
   serverGroups,
   serverInstances,
   transferCommands,
@@ -87,6 +88,7 @@ export class HubRouter {
           eq(serverInstances.id, instancePlayers.instanceId),
         )
         .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
+        .innerJoin(executionHosts, eq(executionHosts.id, serverInstances.hostId))
         .where(
           and(
             inArray(instancePlayers.playerId, [...connectedIds]),
@@ -94,6 +96,8 @@ export class HubRouter {
             eq(serverGroups.enabled, true),
             eq(serverInstances.lifecycleState, "RUNNING"),
             eq(serverInstances.availabilityState, "OPEN"),
+            eq(executionHosts.healthState, "ONLINE"),
+            eq(executionHosts.adminState, "ACTIVE"),
           ),
         );
       const acceptedIds = new Set<string>(
@@ -110,6 +114,7 @@ export class HubRouter {
           eq(serverInstances.id, transferCommands.instanceId),
         )
         .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
+        .innerJoin(executionHosts, eq(executionHosts.id, serverInstances.hostId))
         .where(
           and(
             eq(transferCommands.state, "PENDING"),
@@ -118,6 +123,8 @@ export class HubRouter {
             eq(serverGroups.enabled, true),
             eq(serverInstances.lifecycleState, "RUNNING"),
             eq(serverInstances.availabilityState, "OPEN"),
+            eq(executionHosts.healthState, "ONLINE"),
+            eq(executionHosts.adminState, "ACTIVE"),
           ),
         ) as { payload: PendingTransferPayload }[];
       for (const pending of pendingHubTransfers) {
@@ -142,12 +149,15 @@ export class HubRouter {
         })
         .from(serverInstances)
         .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
+        .innerJoin(executionHosts, eq(executionHosts.id, serverInstances.hostId))
         .where(
           and(
             eq(serverGroups.type, "hub"),
             eq(serverGroups.enabled, true),
             eq(serverInstances.lifecycleState, "RUNNING"),
             eq(serverInstances.availabilityState, "OPEN"),
+            eq(executionHosts.healthState, "ONLINE"),
+            eq(executionHosts.adminState, "ACTIVE"),
             ne(serverInstances.id, sourceInstanceId),
             isNotNull(serverInstances.endpoint),
           ),

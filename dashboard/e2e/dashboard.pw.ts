@@ -241,6 +241,33 @@ test.describe("topology", () => {
   });
 });
 
+test.describe("hosts", () => {
+  test("lists execution hosts and opens their inventory", async ({ page }) => {
+    await visit(page, "/hosts");
+    await expect(page.getByRole("heading", { name: "Hosts" })).toBeVisible();
+    await expect(page.getByText("host-paris-01").first()).toBeVisible();
+    await expect(page.getByText("Online", { exact: true }).first()).toBeVisible();
+
+    await openRow(page);
+    const panel = page.getByRole("dialog");
+    await expect(panel.getByText("Capacity", { exact: true })).toBeVisible();
+    await expect(panel.getByText("Control", { exact: true })).toBeVisible();
+    await expect(panel.getByRole("heading", { name: /^Instances/ })).toBeVisible();
+    await expect(panel.getByRole("button", { name: "Drain host" })).toBeVisible();
+  });
+
+  test("confirms host drain actions", async ({ page }) => {
+    await visit(page, "/hosts");
+    await openRow(page);
+    await page.getByRole("dialog").getByRole("button", { name: "Drain host" }).click();
+
+    const confirmation = page.getByRole("alertdialog");
+    await expect(confirmation.getByText(/Drain host-paris-01/)).toBeVisible();
+    await confirmation.getByRole("button", { name: "Start drain" }).click();
+    await expect(page.getByText("Host drain started.")).toBeVisible();
+  });
+});
+
 test.describe("monitoring", () => {
   test("renders shadcn time-series charts and switches their windows", async ({ page }) => {
     await visit(page, "/monitoring");
@@ -346,6 +373,7 @@ test.describe("shell", () => {
     for (const [label, href, heading] of [
       ["Monitoring", "/monitoring", "Performance monitoring"],
       ["Groups", "/groups", "Groups"],
+      ["Hosts", "/hosts", "Hosts"],
       ["Queues", "/queues", "Matchmaking queues"],
       ["Sessions", "/sessions", "Sessions"],
       ["Overview", "/", "Cluster overview"],

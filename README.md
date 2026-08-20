@@ -1,20 +1,19 @@
 # EnderCloud
 
 EnderCloud is a modular monolithic orchestrator for disposable Minecraft servers. PostgreSQL
-stores every durable decision, Redis broadcasts ephemeral proxy events, and Docker runs
-instances copied from immutable template directories.
+stores every durable decision, Redis broadcasts ephemeral proxy events, and one Bun agent per
+execution host manages Docker, local ports, runtimes and template caches.
 
 ![Overview](./images/dashboard/overview_tab.png)
 
 ![Instances Tab](./images/dashboard/instances_tab.png)
 
-Managed Minecraft containers use the name
 Docker containers use `endercloud-<variant-id>-<instance-id>`; Velocity registers them as
 `ec-<variant-id>-<instance-id>`.
 
 ## Repository layout
 
-- `orchestrator/`: Bun, TypeScript, Elysia, Drizzle and the local Docker executor.
+- `orchestrator/`: the central Bun orchestrator and the host-agent entry point.
 - `dashboard/`: console Next.js, React Flow, TanStack Query et shadcn/ui.
 - `plugins/core`: platform-neutral Java 25 client, contracts and integration APIs.
 - `plugins/velocity`: dynamic server registry, transfers and hub fallback.
@@ -57,20 +56,22 @@ Both are shaded. Platform APIs themselves remain `compileOnly`.
 
 ## Run the infrastructure
 
-Copy `.env.example` to `.env` and set `RUNTIME_HOST_ROOT` to the absolute path of this
-repository's `runtime` directory exactly as it is seen by the Docker daemon. With Docker Desktop
-this may be a VM mount such as `/run/desktop/mnt/host/c/...`, rather than a Windows path. This
-second path is needed
-because the orchestrator controls the host daemon through its socket, while it sees the same
-files through `/data/runtime`.
+Stop every managed instance before applying the multi-host migration. Startup rejects any active
+legacy instance that has no `host_id`.
+
+Copy `.env.example` to `.env`, configure the primary agent's explicit CPU and memory limits, and
+set `RUNTIME_HOST_ROOT` to the absolute runtime path seen by the Docker daemon. With Docker
+Desktop this may be a VM mount such as `/run/desktop/mnt/host/c/...`, rather than a Windows path.
+`AGENT_GAME_ADDRESS` must be the private address used by Velocity and players to reach the
+published game-port range.
 
 ```powershell
 docker compose up --build
 ```
 
-Le dashboard est alors disponible sur `http://localhost:3000` (ou le port défini par
-`DASHBOARD_PORT`). Son proxy serveur ne permet que les quatre routes de lecture du dashboard et
-contacte l'orchestrateur avec `ORCHESTRATOR_URL`.
+The dashboard is available on `http://localhost:3000`, or the port configured with
+`DASHBOARD_PORT`. Its server proxy exposes the dashboard read routes and the confirmed host
+maintenance actions, then reaches the orchestrator through `ORCHESTRATOR_URL`.
 
 Pour le développement local, lancer l'orchestrateur puis :
 
@@ -84,10 +85,16 @@ Pour travailler sur l'interface sans lancer l'orchestrateur, Docker ni PostgreSQ
 `DASHBOARD_MOCK_DATA=true` dans `dashboard/.env.local` : le dashboard sert alors un cluster
 synthétique. Voir `dashboard/README.md`.
 
-L'orchestrateur et les services internes restent sur le réseau `endercloud`. Attachez chaque
-conteneur Velocity et chaque serveur Minecraft créé dynamiquement à ce même réseau.
-L'orchestrateur applique les migrations et valide les YAML avant que son endpoint de readiness
-réussisse.
+The orchestrator, its local agent and the internal services remain on the `endercloud` network.
+The orchestrator no longer mounts the Docker socket. Even the primary host is controlled through
+the agent API. Attach Velocity to the same network and keep PostgreSQL, Redis and every control
+port private. Only the configured game-port range should be exposed to players.
+
+To add a remote Docker host, copy the repository and an agent environment file to that host, then
+run `docker compose -f compose.agent.yml up --build`. The private network must allow both directions:
+the agent downloads templates and sends heartbeats to the orchestrator, while the orchestrator
+calls the agent's control URL. See [`docs/MULTI_HOST.md`](docs/MULTI_HOST.md) for all variables,
+recovery behavior and maintenance semantics.
 
 ## Enable a group
 
@@ -135,6 +142,10 @@ OpenAPI is available at `/openapi` inside the private network. Important routes 
 - `GET /api/v1/dashboard/groups/{groupId}/queue`
 - `GET /api/v1/dashboard/instances/{instanceId}`
 - `GET /api/v1/dashboard/sessions/{sessionId}`
+- `PUT /api/v1/hosts/{hostId}/heartbeat`
+- `POST /api/v1/hosts/{hostId}/drain`
+- `POST /api/v1/hosts/{hostId}/activate`
+- `GET /api/v1/template-layers/{layerId}/archive?checksum=...`
 - `POST /api/v1/queue/entries`
 - `POST /api/v1/proxy/players/{uuid}/disconnected`
 - `POST /api/v1/instances/{id}/events`
@@ -149,8 +160,9 @@ monitoring history.
 Redis uses `minecraft:proxy:registry` and `minecraft:proxy:transfers`. Subscribers connect before
 loading their HTTP snapshot and reload it after any malformed event or reconnection.
 
-This API is intentionally unauthenticated for the MVP. Do not publish port 8080 or Redis outside
-the private Docker network.
+The orchestrator and agent APIs are intentionally unauthenticated for the MVP. Bind their ports
+only to private addresses. Never publish PostgreSQL, Redis, the Docker socket or a control port to
+an untrusted network.
 
 See [`docs/TIMEOUTS.md`](docs/TIMEOUTS.md) for the complete list of business deadlines,
 group configuration keys and infrastructure timeouts.

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, mock, test } from "bun:test";
 import { createApp } from "../../src/api/app.ts";
 import type { Logger } from "../../src/logger.ts";
 import type { DashboardService } from "../../src/services/dashboard-service.ts";
@@ -6,6 +6,8 @@ import type { InstanceController } from "../../src/services/instance-controller.
 import type { QueueService } from "../../src/services/queue-service.ts";
 import type { HubRouter } from "../../src/services/hub-router.ts";
 import type { MonitoringService } from "../../src/services/monitoring-service.ts";
+import type { HostService } from "../../src/services/host-service.ts";
+import type { TemplateArchiveService } from "../../src/services/template-archive-service.ts";
 
 function testApp(
   hubs: HubRouter = {} as HubRouter,
@@ -14,10 +16,12 @@ function testApp(
     getSummary: async () => ({ schemaVersion: 1, generatedAt: new Date().toISOString(), alerts: [] }),
     getGroupSeries: async () => null,
   } as unknown as MonitoringService,
+  hosts: HostService = {} as HostService,
+  templates: TemplateArchiveService = {} as TemplateArchiveService,
 ) {
   const dashboard = {
     getCluster: async () => ({
-      schemaVersion: 2 as const,
+      schemaVersion: 3 as const,
       generatedAt: "2026-07-27T12:00:00.000Z",
       summary: {
         enabledGroups: 0,
@@ -31,6 +35,7 @@ function testApp(
         queuedParties: 0,
         queuedPlayers: 0,
       },
+      hosts: [],
       groups: [],
     }),
     getQueue: async () => null,
@@ -43,6 +48,8 @@ function testApp(
     queues: {} as unknown as QueueService,
     instances,
     hubs,
+    hosts,
+    templates,
     logger: { error: () => {} } as unknown as Logger,
     isReady: () => true,
   });
@@ -54,7 +61,7 @@ test("dashboard cluster endpoint returns a versioned snapshot", async () => {
   );
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({
-    schemaVersion: 2,
+    schemaVersion: 3,
     summary: { activeInstances: 0 },
   });
 });
@@ -177,4 +184,75 @@ test("dashboard detail endpoints return a stable 404 response", async () => {
     message: "Instance abcdefghijklmnop was not found",
     requestId: "dashboard-test",
   });
+});
+
+test("host control routes validate heartbeats and preserve action conflicts", async () => {
+  const heartbeat = mock(async () => {});
+  const requestDrain = mock(async () => true);
+  const activate = mock(async () => false);
+  const hosts = {
+    heartbeat,
+    requestDrain,
+    activate,
+  } as unknown as HostService;
+  const app = testApp(
+    {} as HubRouter,
+    {} as InstanceController,
+    undefined,
+    hosts,
+  );
+
+  const heartbeatBody = {
+    controlUrl: "http://host-paris-01:8090",
+    gameAddress: "10.20.0.11",
+    allocatableCpu: 8,
+    allocatableMemoryBytes: 16 * 1024 ** 3,
+    agentVersion: "0.1.0",
+  };
+  const heartbeatResponse = await app.handle(new Request(
+    "http://endercloud/api/v1/hosts/host-paris-01/heartbeat",
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(heartbeatBody),
+    },
+  ));
+  expect(heartbeatResponse.status).toBe(204);
+  expect(heartbeat).toHaveBeenCalledWith("host-paris-01", heartbeatBody);
+
+  const drainResponse = await app.handle(new Request(
+    "http://endercloud/api/v1/hosts/host-paris-01/drain",
+    { method: "POST" },
+  ));
+  expect(drainResponse.status).toBe(200);
+  expect(await drainResponse.json()).toEqual({ accepted: true });
+
+  const activateResponse = await app.handle(new Request(
+    "http://endercloud/api/v1/hosts/host-paris-01/activate",
+    { method: "POST" },
+  ));
+  expect(activateResponse.status).toBe(409);
+  expect(await activateResponse.json()).toEqual({ accepted: false });
+});
+
+test("template archive route streams the service response", async () => {
+  const checksum = "a".repeat(64);
+  const open = mock(async () => new Response("archive", {
+    headers: { "content-type": "application/x-tar" },
+  }));
+  const templates = { open } as unknown as TemplateArchiveService;
+  const response = await testApp(
+    {} as HubRouter,
+    {} as InstanceController,
+    undefined,
+    {} as HostService,
+    templates,
+  ).handle(new Request(
+    `http://endercloud/api/v1/template-layers/base-layer/archive?checksum=${checksum}`,
+  ));
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toBe("application/x-tar");
+  expect(await response.text()).toBe("archive");
+  expect(open).toHaveBeenCalledWith("base-layer", checksum);
 });

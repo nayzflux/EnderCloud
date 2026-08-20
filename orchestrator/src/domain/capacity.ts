@@ -23,7 +23,11 @@ export function decideCapacity(
 ): CapacityDecision {
   // Terminal instances consume no capacity and must not affect scaling decisions.
   const activeInstances = instances.filter(
-    ({ lifecycle }) => lifecycle !== "STOPPED" && lifecycle !== "FAILED",
+    ({ lifecycle }) =>
+      lifecycle === "CREATING" ||
+      lifecycle === "STARTING" ||
+      lifecycle === "RUNNING" ||
+      lifecycle === "DRAINING",
   );
   // Separate usable capacity from capacity still booting to avoid over-creation.
   const warmReady = activeInstances.filter(({ lifecycle, availability }) =>

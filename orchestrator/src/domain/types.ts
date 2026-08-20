@@ -13,6 +13,12 @@ export type LifecycleState = (typeof lifecycleStates)[number];
 export const availabilityStates = ["OPEN", "RESERVED"] as const;
 export type AvailabilityState = (typeof availabilityStates)[number];
 
+export const executionHostHealthStates = ["RECOVERING", "ONLINE", "OFFLINE"] as const;
+export type ExecutionHostHealthState = (typeof executionHostHealthStates)[number];
+
+export const executionHostAdminStates = ["ACTIVE", "DRAINING", "MAINTENANCE"] as const;
+export type ExecutionHostAdminState = (typeof executionHostAdminStates)[number];
+
 export const sessionStates = [
   "FORMING",
   "WAITING_FOR_INSTANCE",

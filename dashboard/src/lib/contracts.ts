@@ -9,6 +9,8 @@ export type LifecycleState =
   | "FAILED"
   | "ORPHANED";
 export type AvailabilityState = "OPEN" | "RESERVED";
+export type ExecutionHostHealthState = "RECOVERING" | "ONLINE" | "OFFLINE";
+export type ExecutionHostAdminState = "ACTIVE" | "DRAINING" | "MAINTENANCE";
 export type SessionState =
   | "FORMING"
   | "WAITING_FOR_INSTANCE"
@@ -84,6 +86,7 @@ export interface ActiveDeadline {
 
 export interface DashboardInstance {
   readonly id: string;
+  readonly hostId: string | null;
   readonly variantId: string;
   readonly sessionId: string | null;
   readonly lifecycleState: LifecycleState;
@@ -103,6 +106,23 @@ export interface DashboardInstance {
   readonly stoppingAt: string | null;
   readonly shutdownDeadline: string | null;
   readonly updatedAt: string;
+}
+
+export interface DashboardHost {
+  readonly id: string;
+  readonly controlUrl: string;
+  readonly gameAddress: string;
+  readonly healthState: ExecutionHostHealthState;
+  readonly adminState: ExecutionHostAdminState;
+  readonly allocatableCpu: number;
+  readonly reservedCpu: number;
+  readonly allocatableMemoryBytes: number;
+  readonly reservedMemoryBytes: number;
+  readonly activeInstanceCount: number;
+  readonly agentVersion: string;
+  readonly lastHeartbeatAt: string;
+  readonly lastControlContactAt: string | null;
+  readonly lastError: string | null;
 }
 
 export interface DashboardSession {
@@ -173,7 +193,7 @@ export interface DashboardGroup {
 }
 
 export interface DashboardClusterSnapshot {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly generatedAt: string;
   readonly summary: {
     readonly enabledGroups: number;
@@ -187,6 +207,7 @@ export interface DashboardClusterSnapshot {
     readonly queuedParties: number;
     readonly queuedPlayers: number;
   };
+  readonly hosts: readonly DashboardHost[];
   readonly groups: readonly DashboardGroup[];
 }
 
@@ -263,7 +284,7 @@ export interface DashboardQueueDetail {
 }
 
 export interface DashboardInstanceDetail {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly generatedAt: string;
   readonly activeDeadline: ActiveDeadline | null;
   readonly instance: DashboardInstance & {

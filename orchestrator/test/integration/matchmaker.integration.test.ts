@@ -3,7 +3,7 @@ import { createDatabase, type SqlClient } from "../../src/db/client.ts";
 import { migrateDatabase } from "../../src/db/migrate.ts";
 import { Matchmaker } from "../../src/services/matchmaker.ts";
 import { QueueService } from "../../src/services/queue-service.ts";
-import { serverGroups, serverGroupVariants, serverVariantLayers, serverVariants, templateLayers, serverInstances, queueEntries, queueEntryPlayers, gameSessions, sessionPlayers, instancePlayers, transferCommands, events, serverTpsMetrics } from "../../src/db/schema.ts";
+import { executionHosts, serverGroups, serverGroupVariants, serverVariantLayers, serverVariants, templateLayers, serverInstances, queueEntries, queueEntryPlayers, gameSessions, sessionPlayers, instancePlayers, transferCommands, events, serverTpsMetrics } from "../../src/db/schema.ts";
 import type { TransferService } from "../../src/services/transfer-service.ts";
 import { InstanceController } from "../../src/services/instance-controller.ts";
 import type { Executor, RuntimeInstance } from "../../src/executor/executor.ts";
@@ -17,6 +17,11 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testconta
 import { CapacityController } from "../../src/services/capacity-controller.ts";
 import { Reconciler } from "../../src/services/reconciler.ts";
 import { MonitoringService } from "../../src/services/monitoring-service.ts";
+import { HostService } from "../../src/services/host-service.ts";
+import { AgentExecutor } from "../../src/executor/agent-executor.ts";
+import { HostMaintenanceController } from "../../src/services/host-maintenance-controller.ts";
+
+const TEST_HOST_ID = "integration-host";
 
 const mockLogger = {
   minimum: "debug",
@@ -68,7 +73,7 @@ async function seedVariant(groupId: string, variantId: string, revision = 1) {
 }
 
 async function cleanDb() {
-  await sql`TRUNCATE TABLE template_layers, server_groups, events, server_tps_metrics CASCADE`;
+  await sql`TRUNCATE TABLE template_layers, server_groups, execution_hosts, events, server_tps_metrics CASCADE`;
 }
 
 async function seedGroup() {
@@ -119,12 +124,371 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
 
   beforeEach(async () => {
     await cleanDb();
+    await db.insert(executionHosts).values({
+      id: TEST_HOST_ID,
+      controlUrl: "http://integration-host:8090",
+      gameAddress: "10.0.0.10",
+      allocatableCpu: 32,
+      allocatableMemoryBytes: 64 * 1024 ** 3,
+      healthState: "ONLINE",
+      adminState: "ACTIVE",
+      agentVersion: "test",
+      lastHeartbeatAt: new Date(),
+      lastControlContactAt: new Date(),
+    });
     (mockTransfers.enqueue as any).mockClear();
   });
 
   afterAll(async () => {
     if (sql) await sql.end();
     if (container) await container.stop();
+  });
+
+  test("placement serializes reservations without overallocating either host", async () => {
+    const { groupId } = await seedGroup();
+    await db.update(executionHosts).set({
+      allocatableCpu: 2,
+      allocatableMemoryBytes: 2048,
+    }).where(eq(executionHosts.id, TEST_HOST_ID));
+    await db.insert(executionHosts).values({
+      id: "integration-host-b",
+      controlUrl: "http://integration-host-b:8090",
+      gameAddress: "10.0.0.11",
+      allocatableCpu: 2,
+      allocatableMemoryBytes: 2048,
+      healthState: "ONLINE",
+      adminState: "ACTIVE",
+      agentVersion: "test",
+      lastHeartbeatAt: new Date(),
+      lastControlContactAt: new Date(),
+    });
+    const executor = {
+      createInstance: mock(async (spec) => ({
+        containerId: `container-${spec.instanceId}`,
+        runtimePath: `/runtime/${spec.instanceId}`,
+        endpoint: `10.0.0.10:25565`,
+      })),
+    } as unknown as Executor;
+    const controller = new InstanceController(
+      db,
+      executor,
+      new VariantSelector(db),
+      {} as RedisEventBus,
+      mockTransfers,
+      new HubRouter(db, mockTransfers),
+      mockLogger,
+      undefined,
+      new HostService(db),
+    );
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => controller.createWarm(groupId)),
+    );
+    expect(results.filter(Boolean)).toHaveLength(4);
+    expect(results.filter((result) => result === null)).toHaveLength(1);
+
+    const placed = await db.select({ hostId: serverInstances.hostId })
+      .from(serverInstances);
+    expect(placed.filter((row) => row.hostId === TEST_HOST_ID)).toHaveLength(2);
+    expect(placed.filter((row) => row.hostId === "integration-host-b")).toHaveLength(2);
+  });
+
+  test("orchestrator routes creation through two HTTP agents", async () => {
+    const requests = new Map<string, string[]>();
+    const startAgent = (hostId: string, gameAddress: string) => Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: async (request) => {
+        const url = new URL(request.url);
+        requests.set(hostId, [...(requests.get(hostId) ?? []), `${request.method} ${url.pathname}`]);
+        if (request.method === "GET" && url.pathname === "/api/v1/instances") {
+          return Response.json([]);
+        }
+        if (request.method === "PUT") {
+          const spec = await request.json() as { instanceId: string };
+          return Response.json({
+            containerId: `${hostId}-${spec.instanceId}`,
+            runtimePath: `/runtime/${spec.instanceId}`,
+            endpoint: `${gameAddress}:25565`,
+          });
+        }
+        return new Response(null, { status: 204 });
+      },
+    });
+    const agentA = startAgent(TEST_HOST_ID, "10.0.0.10");
+    const agentB = startAgent("integration-host-b", "10.0.0.11");
+    try {
+      const { groupId } = await seedGroup();
+      await db.update(executionHosts).set({
+        controlUrl: agentA.url.toString(),
+        allocatableCpu: 1,
+        allocatableMemoryBytes: 1024,
+      }).where(eq(executionHosts.id, TEST_HOST_ID));
+      await db.insert(executionHosts).values({
+        id: "integration-host-b",
+        controlUrl: agentB.url.toString(),
+        gameAddress: "10.0.0.11",
+        allocatableCpu: 1,
+        allocatableMemoryBytes: 1024,
+        healthState: "ONLINE",
+        adminState: "ACTIVE",
+        agentVersion: "test",
+        lastHeartbeatAt: new Date(),
+        lastControlContactAt: new Date(),
+      });
+      const hosts = new HostService(db);
+      const controller = new InstanceController(
+        db,
+        new AgentExecutor(hosts, { operationTimeoutMs: 5_000, probeTimeoutMs: 1_000 }),
+        new VariantSelector(db),
+        {} as RedisEventBus,
+        mockTransfers,
+        new HubRouter(db, mockTransfers),
+        mockLogger,
+        undefined,
+        hosts,
+      );
+
+      const first = await controller.createWarm(groupId);
+      const second = await controller.createWarm(groupId);
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+      expect(requests.get(TEST_HOST_ID)).toContain(
+        `PUT /api/v1/instances/${first}`,
+      );
+      expect(requests.get("integration-host-b")).toContain(
+        `PUT /api/v1/instances/${second}`,
+      );
+    } finally {
+      await agentA.stop(true);
+      await agentB.stop(true);
+    }
+  });
+
+  test("host expiry fails assigned instances and recovery waits for inventory", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = "offlineInstance1";
+    const stale = new Date(Date.now() - 60_000);
+    await db.update(executionHosts).set({
+      healthState: "ONLINE",
+      lastHeartbeatAt: stale,
+      lastControlContactAt: stale,
+    }).where(eq(executionHosts.id, TEST_HOST_ID));
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      groupId,
+      variantId,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "10.0.0.10:25565",
+    });
+    const failInstance = mock(async () => true);
+    const runtime: RuntimeInstance = {
+      hostId: TEST_HOST_ID,
+      instanceId,
+      containerId: "container-offline",
+      groupId,
+      variantId,
+      running: true,
+      status: "Up",
+    };
+    const listManagedInstances = mock(async () => [runtime]);
+    const executor = { listManagedInstances } as unknown as Executor;
+    const hosts = new HostService(db);
+    const reconciler = new Reconciler(
+      db,
+      executor,
+      { failInstance } as unknown as InstanceController,
+      hosts,
+      mockLogger,
+      30_000,
+    );
+
+    await reconciler.tick();
+    expect(failInstance).toHaveBeenCalledWith(
+      instanceId,
+      "HOST_OFFLINE",
+      expect.objectContaining({ hostId: TEST_HOST_ID }),
+    );
+    expect(listManagedInstances).not.toHaveBeenCalled();
+    let state = await db.select({ health: executionHosts.healthState })
+      .from(executionHosts)
+      .where(eq(executionHosts.id, TEST_HOST_ID));
+    expect(state[0]?.health).toBe("OFFLINE");
+
+    await hosts.heartbeat(TEST_HOST_ID, {
+      controlUrl: "http://integration-host:8090",
+      gameAddress: "10.0.0.10",
+      allocatableCpu: 32,
+      allocatableMemoryBytes: 64 * 1024 ** 3,
+      agentVersion: "test",
+    });
+    state = await db.select({ health: executionHosts.healthState })
+      .from(executionHosts)
+      .where(eq(executionHosts.id, TEST_HOST_ID));
+    expect(state[0]?.health).toBe("RECOVERING");
+
+    await reconciler.tick();
+    expect(listManagedInstances).toHaveBeenCalledTimes(1);
+    state = await db.select({ health: executionHosts.healthState })
+      .from(executionHosts)
+      .where(eq(executionHosts.id, TEST_HOST_ID));
+    expect(state[0]?.health).toBe("ONLINE");
+  });
+
+  test("maintenance limits surge to one replacement and waits without capacity", async () => {
+    const { groupId, variantId } = await seedGroup();
+    await db.update(serverGroups).set({ maximumInstances: 2 })
+      .where(eq(serverGroups.id, groupId));
+    await db.update(executionHosts).set({ adminState: "DRAINING" })
+      .where(eq(executionHosts.id, TEST_HOST_ID));
+    await db.insert(executionHosts).values({
+      id: "maintenance-target",
+      controlUrl: "http://maintenance-target:8090",
+      gameAddress: "10.0.0.12",
+      allocatableCpu: 1,
+      allocatableMemoryBytes: 1024,
+      healthState: "ONLINE",
+      adminState: "ACTIVE",
+      agentVersion: "test",
+      lastHeartbeatAt: new Date(),
+      lastControlContactAt: new Date(),
+    });
+    const sourceIds = ["maintenanceSrc1", "maintenanceSrc2"];
+    await db.insert(serverInstances).values(sourceIds.map((id, index) => ({
+      id,
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      groupId,
+      variantId,
+      lifecycleState: "RUNNING" as const,
+      availabilityState: "OPEN" as const,
+      endpoint: `10.0.0.10:${25565 + index}`,
+    })));
+    const executor = {
+      createInstance: mock(async (spec) => ({
+        containerId: `container-${spec.instanceId}`,
+        runtimePath: `/runtime/${spec.instanceId}`,
+        endpoint: `10.0.0.12:25565`,
+      })),
+      stopInstance: mock(async () => {}),
+      deleteInstance: mock(async () => {}),
+    } as unknown as Executor;
+    const bus = {
+      publishRegistry: mock(async () => {}),
+    } as unknown as RedisEventBus;
+    const hosts = new HostService(db);
+    const controller = new InstanceController(
+      db,
+      executor,
+      new VariantSelector(db),
+      bus,
+      mockTransfers,
+      new HubRouter(db, mockTransfers),
+      mockLogger,
+      undefined,
+      hosts,
+    );
+    const maintenance = new HostMaintenanceController(db, hosts, controller, mockLogger);
+
+    await maintenance.tick();
+    let replacements = await db.select().from(serverInstances)
+      .where(inArray(serverInstances.replacesInstanceId, sourceIds));
+    expect(replacements).toHaveLength(1);
+    expect(replacements[0]?.lifecycleState).toBe("STARTING");
+
+    await controller.handlePaperEvent(replacements[0]!.id, {
+      type: "SERVER_READY",
+      endpoint: "10.0.0.12:25565",
+    });
+    await controller.stopAndDelete(replacements[0]!.replacesInstanceId!);
+    await maintenance.tick();
+
+    replacements = await db.select().from(serverInstances)
+      .where(inArray(serverInstances.replacesInstanceId, sourceIds));
+    expect(replacements).toHaveLength(1);
+    const remainingSources = await db.select().from(serverInstances)
+      .where(and(
+        inArray(serverInstances.id, sourceIds),
+        eq(serverInstances.lifecycleState, "RUNNING"),
+      ));
+    expect(remainingSources).toHaveLength(1);
+  });
+
+  test("maintenance reassigns an empty session but leaves an occupied game", async () => {
+    const { groupId, variantId } = await seedGroup();
+    await db.update(executionHosts).set({ adminState: "DRAINING" })
+      .where(eq(executionHosts.id, TEST_HOST_ID));
+    const emptySessionId = "emptySession0001";
+    const activeSessionId = "activeSession001";
+    const emptyInstanceId = "emptyInstance001";
+    const activeInstanceId = "activeInstance01";
+    await db.insert(gameSessions).values([
+      { id: emptySessionId, groupId, state: "TRANSFERRING" },
+      { id: activeSessionId, groupId, state: "RUNNING" },
+    ]);
+    await db.insert(serverInstances).values([
+      {
+        id: emptyInstanceId,
+        hostId: TEST_HOST_ID,
+        reservedCpu: 1,
+        reservedMemoryBytes: 1024,
+        groupId,
+        variantId,
+        sessionId: emptySessionId,
+        lifecycleState: "RUNNING",
+        availabilityState: "RESERVED",
+        endpoint: "10.0.0.10:25565",
+      },
+      {
+        id: activeInstanceId,
+        hostId: TEST_HOST_ID,
+        reservedCpu: 1,
+        reservedMemoryBytes: 1024,
+        groupId,
+        variantId,
+        sessionId: activeSessionId,
+        lifecycleState: "RUNNING",
+        availabilityState: "RESERVED",
+        endpoint: "10.0.0.10:25566",
+        playerCount: 1,
+      },
+    ]);
+    await db.update(gameSessions).set({ instanceId: emptyInstanceId })
+      .where(eq(gameSessions.id, emptySessionId));
+    await db.update(gameSessions).set({ instanceId: activeInstanceId })
+      .where(eq(gameSessions.id, activeSessionId));
+    await db.insert(sessionPlayers).values({
+      sessionId: activeSessionId,
+      playerId: crypto.randomUUID(),
+      partyId: "occupied-party",
+      state: "CONNECTED",
+    });
+    const failInstance = mock(async () => true);
+    const instances = {
+      failInstance,
+      createWarm: mock(async () => null),
+      completeReplacement: mock(async () => false),
+    } as unknown as InstanceController;
+    const maintenance = new HostMaintenanceController(
+      db,
+      new HostService(db),
+      instances,
+      mockLogger,
+    );
+
+    await maintenance.tick();
+
+    expect(failInstance).toHaveBeenCalledTimes(1);
+    expect(failInstance).toHaveBeenCalledWith(
+      emptyInstanceId,
+      "HOST_MAINTENANCE",
+      { hostId: TEST_HOST_ID },
+    );
   });
 
   test("2.1 Happy Path: Formation with warm instance", async () => {
@@ -134,6 +498,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const instanceId = nanoid();
     await db.insert(serverInstances).values({
       id: instanceId,
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
       groupId,
       variantId,
       lifecycleState: "RUNNING",
@@ -234,6 +601,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const instanceId = nanoid();
     await db.insert(serverInstances).values({
       id: instanceId,
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
       groupId,
       variantId,
       lifecycleState: "RUNNING",
@@ -264,6 +634,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
 
     await db.insert(serverInstances).values({
       id: nanoid(),
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
       groupId,
       variantId,
       lifecycleState: "RUNNING",
@@ -300,6 +673,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
 
     await db.insert(serverInstances).values({
       id: instanceId,
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
       groupId,
       variantId,
       lifecycleState: "RUNNING",
@@ -360,6 +736,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
 
     await db.insert(serverInstances).values({
       id: instanceId,
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
       groupId,
       variantId,
       lifecycleState: "RUNNING",
@@ -439,6 +818,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const sessionId = nanoid();
     await db.insert(serverInstances).values({
       id: instanceId,
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
       groupId,
       variantId,
       lifecycleState: "RUNNING",
@@ -502,6 +884,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const activePlayerId = crypto.randomUUID();
     await db.insert(serverInstances).values({
       id: instanceId,
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
       groupId,
       variantId,
       lifecycleState: "RUNNING",
@@ -619,6 +1004,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const playerId = crypto.randomUUID();
     await db.insert(serverInstances).values({
       id: instanceId,
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
       groupId,
       variantId,
       lifecycleState: "RUNNING",
@@ -702,6 +1090,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     await db.insert(serverInstances).values([
       {
         id: sourceInstanceId,
+        hostId: TEST_HOST_ID,
+        reservedCpu: 1,
+        reservedMemoryBytes: 1024,
         groupId,
         variantId,
         lifecycleState: "RUNNING",
@@ -711,6 +1102,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       },
       {
         id: hubInstanceId,
+        hostId: TEST_HOST_ID,
+        reservedCpu: 1,
+        reservedMemoryBytes: 1024,
         groupId: hubGroupId,
         variantId: hubVariantId,
         lifecycleState: "RUNNING",
@@ -804,6 +1198,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const sourceInstanceId = nanoid();
     await db.insert(serverInstances).values({
       id: sourceInstanceId,
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
       groupId,
       variantId,
       lifecycleState: "RUNNING",
@@ -836,6 +1233,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       await seedVariant(hubGroupId, hubVariantId);
       await db.insert(serverInstances).values({
         id: hubInstanceId,
+        hostId: TEST_HOST_ID,
+        reservedCpu: 1,
+        reservedMemoryBytes: 1024,
         groupId: hubGroupId,
         variantId: hubVariantId,
         lifecycleState: "RUNNING",
@@ -869,6 +1269,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     await seedVariant(overloadedGroupId, overloadedVariantId);
     await db.insert(serverInstances).values({
       id: overloadedInstanceId,
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
       groupId: overloadedGroupId,
       variantId: overloadedVariantId,
       lifecycleState: "RUNNING",
@@ -938,6 +1341,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const instanceId = nanoid();
     await db.insert(serverInstances).values({
       id: instanceId,
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
       groupId,
       variantId,
       lifecycleState: "RUNNING",
@@ -999,6 +1405,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     await db.insert(serverInstances).values([
       {
         id: sourceInstanceId,
+        hostId: TEST_HOST_ID,
+        reservedCpu: 1,
+        reservedMemoryBytes: 1024,
         groupId,
         variantId,
         lifecycleState: "RUNNING",
@@ -1009,6 +1418,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       },
       {
         id: secondExpiredInstanceId,
+        hostId: TEST_HOST_ID,
+        reservedCpu: 1,
+        reservedMemoryBytes: 1024,
         groupId,
         variantId,
         lifecycleState: "RUNNING",
@@ -1019,6 +1431,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       },
       {
         id: occupyingInstanceId,
+        hostId: TEST_HOST_ID,
+        reservedCpu: 1,
+        reservedMemoryBytes: 1024,
         groupId,
         variantId,
         lifecycleState: "RUNNING",
@@ -1058,6 +1473,8 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       mockTransfers,
       new HubRouter(db, mockTransfers),
       mockLogger,
+      undefined,
+      new HostService(db),
     );
     const capacity = new CapacityController(db, controller, mockLogger);
 
@@ -1110,6 +1527,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
 
   test("reconciler removes an orphan once and records one successful cleanup", async () => {
     const orphan: RuntimeInstance = {
+      hostId: TEST_HOST_ID,
       instanceId: "orphanInstance01",
       containerId: "orphan-container-01",
       groupId: "missing-group",
@@ -1128,7 +1546,14 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       listManagedInstances: mock(async () => runtimeInstances),
       deleteOrphanInstance,
     } as unknown as Executor;
-    const reconciler = new Reconciler(db, executor, {} as InstanceController, mockLogger);
+    const reconciler = new Reconciler(
+      db,
+      executor,
+      {} as InstanceController,
+      new HostService(db),
+      mockLogger,
+      30_000,
+    );
 
     await reconciler.tick();
     await reconciler.tick();
@@ -1148,12 +1573,16 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const instanceId = "raceInstance0001";
     await db.insert(serverInstances).values({
       id: instanceId,
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
       groupId,
       variantId,
       lifecycleState: "STOPPED",
       availabilityState: "OPEN",
     });
     const orphan: RuntimeInstance = {
+      hostId: TEST_HOST_ID,
       instanceId,
       containerId: "race-container",
       groupId,
@@ -1175,7 +1604,14 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       }),
       deleteOrphanInstance,
     } as unknown as Executor;
-    const reconciler = new Reconciler(db, executor, {} as InstanceController, mockLogger);
+    const reconciler = new Reconciler(
+      db,
+      executor,
+      {} as InstanceController,
+      new HostService(db),
+      mockLogger,
+      30_000,
+    );
 
     await reconciler.tick();
 
@@ -1188,12 +1624,16 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const instanceId = "stoppedInstance1";
     await db.insert(serverInstances).values({
       id: instanceId,
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
       groupId,
       variantId,
       lifecycleState: "STOPPED",
       availabilityState: "OPEN",
     });
     const stoppedRuntime: RuntimeInstance = {
+      hostId: TEST_HOST_ID,
       instanceId,
       containerId: "stopped-container",
       groupId,
@@ -1209,7 +1649,14 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       listManagedInstances: mock(async () => [stoppedRuntime]),
       deleteOrphanInstance,
     } as unknown as Executor;
-    const reconciler = new Reconciler(db, executor, {} as InstanceController, mockLogger);
+    const reconciler = new Reconciler(
+      db,
+      executor,
+      {} as InstanceController,
+      new HostService(db),
+      mockLogger,
+      30_000,
+    );
 
     await reconciler.tick();
 
@@ -1218,6 +1665,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
 
   test("reconciler isolates cleanup failures and retries only remaining orphans", async () => {
     const first: RuntimeInstance = {
+      hostId: TEST_HOST_ID,
       instanceId: "firstOrphan00001",
       containerId: "first-container",
       groupId: "missing",
@@ -1251,7 +1699,14 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       warn: () => {},
       error: () => {},
     } as unknown as Logger;
-    const reconciler = new Reconciler(db, executor, {} as InstanceController, silentLogger);
+    const reconciler = new Reconciler(
+      db,
+      executor,
+      {} as InstanceController,
+      new HostService(db),
+      silentLogger,
+      30_000,
+    );
 
     await reconciler.tick();
     await reconciler.tick();
@@ -1271,6 +1726,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const instanceId = "metricInstance01";
     await db.insert(serverInstances).values({
       id: instanceId,
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
       groupId,
       variantId,
       lifecycleState: "RUNNING",

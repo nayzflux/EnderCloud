@@ -5,7 +5,7 @@ import { synchronizeConfiguration } from "./configuration/sync.ts";
 import { createDatabase } from "./db/client.ts";
 import { migrateDatabase } from "./db/migrate.ts";
 import { RedisEventBus } from "./events/redis-bus.ts";
-import { LocalDockerExecutor } from "./executor/local-docker.ts";
+import { AgentExecutor } from "./executor/agent-executor.ts";
 import { Logger } from "./logger.ts";
 import { Scheduler } from "./scheduler.ts";
 import { CapacityController } from "./services/capacity-controller.ts";
@@ -19,6 +19,11 @@ import { TransferService } from "./services/transfer-service.ts";
 import { VariantSelector } from "./services/variant-selector.ts";
 import { HubRouter } from "./services/hub-router.ts";
 import { MonitoringService } from "./services/monitoring-service.ts";
+import { HostService } from "./services/host-service.ts";
+import { TemplateArchiveService } from "./services/template-archive-service.ts";
+import { HostMaintenanceController } from "./services/host-maintenance-controller.ts";
+import { and, isNull, ne } from "drizzle-orm";
+import { serverInstances } from "./db/schema.ts";
 
 const config = loadConfig();
 const logger = new Logger(config.logLevel);
@@ -36,10 +41,21 @@ if (config.legacyCancelledDrainTimeoutConfigured) {
 // Bootstrap persistent dependencies before exposing the HTTP service as ready.
 await mkdir(config.groupsRoot, { recursive: true });
 await mkdir(config.templatesRoot, { recursive: true });
-await mkdir(config.runtimeRoot, { recursive: true });
 await migrateDatabase(config.databaseUrl);
 
 const { sql, db } = createDatabase(config.databaseUrl);
+const unassignedActive = await db.select({ id: serverInstances.id })
+  .from(serverInstances)
+  .where(and(
+    ne(serverInstances.lifecycleState, "STOPPED"),
+    isNull(serverInstances.hostId),
+  ))
+  .limit(1);
+if (unassignedActive[0]) {
+  throw new Error(
+    `Active legacy instance ${unassignedActive[0].id} has no host_id; stop all instances before migration`,
+  );
+}
 await synchronizeConfiguration(
   db,
   config.groupsRoot,
@@ -53,7 +69,12 @@ await synchronizeConfiguration(
 );
 const bus = new RedisEventBus(config.redisUrl, logger);
 await bus.connect();
-const executor = new LocalDockerExecutor(config, logger);
+const hosts = new HostService(db);
+const templates = new TemplateArchiveService(db);
+const executor = new AgentExecutor(hosts, {
+  operationTimeoutMs: config.agentOperationTimeoutMs,
+  probeTimeoutMs: config.agentProbeTimeoutMs,
+});
 const variants = new VariantSelector(db);
 const transfers = new TransferService(db, bus, logger);
 const hubs = new HubRouter(db, transfers);
@@ -67,13 +88,22 @@ const instances = new InstanceController(
   hubs,
   logger,
   monitoring,
+  hosts,
 );
 const queues = new QueueService(db);
 const dashboard = new DashboardService(db);
 const capacity = new CapacityController(db, instances, logger);
 const matchmaker = new Matchmaker(db, transfers, logger);
 const sessions = new SessionController(db, instances, transfers, hubs, config, logger);
-const reconciler = new Reconciler(db, executor, instances, logger);
+const reconciler = new Reconciler(
+  db,
+  executor,
+  instances,
+  hosts,
+  logger,
+  config.hostOfflineAfterMs,
+);
+const maintenance = new HostMaintenanceController(db, hosts, instances, logger);
 
 // Converge database and runtime state once before readiness probes can succeed.
 await reconciler.tick();
@@ -87,6 +117,8 @@ const app = createApp({
   hubs,
   dashboard,
   monitoring,
+  hosts,
+  templates,
   logger,
   isReady: () => ready,
 });
@@ -100,7 +132,8 @@ scheduler.every("capacity", config.capacityIntervalMs, () => capacity.tick());
 scheduler.every("matchmaking", config.matchmakingIntervalMs, () => matchmaker.tick());
 scheduler.every("sessions", config.matchmakingIntervalMs, () => sessions.tick());
 scheduler.every("transfers", config.matchmakingIntervalMs, () => transfers.tick());
-scheduler.every("reconciliation", config.reconcileIntervalMs, () => reconciler.tick());
+scheduler.every("reconciliation", config.hostReconcileIntervalMs, () => reconciler.tick());
+scheduler.every("host-maintenance", config.capacityIntervalMs, () => maintenance.tick());
 scheduler.every("monitoring-retention", 60 * 60 * 1_000, () => monitoring.prune());
 
 logger.info("EnderCloud orchestrator started", {

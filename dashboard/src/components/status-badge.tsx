@@ -3,6 +3,8 @@ import { Badge } from "@/components/ui/badge";
 import { humanizeState } from "@/lib/format";
 import {
   availabilityTone,
+  hostAdminTone,
+  hostHealthTone,
   lifecycleTone,
   sessionPlayerTone,
   sessionTone,
@@ -13,6 +15,8 @@ import {
 } from "@/lib/status";
 import type {
   AvailabilityState,
+  ExecutionHostAdminState,
+  ExecutionHostHealthState,
   LifecycleState,
   SessionPlayerState,
   SessionState,
@@ -62,6 +66,28 @@ export function AvailabilityBadge({
   return (
     <StatusBadge
       tone={availabilityTone(state)}
+      label={humanizeState(state)}
+      dot={false}
+    />
+  );
+}
+
+export function HostHealthBadge({
+  state,
+}: {
+  readonly state: ExecutionHostHealthState;
+}) {
+  return <StatusBadge tone={hostHealthTone(state)} label={humanizeState(state)} />;
+}
+
+export function HostAdminBadge({
+  state,
+}: {
+  readonly state: ExecutionHostAdminState;
+}) {
+  return (
+    <StatusBadge
+      tone={hostAdminTone(state)}
       label={humanizeState(state)}
       dot={false}
     />

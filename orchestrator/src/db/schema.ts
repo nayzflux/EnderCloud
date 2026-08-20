@@ -18,6 +18,8 @@ import {
 import { sql } from "drizzle-orm";
 import {
   availabilityStates,
+  executionHostAdminStates,
+  executionHostHealthStates,
   lifecycleStates,
   sessionPlayerStates,
   sessionStates,
@@ -31,6 +33,14 @@ import type {
 export const groupTypeEnum = pgEnum("group_type", ["hub", "minigame"]);
 export const lifecycleStateEnum = pgEnum("lifecycle_state", lifecycleStates);
 export const availabilityStateEnum = pgEnum("availability_state", availabilityStates);
+export const executionHostHealthEnum = pgEnum(
+  "execution_host_health",
+  executionHostHealthStates,
+);
+export const executionHostAdminStateEnum = pgEnum(
+  "execution_host_admin_state",
+  executionHostAdminStates,
+);
 export const sessionStateEnum = pgEnum("session_state", sessionStates);
 export const sessionPlayerStateEnum = pgEnum("session_player_state", sessionPlayerStates);
 export const queueEntryStateEnum = pgEnum("queue_entry_state", [
@@ -157,6 +167,29 @@ export const serverGroupVariants = pgTable(
   ],
 );
 
+export const executionHosts = pgTable(
+  "execution_hosts",
+  {
+    id: text("id").primaryKey(),
+    controlUrl: text("control_url").notNull(),
+    gameAddress: text("game_address").notNull(),
+    allocatableCpu: doublePrecision("allocatable_cpu").notNull(),
+    allocatableMemoryBytes: bigint("allocatable_memory_bytes", { mode: "number" }).notNull(),
+    healthState: executionHostHealthEnum("health_state").notNull().default("RECOVERING"),
+    adminState: executionHostAdminStateEnum("admin_state").notNull().default("ACTIVE"),
+    agentVersion: text("agent_version").notNull(),
+    lastHeartbeatAt: timestamp("last_heartbeat_at", { withTimezone: true }).notNull(),
+    lastControlContactAt: timestamp("last_control_contact_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    ...auditColumns,
+  },
+  (table) => [
+    index("execution_hosts_health_admin_idx").on(table.healthState, table.adminState),
+    check("execution_hosts_cpu_check", sql`${table.allocatableCpu} > 0`),
+    check("execution_hosts_memory_check", sql`${table.allocatableMemoryBytes} > 0`),
+  ],
+);
+
 export const gameSessions = pgTable(
   "game_sessions",
   {
@@ -194,6 +227,9 @@ export const serverInstances = pgTable(
       .notNull()
       .references(() => serverVariants.id),
     sessionId: text("session_id").references(() => gameSessions.id),
+    hostId: text("host_id").references(() => executionHosts.id),
+    reservedCpu: doublePrecision("reserved_cpu"),
+    reservedMemoryBytes: bigint("reserved_memory_bytes", { mode: "number" }),
     lifecycleState: lifecycleStateEnum("lifecycle_state").notNull(),
     availabilityState: availabilityStateEnum("availability_state").notNull(),
     containerId: text("container_id"),
@@ -203,6 +239,7 @@ export const serverInstances = pgTable(
     startupDeadline: timestamp("startup_deadline", { withTimezone: true }),
     renewalDeadline: timestamp("renewal_deadline", { withTimezone: true }),
     replacesInstanceId: text("replaces_instance_id"),
+    replacementReason: text("replacement_reason"),
     drainDeadline: timestamp("drain_deadline", { withTimezone: true }),
     drainReason: text("drain_reason"),
     shutdownDeadline: timestamp("shutdown_deadline", { withTimezone: true }),
@@ -236,6 +273,19 @@ export const serverInstances = pgTable(
       "server_instances_reserved_session_check",
       sql`${table.availabilityState} <> 'RESERVED' OR ${table.sessionId} IS NOT NULL`,
     ),
+    check(
+      "server_instances_host_reservation_check",
+      sql`(
+        ${table.hostId} IS NULL
+        AND ${table.reservedCpu} IS NULL
+        AND ${table.reservedMemoryBytes} IS NULL
+      ) OR (
+        ${table.hostId} IS NOT NULL
+        AND ${table.reservedCpu} > 0
+        AND ${table.reservedMemoryBytes} > 0
+      )`,
+    ),
+    index("server_instances_host_state_idx").on(table.hostId, table.lifecycleState),
   ],
 );
 

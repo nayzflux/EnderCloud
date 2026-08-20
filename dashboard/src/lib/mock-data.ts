@@ -2,6 +2,7 @@ import type {
   AvailabilityState,
   DashboardClusterSnapshot,
   DashboardGroup,
+  DashboardHost,
   DashboardInstance,
   DashboardInstanceDetail,
   DashboardQueueDetail,
@@ -419,12 +420,15 @@ interface MockSessionRecord {
 
 interface MockWorld {
   readonly generatedAt: string;
+  readonly hosts: readonly DashboardHost[];
   readonly groups: readonly DashboardGroup[];
   readonly summary: DashboardClusterSnapshot["summary"];
   readonly instances: ReadonlyMap<string, MockInstanceRecord>;
   readonly sessions: ReadonlyMap<string, MockSessionRecord>;
   readonly queues: ReadonlyMap<string, readonly MockQueueEntry[]>;
 }
+
+const MOCK_HOST_IDS = ["host-paris-01", "host-paris-02"] as const;
 
 const COMMAND_OPERATIONS = [
   "CREATE_INSTANCE",
@@ -526,6 +530,7 @@ function buildWorld(now: number): MockWorld {
 
       const instance: DashboardInstance = {
         id: instanceId,
+        hostId: MOCK_HOST_IDS[instances.size % MOCK_HOST_IDS.length],
         variantId: variant.id,
         sessionId: session?.id ?? null,
         lifecycleState: spec.lifecycleState,
@@ -707,8 +712,34 @@ function buildWorld(now: number): MockWorld {
     ),
   } satisfies DashboardClusterSnapshot["summary"];
 
+  const hosts: DashboardHost[] = MOCK_HOST_IDS.map((hostId, index) => {
+    const assigned = [...instances.values()].filter((record) =>
+      record.instance.hostId === hostId && record.instance.lifecycleState !== "STOPPED"
+    );
+    return {
+      id: hostId,
+      controlUrl: `http://${hostId}:8090`,
+      gameAddress: `10.20.0.${index + 11}`,
+      healthState: index === 0 ? "ONLINE" : "RECOVERING",
+      adminState: "ACTIVE",
+      allocatableCpu: 16,
+      reservedCpu: assigned.reduce((total, record) => total + record.variant.runtime.cpu, 0),
+      allocatableMemoryBytes: 32 * 1024 ** 3,
+      reservedMemoryBytes: assigned.reduce(
+        (total, record) => total + record.variant.runtime.memoryBytes,
+        0,
+      ),
+      activeInstanceCount: assigned.length,
+      agentVersion: "0.1.0",
+      lastHeartbeatAt: ago(now, index === 0 ? 2 : 8),
+      lastControlContactAt: ago(now, index === 0 ? 3 : 14),
+      lastError: index === 0 ? null : "Inventory reconciliation is still running",
+    };
+  });
+
   return {
     generatedAt: new Date(now).toISOString(),
+    hosts,
     groups,
     summary,
     instances,
@@ -911,9 +942,10 @@ function buildSessionRecord(
 export function mockCluster(now = Date.now()): DashboardClusterSnapshot {
   const world = buildWorld(now);
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAt: world.generatedAt,
     summary: world.summary,
+    hosts: world.hosts,
     groups: world.groups,
   };
 }
@@ -1075,7 +1107,7 @@ export function mockInstance(
   const record = world.instances.get(instanceId);
   if (!record) return null;
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAt: world.generatedAt,
     activeDeadline:
       record.instance.lifecycleState === "STARTING" && record.instance.startupDeadline

@@ -9,5 +9,5 @@ COPY tsconfig.json drizzle.config.ts ./
 COPY migrations ./migrations
 COPY src ./src
 
-EXPOSE 8080
+EXPOSE 8080 8090
 CMD ["bun", "src/index.ts"]

@@ -32,9 +32,11 @@ import {
 import type { TransferService } from "./transfer-service.ts";
 import type { HubRouter } from "./hub-router.ts";
 import type { MonitoringService } from "./monitoring-service.ts";
+import type { HostService } from "./host-service.ts";
 
 interface CreateRow {
   id: string;
+  host_id: string;
   group_id: string;
   variant_id: string;
   session_id: string | null;
@@ -43,12 +45,13 @@ interface CreateRow {
 
 interface StopRow {
   id: string;
-  variant_id: string;
+  host_id: string;
   shutdown_timeout_ms: number;
 }
 
 interface ReadyRow extends ServerSnapshot {
   readonly replacesInstanceId: string | null;
+  readonly replacementReason: string | null;
 }
 
 export class InstanceController {
@@ -61,12 +64,42 @@ export class InstanceController {
     private readonly hubs: HubRouter,
     private readonly logger: Logger,
     private readonly monitoring?: MonitoringService,
+    private readonly hosts?: HostService,
   ) {}
+
+  // Move an instance into the shared failure path and remove it from proxy routing.
+  public async failInstance(
+    instanceId: string,
+    reason: string,
+    details: Readonly<Record<string, unknown>> = {},
+  ): Promise<boolean> {
+    const changed = await this.db.transaction(async (tx) => {
+      const rows = await tx.update(serverInstances).set({
+        lifecycleState: "FAILED",
+        updatedAt: sql`now()`,
+      }).where(and(
+        eq(serverInstances.id, instanceId),
+        inArray(serverInstances.lifecycleState, ["CREATING", "STARTING", "RUNNING", "DRAINING"]),
+      )).returning({ id: serverInstances.id });
+      if (rows.length === 0) return false;
+      await tx.insert(events).values({
+        id: nanoid(),
+        aggregateType: "instance",
+        aggregateId: instanceId,
+        type: "INSTANCE_FAILED",
+        payload: { reason, ...details },
+      });
+      return true;
+    });
+    if (changed) await this.bus.publishRegistry("SERVER_UNREGISTERED", { instanceId });
+    return changed;
+  }
 
   // Create an unassigned warm instance for the requested server group.
   public async createWarm(
     groupId: string,
     replacesInstanceId?: string,
+    replacementReason: "HUB_RENEWAL" | "HOST_MAINTENANCE" = "HUB_RENEWAL",
   ): Promise<string | null> {
     const variant = await this.variants.select(groupId);
     const instanceId = nanoid();
@@ -95,26 +128,37 @@ export class InstanceController {
         .where(
           and(
             eq(serverInstances.groupId, groupId),
-            notInArray(serverInstances.lifecycleState, ["STOPPED", "FAILED"]),
+            inArray(serverInstances.lifecycleState, ["CREATING", "STARTING", "RUNNING", "DRAINING"]),
           ),
         );
-      if (Number(counts[0]?.active ?? 0) >= group.maximum_instances) return false;
+      const capacityLimit = group.maximum_instances +
+        (replacesInstanceId && replacementReason === "HOST_MAINTENANCE" ? 1 : 0);
+      if (Number(counts[0]?.active ?? 0) >= capacityLimit) return false;
 
+      let sourceHostId: string | undefined;
       if (replacesInstanceId) {
-        if (group.type !== "hub") return false;
+        const sourceConditions = [
+          eq(serverInstances.id, replacesInstanceId),
+          eq(serverInstances.groupId, groupId),
+          eq(serverInstances.lifecycleState, "RUNNING"),
+          eq(serverInstances.availabilityState, "OPEN"),
+        ];
+        if (replacementReason === "HUB_RENEWAL") {
+          if (group.type !== "hub") return false;
+          sourceConditions.push(sql`${serverInstances.renewalDeadline} <= now()`);
+        } else {
+          sourceConditions.push(sql`EXISTS (
+            SELECT 1 FROM execution_hosts maintenance_host
+            WHERE maintenance_host.id = ${serverInstances.hostId}
+              AND maintenance_host.admin_state = 'DRAINING'
+          )`);
+        }
         const sources = await tx
-          .select({ id: serverInstances.id })
+          .select({ id: serverInstances.id, host_id: serverInstances.hostId })
           .from(serverInstances)
-          .where(
-            and(
-              eq(serverInstances.id, replacesInstanceId),
-              eq(serverInstances.groupId, groupId),
-              eq(serverInstances.lifecycleState, "RUNNING"),
-              eq(serverInstances.availabilityState, "OPEN"),
-              sql`${serverInstances.renewalDeadline} <= now()`,
-            ),
-          );
+          .where(and(...sourceConditions));
         if (!sources[0]) return false;
+        sourceHostId = sources[0].host_id ?? undefined;
         const activeReplacements = await tx
           .select({ id: serverInstances.id })
           .from(serverInstances)
@@ -135,13 +179,25 @@ export class InstanceController {
         if (activeReplacements[0]) return false;
       }
 
+      if (!this.hosts) throw new Error("Host service is required for instance placement");
+      const hostId = await this.hosts.selectForPlacement(
+        tx,
+        variant.runtime_spec,
+        replacementReason === "HOST_MAINTENANCE" ? sourceHostId : undefined,
+      );
+      if (!hostId) return false;
+
       await tx.insert(serverInstances).values({
         id: instanceId,
         groupId: groupId,
         variantId: variant.id,
+        hostId,
+        reservedCpu: variant.runtime_spec.cpu,
+        reservedMemoryBytes: variant.runtime_spec.memoryBytes,
         lifecycleState: "CREATING",
         availabilityState: "OPEN",
         replacesInstanceId: replacesInstanceId ?? null,
+        replacementReason: replacesInstanceId ? replacementReason : null,
       });
       await tx.insert(commands).values({
         id: commandId,
@@ -182,6 +238,7 @@ export class InstanceController {
     const rows = await this.db
       .select({
         id: serverInstances.id,
+        host_id: serverInstances.hostId,
         group_id: serverInstances.groupId,
         variant_id: serverInstances.variantId,
         session_id: serverInstances.sessionId,
@@ -203,7 +260,10 @@ export class InstanceController {
       .where(and(eq(commands.id, commandId), sql`${commands.state} <> 'SUCCEEDED'`));
     try {
       const templateLayersForVariant = await this.db
-        .select({ id: templateLayers.id, templatePath: templateLayers.templatePath })
+        .select({
+          id: templateLayers.id,
+          checksum: templateLayers.checksum,
+        })
         .from(serverVariantLayers)
         .innerJoin(templateLayers, eq(templateLayers.id, serverVariantLayers.layerId))
         .where(eq(serverVariantLayers.variantId, row.variant_id))
@@ -214,6 +274,7 @@ export class InstanceController {
       // Executor creation is idempotent: an existing managed container is reused
       // when reconciliation resumes a partially completed CREATE command.
       const created = await this.executor.createInstance({
+        hostId: row.host_id,
         instanceId: row.id,
         groupId: row.group_id,
         variantId: row.variant_id,
@@ -254,20 +315,12 @@ export class InstanceController {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await this.db.transaction(async (tx) => {
-        await tx
-          .update(serverInstances)
-          .set({ lifecycleState: "FAILED", updatedAt: sql`now()` })
-          .where(eq(serverInstances.id, instanceId));
-        await tx
-          .update(commands)
-          .set({
-            state: "FAILED",
-            completedAt: sql`now()`,
-            lastError: message,
-          })
-          .where(eq(commands.id, commandId));
-      });
+      await this.db.update(commands).set({
+        state: "FAILED",
+        completedAt: sql`now()`,
+        lastError: message,
+      }).where(eq(commands.id, commandId));
+      await this.failInstance(instanceId, "CREATE_FAILED", { error: message });
       this.logger.error("Instance creation failed", { instanceId, error: message });
     }
   }
@@ -346,12 +399,13 @@ export class InstanceController {
         playerCount: serverInstances.playerCount,
         maximumPlayers: sql<number>`COALESCE(${serverGroups.maximumPlayersPerInstance}, ${serverGroups.maximumPlayers}, 0)`,
         replacesInstanceId: serverInstances.replacesInstanceId,
+        replacementReason: serverInstances.replacementReason,
       })) as unknown as ReadyRow[];
     if (rows[0]) {
       // Publish registration only for the transaction that actually performed STARTING -> RUNNING.
       await this.bus.publishRegistry("SERVER_REGISTERED", rows[0]);
       if (rows[0].replacesInstanceId) {
-        await this.beginDrain(rows[0].replacesInstanceId, "HUB_RENEWAL");
+        await this.completeReplacement(instanceId);
       }
       return;
     }
@@ -367,12 +421,16 @@ export class InstanceController {
       throw new Error(`Instance ${instanceId} is unavailable`);
     }
     if (current[0].replaces_instance_id) {
-      await this.completeHubRenewal(instanceId);
+      await this.completeReplacement(instanceId);
     }
   }
 
   // Resume the durable handoff when a replacement became ready before the old hub drained.
   public async completeHubRenewal(replacementInstanceId: string): Promise<boolean> {
+    return this.completeReplacement(replacementInstanceId);
+  }
+
+  public async completeReplacement(replacementInstanceId: string): Promise<boolean> {
     const replacements = (await this.db
       .select({
         instanceId: serverInstances.id,
@@ -385,6 +443,7 @@ export class InstanceController {
         playerCount: serverInstances.playerCount,
         maximumPlayers: sql<number>`COALESCE(${serverGroups.maximumPlayersPerInstance}, 0)`,
         replacesInstanceId: serverInstances.replacesInstanceId,
+        replacementReason: serverInstances.replacementReason,
       })
       .from(serverInstances)
       .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
@@ -392,7 +451,6 @@ export class InstanceController {
         and(
           eq(serverInstances.id, replacementInstanceId),
           eq(serverInstances.lifecycleState, "RUNNING"),
-          eq(serverGroups.type, "hub"),
           isNotNull(serverInstances.endpoint),
           isNotNull(serverInstances.replacesInstanceId),
         ),
@@ -416,13 +474,18 @@ export class InstanceController {
 
     // Re-registration is idempotent and closes the crash window between registration and drain.
     await this.bus.publishRegistry("SERVER_REGISTERED", replacement);
-    return this.beginDrain(replacement.replacesInstanceId, "HUB_RENEWAL");
+    return this.beginDrain(
+      replacement.replacesInstanceId,
+      replacement.replacementReason === "HOST_MAINTENANCE"
+        ? "HOST_MAINTENANCE"
+        : "HUB_RENEWAL",
+    );
   }
 
   // Remove an eligible instance from routing and start its drain deadline.
   public async beginDrain(
     instanceId: string,
-    reason: "NORMAL" | "SESSION_CANCELLED" | "HUB_RENEWAL" = "NORMAL",
+    reason: "NORMAL" | "SESSION_CANCELLED" | "HUB_RENEWAL" | "HOST_MAINTENANCE" = "NORMAL",
   ): Promise<boolean> {
     const rows = await this.db
       .update(serverInstances)
@@ -510,10 +573,12 @@ export class InstanceController {
       )
       .returning({
         id: serverInstances.id,
+        host_id: serverInstances.hostId,
         shutdown_timeout_ms: serverGroups.shutdownTimeoutMs,
       }) as unknown as StopRow[];
     const row = rows[0];
     if (!row) return;
+    if (!row.host_id) throw new Error(`Instance ${instanceId} has no execution host`);
     const commandId = nanoid();
     await this.db.insert(commands).values({
       id: commandId,
@@ -523,8 +588,9 @@ export class InstanceController {
     });
     try {
       // Give Minecraft its configured graceful shutdown window before forcing removal.
-      await this.executor.stopInstance(instanceId, Math.ceil(row.shutdown_timeout_ms / 1_000));
-      await this.executor.deleteInstance(instanceId);
+      const target = { hostId: row.host_id, instanceId };
+      await this.executor.stopInstance(target, Math.ceil(row.shutdown_timeout_ms / 1_000));
+      await this.executor.deleteInstance(target);
       await this.db.transaction(async (tx) => {
         await tx
           .update(serverInstances)
