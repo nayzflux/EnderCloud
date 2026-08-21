@@ -120,20 +120,8 @@ export class InstanceController {
       const group = groups[0];
       if (!group?.enabled) return false;
 
-      const counts = await tx
-        .select({
-          active: sql<number>`count(*)::int`,
-        })
-        .from(serverInstances)
-        .where(
-          and(
-            eq(serverInstances.groupId, groupId),
-            inArray(serverInstances.lifecycleState, ["CREATING", "STARTING", "RUNNING", "DRAINING"]),
-          ),
-        );
       const capacityLimit = group.maximum_instances +
         (replacesInstanceId && replacementReason === "HOST_MAINTENANCE" ? 1 : 0);
-      if (Number(counts[0]?.active ?? 0) >= capacityLimit) return false;
 
       let sourceHostId: string | undefined;
       if (replacesInstanceId) {
@@ -180,12 +168,14 @@ export class InstanceController {
       }
 
       if (!this.hosts) throw new Error("Host service is required for instance placement");
-      const hostId = await this.hosts.selectForPlacement(
+      const placement = await this.hosts.selectForPlacement(
         tx,
         variant.runtime_spec,
         replacementReason === "HOST_MAINTENANCE" ? sourceHostId : undefined,
+        { groupId, maximumInstances: capacityLimit },
       );
-      if (!hostId) return false;
+      if (placement.status === "BLOCKED") return false;
+      const hostId = placement.hostId;
 
       await tx.insert(serverInstances).values({
         id: instanceId,

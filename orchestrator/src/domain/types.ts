@@ -19,6 +19,34 @@ export type ExecutionHostHealthState = (typeof executionHostHealthStates)[number
 export const executionHostAdminStates = ["ACTIVE", "DRAINING", "MAINTENANCE"] as const;
 export type ExecutionHostAdminState = (typeof executionHostAdminStates)[number];
 
+export const incidentKinds = [
+  "CAPACITY_BLOCKED",
+  "INSTANCE_FAILURE_LOOP",
+  "HOST_UNAVAILABLE",
+  "HOST_RECOVERY_STUCK",
+  "HOST_MAINTENANCE_BLOCKED",
+  "SESSION_RETRIES_EXHAUSTED",
+  "TRANSFER_FAILURE_LOOP",
+  "COMMAND_FAILURE_LOOP",
+  "CONTROL_LOOP_FAILURE",
+] as const;
+export type IncidentKind = (typeof incidentKinds)[number];
+
+export const incidentSeverities = ["WARNING", "CRITICAL"] as const;
+export type IncidentSeverity = (typeof incidentSeverities)[number];
+
+export const incidentStates = ["PENDING", "ACTIVE", "RESOLVED"] as const;
+export type IncidentState = (typeof incidentStates)[number];
+
+export const incidentScopeTypes = [
+  "CLUSTER",
+  "HOST",
+  "GROUP",
+  "VARIANT",
+  "SESSION",
+] as const;
+export type IncidentScopeType = (typeof incidentScopeTypes)[number];
+
 export const sessionStates = [
   "FORMING",
   "WAITING_FOR_INSTANCE",

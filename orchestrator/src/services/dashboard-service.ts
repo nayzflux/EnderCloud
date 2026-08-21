@@ -17,6 +17,7 @@ import {
   sessionPlayers,
   transferCommands,
   executionHosts,
+  operationalIncidents,
 } from "../db/schema.ts";
 import type {
   DashboardClusterSnapshot,
@@ -162,6 +163,10 @@ export interface DashboardRows {
   readonly instances: readonly InstanceRow[];
   readonly sessions: readonly SessionRow[];
   readonly queues: readonly QueueSummaryRow[];
+  readonly incidentSummary?: {
+    readonly active: number;
+    readonly critical: number;
+  };
 }
 
 function requiredIso(value: DatabaseTimestamp): string {
@@ -421,7 +426,7 @@ export function assembleClusterSnapshot(
   const allInstances = groups.flatMap((group) => group.instances);
   const allSessions = groups.flatMap((group) => group.sessions);
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     generatedAt: generatedAt.toISOString(),
     summary: {
       enabledGroups: groups.filter((group) => group.enabled).length,
@@ -462,6 +467,8 @@ export function assembleClusterSnapshot(
         (total, group) => total + group.queue.playerCount,
         0,
       ),
+      activeIncidentCount: rows.incidentSummary?.active ?? 0,
+      criticalIncidentCount: rows.incidentSummary?.critical ?? 0,
     },
     hosts: (rows.hosts ?? []).map(toHost),
     groups,
@@ -892,30 +899,32 @@ export class DashboardService {
       health_state: executionHosts.healthState,
       admin_state: executionHosts.adminState,
       allocatable_cpu: executionHosts.allocatableCpu,
-      reserved_cpu: sql<number>`COALESCE((
-        SELECT sum(instance.reserved_cpu)
-        FROM server_instances instance
-        WHERE instance.host_id = ${executionHosts.id}
-          AND instance.lifecycle_state <> 'STOPPED'
-      ), 0)::float8`.mapWith(Number),
+      reserved_cpu: sql<number>`COALESCE(
+        sum(${serverInstances.reservedCpu}) FILTER (
+          WHERE ${serverInstances.lifecycleState} <> 'STOPPED'
+        ),
+        0
+      )::float8`.mapWith(Number),
       allocatable_memory_bytes: executionHosts.allocatableMemoryBytes,
-      reserved_memory_bytes: sql<number>`COALESCE((
-        SELECT sum(instance.reserved_memory_bytes)
-        FROM server_instances instance
-        WHERE instance.host_id = ${executionHosts.id}
-          AND instance.lifecycle_state <> 'STOPPED'
-      ), 0)::float8`.mapWith(Number),
-      active_instance_count: sql<number>`(
-        SELECT count(*)::int
-        FROM server_instances instance
-        WHERE instance.host_id = ${executionHosts.id}
-          AND instance.lifecycle_state IN ('CREATING', 'STARTING', 'RUNNING', 'DRAINING')
-      )`.mapWith(Number),
+      reserved_memory_bytes: sql<number>`COALESCE(
+        sum(${serverInstances.reservedMemoryBytes}) FILTER (
+          WHERE ${serverInstances.lifecycleState} <> 'STOPPED'
+        ),
+        0
+      )::float8`.mapWith(Number),
+      active_instance_count: sql<number>`count(${serverInstances.id}) FILTER (
+        WHERE ${serverInstances.lifecycleState}
+          IN ('CREATING', 'STARTING', 'RUNNING', 'DRAINING')
+      )::int`.mapWith(Number),
       agent_version: executionHosts.agentVersion,
       last_heartbeat_at: executionHosts.lastHeartbeatAt,
       last_control_contact_at: executionHosts.lastControlContactAt,
       last_error: executionHosts.lastError,
-    }).from(executionHosts).orderBy(asc(executionHosts.id));
+    })
+      .from(executionHosts)
+      .leftJoin(serverInstances, eq(serverInstances.hostId, executionHosts.id))
+      .groupBy(executionHosts.id)
+      .orderBy(asc(executionHosts.id));
 
     const groups = await tx.select({
       id: serverGroups.id,
@@ -1033,13 +1042,27 @@ export class DashboardService {
     .where(eq(queueEntries.state, 'QUEUED'))
     .groupBy(queueEntries.groupId);
 
+    const incidentCounts = await tx.select({
+      active: sql<number>`count(*) FILTER (
+        WHERE ${operationalIncidents.state} = 'ACTIVE'
+      )::int`.mapWith(Number),
+      critical: sql<number>`count(*) FILTER (
+        WHERE ${operationalIncidents.state} = 'ACTIVE'
+          AND ${operationalIncidents.severity} = 'CRITICAL'
+      )::int`.mapWith(Number),
+    }).from(operationalIncidents);
+
     return {
       hosts: hosts as HostRow[],
       groups: groups as GroupRow[], 
       variants: variants as unknown as VariantRow[], 
       instances: instances as InstanceRow[], 
       sessions: sessions as SessionRow[], 
-      queues: queues as QueueSummaryRow[] 
+      queues: queues as QueueSummaryRow[],
+      incidentSummary: {
+        active: incidentCounts[0]?.active ?? 0,
+        critical: incidentCounts[0]?.critical ?? 0,
+      },
     };
   }
 

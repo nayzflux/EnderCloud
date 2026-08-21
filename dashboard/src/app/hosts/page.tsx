@@ -6,6 +6,7 @@ import {
   ServerCogIcon,
   WrenchIcon,
 } from "lucide-react";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ClusterGate } from "@/components/cluster-gate";
@@ -278,6 +279,14 @@ function HostPanel({
 
             <Separator />
             <SheetFooter className="border-t-0">
+              <Button
+                variant="outline"
+                nativeButton={false}
+                render={<Link href={`/incidents?scopeId=${encodeURIComponent(host.id)}`} />}
+              >
+                <AlertTriangleIcon data-icon="inline-start" />
+                View incidents
+              </Button>
               {host.adminState === "ACTIVE" ? (
                 <HostAction host={host} action="drain" />
               ) : null}

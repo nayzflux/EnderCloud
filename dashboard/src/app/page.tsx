@@ -15,6 +15,7 @@ import { ClusterGate } from "@/components/cluster-gate";
 import { useDetailPanel } from "@/components/detail-panel";
 import { PageHeader } from "@/components/page-header";
 import { OverviewMonitoringAlerts } from "@/components/monitoring-alerts";
+import { OverviewIncidentAlerts } from "@/components/incident-alerts";
 import { StatCard } from "@/components/stat-card";
 import {
   GroupTypeBadge,
@@ -459,6 +460,7 @@ export default function OverviewPage() {
                 />
               </div>
 
+              <OverviewIncidentAlerts />
               <OverviewMonitoringAlerts />
 
               <div className="grid gap-4 lg:grid-cols-2">

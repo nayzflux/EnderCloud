@@ -12,6 +12,7 @@ import type {
   DashboardVariantGraph,
   DashboardMonitoringSeries,
   DashboardMonitoringSummary,
+  DashboardIncidentPage,
   MonitoringRange,
   ActiveDeadlineKind,
   GroupType,
@@ -710,6 +711,8 @@ function buildWorld(now: number): MockWorld {
       (total, group) => total + group.queue.playerCount,
       0,
     ),
+    activeIncidentCount: 2,
+    criticalIncidentCount: 1,
   } satisfies DashboardClusterSnapshot["summary"];
 
   const hosts: DashboardHost[] = MOCK_HOST_IDS.map((hostId, index) => {
@@ -942,11 +945,53 @@ function buildSessionRecord(
 export function mockCluster(now = Date.now()): DashboardClusterSnapshot {
   const world = buildWorld(now);
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     generatedAt: world.generatedAt,
-    summary: world.summary,
+    summary: { ...world.summary, activeIncidentCount: 2, criticalIncidentCount: 1 },
     hosts: world.hosts,
     groups: world.groups,
+  };
+}
+
+export function mockIncidents(now = Date.now()): DashboardIncidentPage {
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date(now).toISOString(),
+    activeCount: 2,
+    criticalCount: 1,
+    nextCursor: null,
+    incidents: [
+      {
+        id: "incidentCap0001",
+        kind: "CAPACITY_BLOCKED",
+        severity: "CRITICAL",
+        status: "ACTIVE",
+        scope: { type: "GROUP", id: "skywars-solo", groupId: "skywars-solo", variantId: null },
+        summary: "Group skywars-solo cannot reach its configured minimum capacity",
+        cause: "INSUFFICIENT_CPU",
+        evidence: { minimumWarmInstances: 2, warmReady: 0, requestedCpu: 2, maximumFreeCpu: 0 },
+        occurrenceCount: 8,
+        firstObservedAt: new Date(now - 8 * 60_000).toISOString(),
+        lastObservedAt: new Date(now - 5_000).toISOString(),
+        openedAt: new Date(now - 7.5 * 60_000).toISOString(),
+        resolvedAt: null,
+      },
+      {
+        id: "incidentHost001",
+        kind: "HOST_RECOVERY_STUCK",
+        severity: "WARNING",
+        status: "ACTIVE",
+        scope: { type: "HOST", id: "host-lyon-02", groupId: null, variantId: null },
+        summary: "Execution host host-lyon-02 is not completing recovery",
+        cause: "HOST_RECOVERING",
+        evidence: { assignedInstanceCount: 0, lastError: "Agent control API remained unreachable" },
+        occurrenceCount: 15,
+        firstObservedAt: new Date(now - 14 * 60_000).toISOString(),
+        lastObservedAt: new Date(now - 4_000).toISOString(),
+        openedAt: new Date(now - 13 * 60_000).toISOString(),
+        resolvedAt: null,
+      },
+    ],
   };
 }
 

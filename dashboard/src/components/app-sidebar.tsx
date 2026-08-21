@@ -10,6 +10,7 @@ import {
   ServerIcon,
   ServerCogIcon,
   ChartNoAxesCombinedIcon,
+  TriangleAlertIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -46,6 +47,12 @@ export function AppSidebar({ mockMode = false }: { readonly mockMode?: boolean }
   const primary: readonly NavItem[] = [
     { href: "/", label: "Overview", icon: LayoutDashboardIcon },
     { href: "/monitoring", label: "Monitoring", icon: ChartNoAxesCombinedIcon },
+    {
+      href: "/incidents",
+      label: "Incidents",
+      icon: TriangleAlertIcon,
+      badge: summary?.activeIncidentCount,
+    },
     {
       href: "/groups",
       label: "Groups",

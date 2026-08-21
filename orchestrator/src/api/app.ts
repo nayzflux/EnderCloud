@@ -9,6 +9,7 @@ import type { MonitoringService } from "../services/monitoring-service.ts";
 import { nanoid } from "../id.ts";
 import type { HostService } from "../services/host-service.ts";
 import type { TemplateArchiveService } from "../services/template-archive-service.ts";
+import type { IncidentController } from "../services/incident-controller.ts";
 
 const playerUuid = t.String({ format: "uuid" });
 const internalId = t.String({ pattern: "^[A-Za-z0-9]{16}$" });
@@ -62,6 +63,7 @@ export interface ApiDependencies {
   readonly monitoring: MonitoringService;
   readonly hosts: HostService;
   readonly templates: TemplateArchiveService;
+  readonly incidents: IncidentController;
   readonly logger: Logger;
   readonly isReady: () => boolean;
 }
@@ -174,6 +176,50 @@ export function createApp(dependencies: ApiDependencies) {
             summary: "Read the current cluster topology",
           },
         })
+        .get(
+          "/dashboard/incidents",
+          async ({ query, set }) => {
+            try {
+              return await dependencies.incidents.list({
+                ...(query.status ? { status: query.status } : {}),
+                ...(query.severity ? { severity: query.severity } : {}),
+                ...(query.kind ? { kind: query.kind } : {}),
+                ...(query.groupId ? { groupId: query.groupId } : {}),
+                ...(query.scopeId ? { scopeId: query.scopeId } : {}),
+                ...(query.cursor ? { cursor: query.cursor } : {}),
+                ...(query.limit !== undefined ? { limit: query.limit } : {}),
+              });
+            } catch (error) {
+              if (error instanceof Error && error.message === "Invalid incident cursor") {
+                set.status = 400;
+                return { error: "VALIDATION_ERROR", message: error.message };
+              }
+              throw error;
+            }
+          },
+          {
+            query: t.Object({
+              status: t.Optional(t.Union([t.Literal("active"), t.Literal("resolved"), t.Literal("all")])),
+              severity: t.Optional(t.Union([t.Literal("WARNING"), t.Literal("CRITICAL")])),
+              kind: t.Optional(t.Union([
+                t.Literal("CAPACITY_BLOCKED"),
+                t.Literal("INSTANCE_FAILURE_LOOP"),
+                t.Literal("HOST_UNAVAILABLE"),
+                t.Literal("HOST_RECOVERY_STUCK"),
+                t.Literal("HOST_MAINTENANCE_BLOCKED"),
+                t.Literal("SESSION_RETRIES_EXHAUSTED"),
+                t.Literal("TRANSFER_FAILURE_LOOP"),
+                t.Literal("COMMAND_FAILURE_LOOP"),
+                t.Literal("CONTROL_LOOP_FAILURE"),
+              ])),
+              groupId: t.Optional(groupId),
+              scopeId: t.Optional(t.String({ minLength: 1, maxLength: 128 })),
+              cursor: t.Optional(t.String({ minLength: 1, maxLength: 512 })),
+              limit: t.Optional(t.Numeric({ minimum: 1, maximum: 200 })),
+            }),
+            detail: { tags: ["Dashboard"], summary: "Read active and resolved operational incidents" },
+          },
+        )
         .get(
           "/dashboard/monitoring/summary",
           () => dependencies.monitoring.getSummary(),

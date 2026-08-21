@@ -6,6 +6,7 @@ import {
   GitBranchIcon,
   Layers3Icon,
   ListOrderedIcon,
+  TriangleAlertIcon,
   ServerIcon,
   UsersIcon,
 } from "lucide-react";
@@ -106,6 +107,15 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
         </CardDescription>
         <CardAction>
           <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              nativeButton={false}
+              render={<Link href={`/incidents?groupId=${encodeURIComponent(group.id)}`} />}
+            >
+              <TriangleAlertIcon data-icon="inline-start" />
+              Incidents
+            </Button>
             <Button
               variant="outline"
               size="sm"

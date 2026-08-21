@@ -110,6 +110,7 @@ export class Matchmaker {
       }
     } catch (error) {
       this.logger.error("Matchmaking tick failed", { error: String(error) });
+      throw error;
     } finally {
       this.running = false;
     }

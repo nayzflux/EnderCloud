@@ -19,6 +19,47 @@ export interface ExecutionHostTarget {
   readonly gameAddress: string;
 }
 
+type PlacementBlockCause = Extract<HostPlacementResult, { status: "BLOCKED" }>["cause"];
+
+export function classifyPlacementBlock(
+  candidates: readonly { readonly freeCpu: number; readonly freeMemoryBytes: number }[],
+  requested: { readonly cpu: number; readonly memoryBytes: number },
+): PlacementBlockCause {
+  if (candidates.length === 0) return "NO_ONLINE_HOST";
+  const cpuFits = candidates.some((host) => host.freeCpu >= requested.cpu);
+  const memoryFits = candidates.some((host) => host.freeMemoryBytes >= requested.memoryBytes);
+  const jointFit = candidates.some((host) =>
+    host.freeCpu >= requested.cpu && host.freeMemoryBytes >= requested.memoryBytes
+  );
+  if (jointFit) return "PLACEMENT_CONFLICT";
+  if (!cpuFits && !memoryFits) return "INSUFFICIENT_RESOURCES";
+  if (!cpuFits) return "INSUFFICIENT_CPU";
+  if (!memoryFits) return "INSUFFICIENT_MEMORY";
+  return "INSUFFICIENT_RESOURCES";
+}
+
+export type HostPlacementResult =
+  | {
+      readonly status: "PLACED";
+      readonly hostId: string;
+    }
+  | {
+      readonly status: "BLOCKED";
+      readonly cause:
+        | "NO_ONLINE_HOST"
+        | "INSUFFICIENT_CPU"
+        | "INSUFFICIENT_MEMORY"
+        | "INSUFFICIENT_RESOURCES"
+        | "GROUP_MAXIMUM_REACHED"
+        | "PLACEMENT_CONFLICT";
+      readonly requested: { readonly cpu: number; readonly memoryBytes: number };
+      readonly candidates: readonly {
+        readonly hostId: string;
+        readonly freeCpu: number;
+        readonly freeMemoryBytes: number;
+      }[];
+    };
+
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 export class HostService {
@@ -169,7 +210,24 @@ export class HostService {
     tx: Transaction,
     runtime: VariantRuntimeSpec,
     excludedHostId?: string,
-  ): Promise<string | null> {
+    groupCapacity?: { readonly groupId: string; readonly maximumInstances: number },
+  ): Promise<HostPlacementResult> {
+    if (groupCapacity) {
+      const rows = await tx.select({
+        active: sql<number>`count(*)::int`.mapWith(Number),
+      }).from(serverInstances).where(and(
+        eq(serverInstances.groupId, groupCapacity.groupId),
+        inArray(serverInstances.lifecycleState, ["CREATING", "STARTING", "RUNNING", "DRAINING"]),
+      ));
+      if ((rows[0]?.active ?? 0) >= groupCapacity.maximumInstances) {
+        return {
+          status: "BLOCKED",
+          cause: "GROUP_MAXIMUM_REACHED",
+          requested: { cpu: runtime.cpu, memoryBytes: runtime.memoryBytes },
+          candidates: [],
+        };
+      }
+    }
     const filters = [
       eq(executionHosts.healthState, "ONLINE"),
       eq(executionHosts.adminState, "ACTIVE"),
@@ -180,7 +238,14 @@ export class HostService {
       allocatableCpu: executionHosts.allocatableCpu,
       allocatableMemoryBytes: executionHosts.allocatableMemoryBytes,
     }).from(executionHosts).where(and(...filters)).orderBy(executionHosts.id).for("update");
-    if (hosts.length === 0) return null;
+    if (hosts.length === 0) {
+      return {
+        status: "BLOCKED",
+        cause: "NO_ONLINE_HOST",
+        requested: { cpu: runtime.cpu, memoryBytes: runtime.memoryBytes },
+        candidates: [],
+      };
+    }
 
     const reservations = await tx.select({
       hostId: serverInstances.hostId,
@@ -191,13 +256,27 @@ export class HostService {
       ne(serverInstances.lifecycleState, "STOPPED"),
     )).groupBy(serverInstances.hostId);
     const byHost = new Map(reservations.map((row) => [row.hostId, row]));
-    return selectExecutionHost(
-      hosts.map((host) => ({
+    const candidates = hosts.map((host) => ({
         ...host,
         reservedCpu: byHost.get(host.id)?.cpu ?? 0,
         reservedMemoryBytes: byHost.get(host.id)?.memory ?? 0,
-      })),
+      }));
+    const selected = selectExecutionHost(
+      candidates,
       { cpu: runtime.cpu, memoryBytes: runtime.memoryBytes },
-    )?.id ?? null;
+    );
+    if (selected) return { status: "PLACED", hostId: selected.id };
+    const evidence = candidates.map((host) => ({
+      hostId: host.id,
+      freeCpu: host.allocatableCpu - host.reservedCpu,
+      freeMemoryBytes: host.allocatableMemoryBytes - host.reservedMemoryBytes,
+    }));
+    const cause = classifyPlacementBlock(evidence, runtime);
+    return {
+      status: "BLOCKED",
+      cause,
+      requested: { cpu: runtime.cpu, memoryBytes: runtime.memoryBytes },
+      candidates: evidence,
+    };
   }
 }

@@ -111,6 +111,7 @@ export class Reconciler {
       }
     } catch (error) {
       this.logger.error("Reconciliation failed", { error: String(error) });
+      throw error;
     } finally {
       this.running = false;
     }

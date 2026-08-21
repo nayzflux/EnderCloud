@@ -94,6 +94,7 @@ function rows(): DashboardRows {
         oldest_joined_at: "2026-07-27T11:59:00.000Z",
       },
     ],
+    incidentSummary: { active: 2, critical: 1 },
   };
 }
 
@@ -183,6 +184,9 @@ describe("dashboard snapshot", () => {
       .toMatchObject({ enabled: false });
     expect(snapshot.summary.enabledGroups).toBe(1);
     expect(snapshot.summary.activeSessions).toBe(2);
+    expect(snapshot.schemaVersion).toBe(4);
+    expect(snapshot.summary.activeIncidentCount).toBe(2);
+    expect(snapshot.summary.criticalIncidentCount).toBe(1);
   });
 
   test("keeps queue limits bounded", () => {

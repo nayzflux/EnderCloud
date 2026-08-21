@@ -8,6 +8,9 @@ import type {
   DashboardMonitoringSeries,
   DashboardMonitoringSummary,
   MonitoringRange,
+  DashboardIncidentPage,
+  IncidentKind,
+  IncidentSeverity,
 } from "./contracts";
 
 export class DashboardApiError extends Error {
@@ -98,6 +101,23 @@ export function fetchSession(
   sessionId: string,
 ): Promise<DashboardSessionDetail> {
   return readJson(`/api/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+export function fetchIncidents(filters: {
+  readonly status?: "active" | "resolved" | "all";
+  readonly severity?: IncidentSeverity;
+  readonly kind?: IncidentKind;
+  readonly groupId?: string;
+  readonly scopeId?: string;
+  readonly cursor?: string;
+  readonly limit?: number;
+} = {}): Promise<DashboardIncidentPage> {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined) query.set(key, String(value));
+  }
+  const suffix = query.size > 0 ? `?${query}` : "";
+  return readJson(`/api/incidents${suffix}`);
 }
 
 export function drainHost(hostId: string): Promise<{ accepted: boolean }> {

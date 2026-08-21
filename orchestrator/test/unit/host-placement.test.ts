@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { selectExecutionHost } from "../../src/domain/host-placement.ts";
+import { classifyPlacementBlock } from "../../src/services/host-service.ts";
 
 const gibibyte = 1024 ** 3;
 
@@ -89,5 +90,28 @@ describe("execution host placement", () => {
         { cpu: 2, memoryBytes: 2 * gibibyte },
       ),
     ).toBeNull();
+  });
+});
+
+describe("structured placement diagnostics", () => {
+  const requested = { cpu: 2, memoryBytes: 4 * gibibyte };
+
+  test("distinguishes missing hosts and each exhausted resource", () => {
+    expect(classifyPlacementBlock([], requested)).toBe("NO_ONLINE_HOST");
+    expect(classifyPlacementBlock([
+      { freeCpu: 1, freeMemoryBytes: 8 * gibibyte },
+    ], requested)).toBe("INSUFFICIENT_CPU");
+    expect(classifyPlacementBlock([
+      { freeCpu: 4, freeMemoryBytes: 2 * gibibyte },
+    ], requested)).toBe("INSUFFICIENT_MEMORY");
+    expect(classifyPlacementBlock([
+      { freeCpu: 1, freeMemoryBytes: 2 * gibibyte },
+    ], requested)).toBe("INSUFFICIENT_RESOURCES");
+  });
+
+  test("reports a placement conflict when advertised capacity should fit", () => {
+    expect(classifyPlacementBlock([
+      { freeCpu: 4, freeMemoryBytes: 8 * gibibyte },
+    ], requested)).toBe("PLACEMENT_CONFLICT");
   });
 });

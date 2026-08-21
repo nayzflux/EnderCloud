@@ -31,6 +31,12 @@ export interface AppConfig {
   readonly hostOfflineAfterMs: number;
   readonly agentProbeTimeoutMs: number;
   readonly agentOperationTimeoutMs: number;
+  readonly incidentReconcileIntervalMs: number;
+  readonly incidentBlockedAfterMs: number;
+  readonly incidentFailureThreshold: number;
+  readonly incidentFailureWindowMs: number;
+  readonly incidentHostRecoveryAfterMs: number;
+  readonly incidentHistoryRetentionMs: number;
   /** Deprecated group-policy fallbacks kept for one compatibility window. */
   readonly legacyTransferTimeoutMs: number;
   readonly legacyCancelledDrainTimeoutMs: number;
@@ -57,6 +63,16 @@ export function loadConfig(): AppConfig {
     hostOfflineAfterMs: integer("HOST_OFFLINE_AFTER_MS", 30_000, 5_000),
     agentProbeTimeoutMs: integer("AGENT_PROBE_TIMEOUT_MS", 3_000, 100),
     agentOperationTimeoutMs: integer("AGENT_OPERATION_TIMEOUT_MS", 600_000, 1_000),
+    incidentReconcileIntervalMs: integer("INCIDENT_RECONCILE_INTERVAL_MS", 5_000, 1_000),
+    incidentBlockedAfterMs: integer("INCIDENT_BLOCKED_AFTER_MS", 30_000, 1_000),
+    incidentFailureThreshold: integer("INCIDENT_FAILURE_THRESHOLD", 3, 1),
+    incidentFailureWindowMs: integer("INCIDENT_FAILURE_WINDOW_MS", 900_000, 1_000),
+    incidentHostRecoveryAfterMs: integer("INCIDENT_HOST_RECOVERY_AFTER_MS", 60_000, 1_000),
+    incidentHistoryRetentionMs: integer(
+      "INCIDENT_HISTORY_RETENTION_MS",
+      7_776_000_000,
+      60_000,
+    ),
     legacyTransferTimeoutMs: integer("TRANSFER_TIMEOUT_MS", 20_000, 1),
     legacyCancelledDrainTimeoutMs: integer("CANCELLED_DRAIN_TIMEOUT_MS", 10_000, 1),
     legacyTransferTimeoutConfigured: process.env.TRANSFER_TIMEOUT_MS !== undefined,

@@ -20,6 +20,10 @@ import {
   availabilityStates,
   executionHostAdminStates,
   executionHostHealthStates,
+  incidentKinds,
+  incidentScopeTypes,
+  incidentSeverities,
+  incidentStates,
   lifecycleStates,
   sessionPlayerStates,
   sessionStates,
@@ -43,6 +47,10 @@ export const executionHostAdminStateEnum = pgEnum(
 );
 export const sessionStateEnum = pgEnum("session_state", sessionStates);
 export const sessionPlayerStateEnum = pgEnum("session_player_state", sessionPlayerStates);
+export const incidentKindEnum = pgEnum("incident_kind", incidentKinds);
+export const incidentSeverityEnum = pgEnum("incident_severity", incidentSeverities);
+export const incidentStateEnum = pgEnum("incident_state", incidentStates);
+export const incidentScopeTypeEnum = pgEnum("incident_scope_type", incidentScopeTypes);
 export const queueEntryStateEnum = pgEnum("queue_entry_state", [
   "QUEUED",
   "SELECTED",
@@ -430,6 +438,39 @@ export const events = pgTable(
   },
   (table) => [
     index("events_aggregate_idx").on(table.aggregateType, table.aggregateId, table.createdAt),
+  ],
+);
+
+export const operationalIncidents = pgTable(
+  "operational_incidents",
+  {
+    id: text("id").primaryKey(),
+    fingerprint: text("fingerprint").notNull(),
+    kind: incidentKindEnum("kind").notNull(),
+    severity: incidentSeverityEnum("severity").notNull(),
+    state: incidentStateEnum("state").notNull().default("PENDING"),
+    scopeType: incidentScopeTypeEnum("scope_type").notNull(),
+    scopeId: text("scope_id").notNull(),
+    groupId: text("group_id"),
+    variantId: text("variant_id"),
+    summary: text("summary").notNull(),
+    cause: text("cause").notNull(),
+    evidence: jsonb("evidence").notNull().default({}),
+    occurrenceCount: integer("occurrence_count").notNull().default(1),
+    firstObservedAt: timestamp("first_observed_at", { withTimezone: true }).defaultNow().notNull(),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true }).defaultNow().notNull(),
+    openedAt: timestamp("opened_at", { withTimezone: true }),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    ...auditColumns,
+  },
+  (table) => [
+    uniqueIndex("operational_incidents_unresolved_fingerprint_idx")
+      .on(table.fingerprint)
+      .where(sql`${table.state} <> 'RESOLVED'`),
+    index("operational_incidents_state_last_observed_idx")
+      .on(table.state, table.lastObservedAt),
+    index("operational_incidents_group_state_idx").on(table.groupId, table.state),
+    check("operational_incidents_occurrence_check", sql`${table.occurrenceCount} > 0`),
   ],
 );
 

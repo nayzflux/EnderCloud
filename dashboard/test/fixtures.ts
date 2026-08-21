@@ -2,7 +2,7 @@ import type { DashboardClusterSnapshot } from "../src/lib/contracts";
 
 /** Minimal two-group snapshot with one of every interesting shape. */
 export const snapshot: DashboardClusterSnapshot = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   generatedAt: "2026-07-27T12:00:00.000Z",
   summary: {
     enabledGroups: 2,
@@ -15,6 +15,8 @@ export const snapshot: DashboardClusterSnapshot = {
     activeSessions: 2,
     queuedParties: 2,
     queuedPlayers: 3,
+    activeIncidentCount: 0,
+    criticalIncidentCount: 0,
   },
   hosts: [
     {

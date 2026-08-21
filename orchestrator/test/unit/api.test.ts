@@ -8,6 +8,7 @@ import type { HubRouter } from "../../src/services/hub-router.ts";
 import type { MonitoringService } from "../../src/services/monitoring-service.ts";
 import type { HostService } from "../../src/services/host-service.ts";
 import type { TemplateArchiveService } from "../../src/services/template-archive-service.ts";
+import type { IncidentController } from "../../src/services/incident-controller.ts";
 
 function testApp(
   hubs: HubRouter = {} as HubRouter,
@@ -18,10 +19,20 @@ function testApp(
   } as unknown as MonitoringService,
   hosts: HostService = {} as HostService,
   templates: TemplateArchiveService = {} as TemplateArchiveService,
+  incidents: IncidentController = {
+    list: async () => ({
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      activeCount: 0,
+      criticalCount: 0,
+      incidents: [],
+      nextCursor: null,
+    }),
+  } as unknown as IncidentController,
 ) {
   const dashboard = {
     getCluster: async () => ({
-      schemaVersion: 3 as const,
+      schemaVersion: 4 as const,
       generatedAt: "2026-07-27T12:00:00.000Z",
       summary: {
         enabledGroups: 0,
@@ -34,6 +45,8 @@ function testApp(
         activeSessions: 0,
         queuedParties: 0,
         queuedPlayers: 0,
+        activeIncidentCount: 0,
+        criticalIncidentCount: 0,
       },
       hosts: [],
       groups: [],
@@ -50,6 +63,7 @@ function testApp(
     hubs,
     hosts,
     templates,
+    incidents,
     logger: { error: () => {} } as unknown as Logger,
     isReady: () => true,
   });
@@ -61,7 +75,7 @@ test("dashboard cluster endpoint returns a versioned snapshot", async () => {
   );
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({
-    schemaVersion: 3,
+    schemaVersion: 4,
     summary: { activeInstances: 0 },
   });
 });
@@ -184,6 +198,58 @@ test("dashboard detail endpoints return a stable 404 response", async () => {
     message: "Instance abcdefghijklmnop was not found",
     requestId: "dashboard-test",
   });
+});
+
+test("incident endpoint validates filters and forwards opaque pagination", async () => {
+  const list = mock(async () => ({
+    schemaVersion: 1 as const,
+    generatedAt: "2026-08-20T12:00:00.000Z",
+    activeCount: 1,
+    criticalCount: 1,
+    incidents: [],
+    nextCursor: "next-page",
+  }));
+  const incidents = { list } as unknown as IncidentController;
+  const response = await testApp(
+    {} as HubRouter,
+    {} as InstanceController,
+    undefined,
+    {} as HostService,
+    {} as TemplateArchiveService,
+    incidents,
+  ).handle(new Request(
+    "http://endercloud/api/v1/dashboard/incidents?status=active&severity=CRITICAL&kind=CAPACITY_BLOCKED&groupId=skywars-solo&scopeId=host-1&cursor=opaque&limit=50",
+  ));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ schemaVersion: 1, nextCursor: "next-page" });
+  expect(list).toHaveBeenCalledWith({
+    status: "active",
+    severity: "CRITICAL",
+    kind: "CAPACITY_BLOCKED",
+    groupId: "skywars-solo",
+    scopeId: "host-1",
+    cursor: "opaque",
+    limit: 50,
+  });
+
+  const invalid = await testApp().handle(new Request(
+    "http://endercloud/api/v1/dashboard/incidents?status=pending&limit=201",
+  ));
+  expect(invalid.status).toBe(400);
+
+  const invalidCursorController = {
+    list: async () => { throw new Error("Invalid incident cursor"); },
+  } as unknown as IncidentController;
+  const invalidCursor = await testApp(
+    {} as HubRouter,
+    {} as InstanceController,
+    undefined,
+    {} as HostService,
+    {} as TemplateArchiveService,
+    invalidCursorController,
+  ).handle(new Request("http://endercloud/api/v1/dashboard/incidents?cursor=not-opaque"));
+  expect(invalidCursor.status).toBe(400);
+  expect(await invalidCursor.json()).toMatchObject({ error: "VALIDATION_ERROR" });
 });
 
 test("host control routes validate heartbeats and preserve action conflicts", async () => {

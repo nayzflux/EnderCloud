@@ -3,6 +3,7 @@ import {
   isMockEnabled,
   mockCluster,
   mockGroupMonitoring,
+  mockIncidents,
   mockInstance,
   mockMonitoringSummary,
   mockQueue,
@@ -49,6 +50,19 @@ describe("mock monitoring", () => {
       "TPS_5M",
       "STARTUP_BOOT_60M",
     ]);
+  });
+});
+
+describe("mock operational incidents", () => {
+  test("keeps operational diagnoses separate from performance alerts", () => {
+    const incidents = mockIncidents(now);
+    expect(incidents.activeCount).toBe(2);
+    expect(incidents.criticalCount).toBe(1);
+    expect(incidents.incidents.map((incident) => incident.kind)).toEqual([
+      "CAPACITY_BLOCKED",
+      "HOST_RECOVERY_STUCK",
+    ]);
+    expect(mockMonitoringSummary(now).alerts).toHaveLength(2);
   });
 });
 

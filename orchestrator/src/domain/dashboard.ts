@@ -9,6 +9,10 @@ import type {
   VariantRuntimeSpec,
   ExecutionHostAdminState,
   ExecutionHostHealthState,
+  IncidentKind,
+  IncidentScopeType,
+  IncidentSeverity,
+  IncidentState,
 } from "./types.ts";
 
 export interface DashboardHost {
@@ -161,7 +165,7 @@ export interface DashboardGroup {
 }
 
 export interface DashboardClusterSnapshot {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly generatedAt: string;
   readonly summary: {
     readonly enabledGroups: number;
@@ -174,9 +178,41 @@ export interface DashboardClusterSnapshot {
     readonly activeSessions: number;
     readonly queuedParties: number;
     readonly queuedPlayers: number;
+    readonly activeIncidentCount: number;
+    readonly criticalIncidentCount: number;
   };
   readonly hosts: readonly DashboardHost[];
   readonly groups: readonly DashboardGroup[];
+}
+
+export interface DashboardIncident {
+  readonly id: string;
+  readonly kind: IncidentKind;
+  readonly severity: IncidentSeverity;
+  readonly status: Exclude<IncidentState, "PENDING">;
+  readonly scope: {
+    readonly type: IncidentScopeType;
+    readonly id: string;
+    readonly groupId: string | null;
+    readonly variantId: string | null;
+  };
+  readonly summary: string;
+  readonly cause: string;
+  readonly evidence: Readonly<Record<string, unknown>>;
+  readonly occurrenceCount: number;
+  readonly firstObservedAt: string;
+  readonly lastObservedAt: string;
+  readonly openedAt: string;
+  readonly resolvedAt: string | null;
+}
+
+export interface DashboardIncidentPage {
+  readonly schemaVersion: 1;
+  readonly generatedAt: string;
+  readonly activeCount: number;
+  readonly criticalCount: number;
+  readonly incidents: readonly DashboardIncident[];
+  readonly nextCursor: string | null;
 }
 
 export const monitoringRanges = ["1h", "6h", "24h", "7d"] as const;

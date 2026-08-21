@@ -22,6 +22,7 @@ import { MonitoringService } from "./services/monitoring-service.ts";
 import { HostService } from "./services/host-service.ts";
 import { TemplateArchiveService } from "./services/template-archive-service.ts";
 import { HostMaintenanceController } from "./services/host-maintenance-controller.ts";
+import { IncidentController } from "./services/incident-controller.ts";
 import { and, isNull, ne } from "drizzle-orm";
 import { serverInstances } from "./db/schema.ts";
 
@@ -79,6 +80,7 @@ const variants = new VariantSelector(db);
 const transfers = new TransferService(db, bus, logger);
 const hubs = new HubRouter(db, transfers);
 const monitoring = new MonitoringService(db, logger);
+const incidents = new IncidentController(db, config, logger);
 const instances = new InstanceController(
   db,
   executor,
@@ -109,6 +111,7 @@ const maintenance = new HostMaintenanceController(db, hosts, instances, logger);
 await reconciler.tick();
 await capacity.tick();
 await transfers.tick();
+await incidents.tick();
 ready = true;
 
 const app = createApp({
@@ -119,6 +122,7 @@ const app = createApp({
   monitoring,
   hosts,
   templates,
+  incidents,
   logger,
   isReady: () => ready,
 });
@@ -127,14 +131,16 @@ const server = app.server;
 if (!server) throw new Error("Elysia failed to start its HTTP server");
 
 // Each periodic control loop is independent and protects itself from overlapping ticks.
-const scheduler = new Scheduler(logger);
+const scheduler = new Scheduler(logger, incidents);
 scheduler.every("capacity", config.capacityIntervalMs, () => capacity.tick());
 scheduler.every("matchmaking", config.matchmakingIntervalMs, () => matchmaker.tick());
 scheduler.every("sessions", config.matchmakingIntervalMs, () => sessions.tick());
 scheduler.every("transfers", config.matchmakingIntervalMs, () => transfers.tick());
 scheduler.every("reconciliation", config.hostReconcileIntervalMs, () => reconciler.tick());
 scheduler.every("host-maintenance", config.capacityIntervalMs, () => maintenance.tick());
+scheduler.every("incidents", config.incidentReconcileIntervalMs, () => incidents.tick());
 scheduler.every("monitoring-retention", 60 * 60 * 1_000, () => monitoring.prune());
+scheduler.every("incident-retention", 60 * 60 * 1_000, () => incidents.prune());
 
 logger.info("EnderCloud orchestrator started", {
   url: server.url.toString(),

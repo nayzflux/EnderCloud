@@ -141,6 +141,7 @@ export class CapacityController {
       }
     } catch (error) {
       this.logger.error("Capacity tick failed", { error: String(error) });
+      throw error;
     } finally {
       this.running = false;
     }

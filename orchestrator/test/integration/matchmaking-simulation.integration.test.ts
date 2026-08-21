@@ -3,7 +3,7 @@ import { createDatabase, type SqlClient } from "../../src/db/client.ts";
 import { migrateDatabase } from "../../src/db/migrate.ts";
 import { Matchmaker } from "../../src/services/matchmaker.ts";
 import { QueueService } from "../../src/services/queue-service.ts";
-import { serverGroups, serverGroupVariants, serverVariantLayers, serverVariants, templateLayers, serverInstances, gameSessions, sessionPlayers, queueEntries } from "../../src/db/schema.ts";
+import { serverGroups, serverGroupVariants, serverVariantLayers, serverVariants, templateLayers, serverInstances, gameSessions, sessionPlayers, queueEntries, executionHosts } from "../../src/db/schema.ts";
 import type { TransferService } from "../../src/services/transfer-service.ts";
 import type { Logger } from "../../src/logger.ts";
 import { nanoid } from "../../src/id.ts";
@@ -34,7 +34,7 @@ let matchmaker: Matchmaker;
 let queueService: QueueService;
 
 async function cleanDb() {
-  await sql`TRUNCATE TABLE template_layers, server_groups CASCADE`;
+  await sql`TRUNCATE TABLE template_layers, server_groups, execution_hosts CASCADE`;
 }
 
 describe("Mega Simulation End-to-End Matchmaking", () => {
@@ -121,11 +121,28 @@ describe("Mega Simulation End-to-End Matchmaking", () => {
       selectionWeight: 100,
     });
 
+    const hostId = "simulation-host";
+    await db.insert(executionHosts).values({
+      id: hostId,
+      controlUrl: "http://simulation-host:8090",
+      gameAddress: "10.0.0.10",
+      allocatableCpu: 4,
+      allocatableMemoryBytes: 4096,
+      healthState: "ONLINE",
+      adminState: "ACTIVE",
+      agentVersion: "test",
+      lastHeartbeatAt: new Date(),
+      lastControlContactAt: new Date(),
+    });
+
     const warmInstanceId = nanoid();
     await db.insert(serverInstances).values({
       id: warmInstanceId,
       groupId,
       variantId,
+      hostId,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
       lifecycleState: "RUNNING",
       availabilityState: "OPEN",
       endpoint: "localhost:25565",
@@ -250,6 +267,9 @@ describe("Mega Simulation End-to-End Matchmaking", () => {
         id: instanceCold1,
         groupId,
         variantId,
+        hostId,
+        reservedCpu: 1,
+        reservedMemoryBytes: 1024,
         lifecycleState: "RUNNING",
         availabilityState: "OPEN",
         endpoint: "localhost:25566",
@@ -258,6 +278,9 @@ describe("Mega Simulation End-to-End Matchmaking", () => {
         id: instanceCold2,
         groupId,
         variantId,
+        hostId,
+        reservedCpu: 1,
+        reservedMemoryBytes: 1024,
         lifecycleState: "RUNNING",
         availabilityState: "OPEN",
         endpoint: "localhost:25567",
