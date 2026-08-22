@@ -40,6 +40,17 @@ export interface DashboardVariant {
   readonly revision: number;
   readonly weight: number;
   readonly runtime: VariantRuntimeSpec;
+  readonly startup?: VariantStartupStatus | null;
+}
+
+export interface VariantStartupStatus {
+  readonly state: "BACKING_OFF" | "PROBING" | "BLOCKED" | "RESETTING";
+  readonly failureCount: number;
+  readonly retryLimit: number;
+  readonly nextRetryAt: string | null;
+  readonly lastFailureAt: string | null;
+  readonly lastFailedInstanceId: string | null;
+  readonly lastFailureReason: string | null;
 }
 
 export interface VariantRuntimePatch {
@@ -88,6 +99,7 @@ export interface DashboardInstance {
   readonly id: string;
   readonly hostId: string | null;
   readonly variantId: string;
+  readonly variantRevision?: number;
   readonly sessionId: string | null;
   readonly lifecycleState: LifecycleState;
   readonly availabilityState: AvailabilityState;
@@ -105,6 +117,11 @@ export interface DashboardInstance {
   readonly drainReason: string | null;
   readonly stoppingAt: string | null;
   readonly shutdownDeadline: string | null;
+  readonly failedAt?: string | null;
+  readonly failureReason?: string | null;
+  readonly failureDetails?: Readonly<Record<string, unknown>> | null;
+  readonly failureLogTail?: string | null;
+  readonly runtimeRetained?: boolean;
   readonly updatedAt: string;
 }
 
@@ -133,7 +150,6 @@ export interface DashboardSession {
   readonly assignmentAcknowledgedAt: string | null;
   readonly instanceAcquisitionDeadline: string | null;
   readonly lobbyStaleDeadline: string | null;
-  readonly retryCount: number;
   readonly maximumPlayerCount: number;
   readonly activePlayerCount: number;
   readonly connectedPlayerCount: number;
@@ -219,7 +235,6 @@ export const incidentKinds = [
   "HOST_UNAVAILABLE",
   "HOST_RECOVERY_STUCK",
   "HOST_MAINTENANCE_BLOCKED",
-  "SESSION_RETRIES_EXHAUSTED",
   "TRANSFER_FAILURE_LOOP",
   "COMMAND_FAILURE_LOOP",
   "CONTROL_LOOP_FAILURE",

@@ -51,9 +51,11 @@ interface CapacityRow {
 interface FailureRow {
   group_id: string;
   variant_id: string;
+  variant_revision: number;
+  state: "BACKING_OFF" | "PROBING" | "BLOCKED" | "RESETTING";
   occurrence_count: number;
-  instance_ids: string[];
-  reasons: string[];
+  last_failed_instance_id: string | null;
+  last_failure_reason: string | null;
   last_observed_at: DatabaseTimestamp;
 }
 
@@ -63,13 +65,6 @@ interface HostRow {
   admin_state: "ACTIVE" | "DRAINING" | "MAINTENANCE";
   last_error: string | null;
   assigned_count: number;
-}
-
-interface SessionFailureRow {
-  id: string;
-  group_id: string;
-  retry_count: number;
-  updated_at: DatabaseTimestamp;
 }
 
 interface AggregateFailureRow {
@@ -101,7 +96,6 @@ const detectorKinds: readonly IncidentKind[] = [
   "HOST_UNAVAILABLE",
   "HOST_RECOVERY_STUCK",
   "HOST_MAINTENANCE_BLOCKED",
-  "SESSION_RETRIES_EXHAUSTED",
   "TRANSFER_FAILURE_LOOP",
   "COMMAND_FAILURE_LOOP",
 ];
@@ -131,7 +125,7 @@ export class IncidentController {
       const observations = await this.detect();
       await this.reconcile(observations);
     } catch (error) {
-      this.logger.error("Incident reconciliation failed", { error: String(error) });
+      this.logger.error("incident.reconciliation.failed", "Incident reconciliation failed", { error });
       throw error;
     } finally {
       this.running = false;
@@ -148,7 +142,7 @@ export class IncidentController {
       scopeId: task,
       summary: `Control loop ${task} is repeatedly failing`,
       cause: "SCHEDULED_TASK_FAILED",
-      evidence: { task, error: String(error) },
+      evidence: { task, error: error instanceof Error ? error.message : String(error) },
       openAfterOccurrences: this.config.incidentFailureThreshold,
     }, true);
   }
@@ -250,16 +244,15 @@ export class IncidentController {
   }
 
   private async detect(): Promise<Observation[]> {
-    const [capacity, failures, hosts, maintenance, sessions, transfers, commands] = await Promise.all([
+    const [capacity, failures, hosts, maintenance, transfers, commands] = await Promise.all([
       this.detectCapacity(),
       this.detectInstanceFailures(),
       this.detectHosts(),
       this.detectMaintenance(),
-      this.detectSessionFailures(),
       this.detectTransferFailures(),
       this.detectCommandFailures(),
     ]);
-    return [...capacity, ...failures, ...hosts, ...maintenance, ...sessions, ...transfers, ...commands];
+    return [...capacity, ...failures, ...hosts, ...maintenance, ...transfers, ...commands];
   }
 
   private async detectCapacity(): Promise<Observation[]> {
@@ -365,29 +358,29 @@ export class IncidentController {
 
   private async detectInstanceFailures(): Promise<Observation[]> {
     const rows = await this.db.execute(sql<FailureRow>`
-      SELECT instances.group_id, instances.variant_id, count(*)::int AS occurrence_count,
-        array_agg(events.aggregate_id ORDER BY events.created_at DESC) AS instance_ids,
-        array_agg(DISTINCT events.payload->>'reason') AS reasons,
-        max(events.created_at) AS last_observed_at
-      FROM events
-      JOIN server_instances instances ON instances.id = events.aggregate_id
-      WHERE events.type = 'INSTANCE_FAILED'
-        AND events.payload->>'reason' IN ('STARTUP_TIMEOUT', 'CREATE_FAILED')
-        AND events.created_at >= now() - (${this.config.incidentFailureWindowMs} * interval '1 millisecond')
-      GROUP BY instances.group_id, instances.variant_id
-      HAVING count(*) >= ${this.config.incidentFailureThreshold}
+      SELECT group_id, variant_id, variant_revision, state,
+        failure_count AS occurrence_count,
+        last_failed_instance_id,
+        last_failure_reason,
+        last_failure_at AS last_observed_at
+      FROM variant_start_states
+      WHERE state IN ('BACKING_OFF', 'PROBING', 'BLOCKED', 'RESETTING')
     `) as unknown as FailureRow[];
     return rows.map((row) => ({
-      fingerprint: `instance-failure:${row.group_id}:${row.variant_id}`,
+      fingerprint: `instance-failure:${row.group_id}:${row.variant_id}:${row.variant_revision}`,
       kind: "INSTANCE_FAILURE_LOOP",
-      severity: "CRITICAL",
+      severity: row.state === "BLOCKED" ? "CRITICAL" : "WARNING",
       scopeType: "VARIANT",
       scopeId: row.variant_id,
       groupId: row.group_id,
       variantId: row.variant_id,
-      summary: `Variant ${row.variant_id} is repeatedly failing to start`,
-      cause: row.reasons.length === 1 ? row.reasons[0]! : "MULTIPLE_STARTUP_FAILURES",
-      evidence: { instanceIds: row.instance_ids, reasons: row.reasons, windowMs: this.config.incidentFailureWindowMs },
+      summary: `Variant ${row.variant_id} revision ${row.variant_revision} is failing to start`,
+      cause: row.last_failure_reason ?? "STARTUP_FAILURE",
+      evidence: {
+        revision: row.variant_revision,
+        state: row.state,
+        lastFailedInstanceId: row.last_failed_instance_id,
+      },
       occurrenceCount: Number(row.occurrence_count),
     }));
   }
@@ -441,25 +434,6 @@ export class IncidentController {
       cause: "REPLACEMENT_NOT_CREATED",
       evidence: { instanceIds: row.blocked_instances },
       openAfterMs: this.config.incidentBlockedAfterMs,
-    }));
-  }
-
-  private async detectSessionFailures(): Promise<Observation[]> {
-    const rows = await this.db.execute(sql<SessionFailureRow>`
-      SELECT id, group_id, retry_count, updated_at FROM game_sessions
-      WHERE state = 'FAILED' AND retry_count >= ${this.config.maxInstanceRetries}
-        AND updated_at >= now() - (${this.config.incidentFailureWindowMs} * interval '1 millisecond')
-    `) as unknown as SessionFailureRow[];
-    return rows.map((row) => ({
-      fingerprint: `session-retries:${row.id}`,
-      kind: "SESSION_RETRIES_EXHAUSTED",
-      severity: "CRITICAL",
-      scopeType: "SESSION",
-      scopeId: row.id,
-      groupId: row.group_id,
-      summary: `Session ${row.id} exhausted its instance retries`,
-      cause: "MAX_INSTANCE_RETRIES_REACHED",
-      evidence: { retryCount: row.retry_count, maximumRetries: this.config.maxInstanceRetries },
     }));
   }
 
@@ -622,7 +596,10 @@ export class IncidentController {
       cause: incident.cause,
       evidence: incident.evidence,
     };
-    if (action === "opened") this.logger.warn("Operational incident opened", fields);
-    else this.logger.info("Operational incident resolved", fields);
+    if (action === "opened") {
+      this.logger.warn("incident.opened", "Operational incident opened", fields);
+    } else {
+      this.logger.info("incident.resolved", "Operational incident resolved", fields);
+    }
   }
 }

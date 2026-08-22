@@ -3,7 +3,7 @@ import { createDatabase, type SqlClient } from "../../src/db/client.ts";
 import { migrateDatabase } from "../../src/db/migrate.ts";
 import { Matchmaker } from "../../src/services/matchmaker.ts";
 import { QueueService } from "../../src/services/queue-service.ts";
-import { executionHosts, serverGroups, serverGroupVariants, serverVariantLayers, serverVariants, templateLayers, serverInstances, queueEntries, queueEntryPlayers, gameSessions, sessionPlayers, instancePlayers, transferCommands, events, serverTpsMetrics } from "../../src/db/schema.ts";
+import { commands as instanceCommands, executionHosts, serverGroups, serverGroupVariants, serverVariantLayers, serverVariants, templateLayers, serverInstances, queueEntries, queueEntryPlayers, gameSessions, sessionPlayers, instancePlayers, transferCommands, events, serverTpsMetrics } from "../../src/db/schema.ts";
 import type { TransferService } from "../../src/services/transfer-service.ts";
 import { InstanceController } from "../../src/services/instance-controller.ts";
 import type { Executor, RuntimeInstance } from "../../src/executor/executor.ts";
@@ -20,6 +20,7 @@ import { MonitoringService } from "../../src/services/monitoring-service.ts";
 import { HostService } from "../../src/services/host-service.ts";
 import { AgentExecutor } from "../../src/executor/agent-executor.ts";
 import { HostMaintenanceController } from "../../src/services/host-maintenance-controller.ts";
+import { InstanceStartWorker } from "../../src/services/instance-start-worker.ts";
 
 const TEST_HOST_ID = "integration-host";
 
@@ -30,6 +31,7 @@ const mockLogger = {
   warn: () => {},
   error: console.error,
   write: () => {},
+  runWithContext: (_context: Readonly<Record<string, unknown>>, operation: () => unknown) => operation(),
 } as unknown as Logger;
 
 const mockTransfers = {
@@ -42,6 +44,31 @@ let container: StartedPostgreSqlContainer | undefined;
 let sql: ReturnType<typeof createDatabase>["sql"];
 let db: ReturnType<typeof createDatabase>["db"];
 let matchmaker: Matchmaker;
+
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!await predicate()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for integration state");
+    await Bun.sleep(5);
+  }
+}
+
+async function drainCreateQueue(
+  instances: InstanceController,
+  executor: Executor,
+): Promise<void> {
+  const worker = new InstanceStartWorker(db, instances, executor, mockLogger, 4);
+  await worker.tick();
+  await waitFor(async () => {
+    const active = await db.select({ state: instanceCommands.state })
+      .from(instanceCommands)
+      .where(and(
+        eq(instanceCommands.operation, "CREATE"),
+        inArray(instanceCommands.state, ["PENDING", "RUNNING"]),
+      ));
+    return active.length === 0;
+  });
+}
 
 async function seedVariant(groupId: string, variantId: string, revision = 1) {
   const runtime = {
@@ -237,9 +264,13 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
         lastControlContactAt: new Date(),
       });
       const hosts = new HostService(db);
+      const executor = new AgentExecutor(hosts, {
+        operationTimeoutMs: 5_000,
+        probeTimeoutMs: 1_000,
+      });
       const controller = new InstanceController(
         db,
-        new AgentExecutor(hosts, { operationTimeoutMs: 5_000, probeTimeoutMs: 1_000 }),
+        executor,
         new VariantSelector(db),
         {} as RedisEventBus,
         mockTransfers,
@@ -253,6 +284,8 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       const second = await controller.createWarm(groupId);
       expect(first).not.toBeNull();
       expect(second).not.toBeNull();
+      expect(requests.size).toBe(0);
+      await drainCreateQueue(controller, executor);
       expect(requests.get(TEST_HOST_ID)).toContain(
         `PUT /api/v1/instances/${first}`,
       );
@@ -399,6 +432,10 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     let replacements = await db.select().from(serverInstances)
       .where(inArray(serverInstances.replacesInstanceId, sourceIds));
     expect(replacements).toHaveLength(1);
+    expect(replacements[0]?.lifecycleState).toBe("CREATING");
+    await drainCreateQueue(controller, executor);
+    replacements = await db.select().from(serverInstances)
+      .where(inArray(serverInstances.replacesInstanceId, sourceIds));
     expect(replacements[0]?.lifecycleState).toBe("STARTING");
 
     await controller.handlePaperEvent(replacements[0]!.id, {
@@ -1492,9 +1529,13 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     active = await db.select().from(serverInstances)
       .where(inArray(serverInstances.lifecycleState, ["CREATING", "STARTING", "RUNNING", "DRAINING"]));
     expect(active).toHaveLength(3);
-    const replacement = active.find(
+    let replacement = active.find(
       (instance) => instance.replacesInstanceId === sourceInstanceId,
     );
+    expect(replacement?.lifecycleState).toBe("CREATING");
+    await drainCreateQueue(controller, executor);
+    replacement = (await db.select().from(serverInstances)
+      .where(eq(serverInstances.id, replacement!.id)))[0];
     expect(replacement?.lifecycleState).toBe("STARTING");
 
     await controller.handlePaperEvent(replacement!.id, {

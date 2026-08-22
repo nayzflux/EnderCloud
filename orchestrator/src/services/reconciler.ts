@@ -13,6 +13,7 @@ interface InstanceRow {
   host_id: string | null;
   lifecycle_state: LifecycleState;
   startup_expired: boolean;
+  runtime_retained: boolean;
 }
 
 interface HostRow {
@@ -43,6 +44,7 @@ export class Reconciler {
           id: serverInstances.id,
           host_id: serverInstances.hostId,
           lifecycle_state: serverInstances.lifecycleState,
+          runtime_retained: serverInstances.runtimeRetained,
           startup_expired: sql<boolean>`(
             ${serverInstances.lifecycleState} = 'STARTING'
             AND ${serverInstances.startupDeadline} <= now()
@@ -60,7 +62,7 @@ export class Reconciler {
       const byHost = new Map<string, InstanceRow[]>();
       for (const instance of databaseInstances) {
         if (!instance.host_id) {
-          this.logger.error("Active instance has no execution host", { instanceId: instance.id });
+          this.logger.error("instance.host.missing", "Active instance has no execution host", { instanceId: instance.id });
           continue;
         }
         const current = byHost.get(instance.host_id) ?? [];
@@ -96,7 +98,6 @@ export class Reconciler {
             ? "Agent heartbeat expired"
             : "Agent control API remained unreachable";
           if (await this.hosts.markOffline(host.id, reason)) {
-            this.logger.error("Execution host became offline", { hostId: host.id, reason });
             await this.failHostInstances(host.id, byHost.get(host.id) ?? [], reason);
           }
           continue;
@@ -110,7 +111,7 @@ export class Reconciler {
         if (converged) await this.hosts.markOnline(host.id);
       }
     } catch (error) {
-      this.logger.error("Reconciliation failed", { error: String(error) });
+      this.logger.error("reconciliation.tick.failed", "Reconciliation failed", { error });
       throw error;
     } finally {
       this.running = false;
@@ -126,10 +127,10 @@ export class Reconciler {
       try {
         await this.instances.failInstance(instance.id, "HOST_OFFLINE", { hostId, reason });
       } catch (error) {
-        this.logger.error("Failed to transition offline host instance", {
+        this.logger.error("instance.host_offline.failed", "Failed to transition offline host instance", {
           hostId,
           instanceId: instance.id,
-          error: String(error),
+          error,
         });
       }
     }
@@ -146,9 +147,7 @@ export class Reconciler {
     for (const database of databaseInstances) {
       try {
         const runtime = runtimeById.get(database.id);
-        if (database.lifecycle_state === "CREATING") {
-          await this.instances.resumeCreate(database.id);
-        } else if (database.lifecycle_state === "STARTING" && database.startup_expired) {
+        if (database.lifecycle_state === "STARTING" && database.startup_expired) {
           await this.instances.failInstance(database.id, "STARTUP_TIMEOUT", { hostId });
         } else if (
           (database.lifecycle_state === "RUNNING" || database.lifecycle_state === "STARTING") &&
@@ -169,17 +168,17 @@ export class Reconciler {
           }
         } else if (
           database.lifecycle_state === "STOPPING" ||
-          database.lifecycle_state === "FAILED" ||
+          (database.lifecycle_state === "FAILED" && !database.runtime_retained) ||
           database.lifecycle_state === "ORPHANED"
         ) {
           await this.instances.stopAndDelete(database.id);
         }
       } catch (error) {
         converged = false;
-        this.logger.error("Instance reconciliation failed", {
+        this.logger.error("instance.reconciliation.failed", "Instance reconciliation failed", {
           hostId,
           instanceId: database.id,
-          error: String(error),
+          error,
         });
       }
     }
@@ -201,7 +200,7 @@ export class Reconciler {
           type: "ORPHAN_DISCOVERED",
           payload: { ...runtime, cleanup },
         });
-        this.logger.info("Removed orphan runtime instance", {
+        this.logger.info("instance.orphan.removed", "Removed orphan runtime instance", {
           hostId,
           instanceId: runtime.instanceId,
           containerId: runtime.containerId,
@@ -209,11 +208,11 @@ export class Reconciler {
         });
       } catch (error) {
         converged = false;
-        this.logger.error("Orphan runtime cleanup failed", {
+        this.logger.error("instance.orphan.cleanup_failed", "Orphan runtime cleanup failed", {
           hostId,
           instanceId: runtime.instanceId,
           containerId: runtime.containerId,
-          error: String(error),
+          error,
         });
       }
     }

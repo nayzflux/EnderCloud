@@ -1,113 +1,177 @@
-# EnderCloud Dashboard
+# EnderCloud dashboard
 
-Operations console for the EnderCloud cluster. It reads groups, hosts, warm capacity,
-matchmaking queues, instances and sessions. The Hosts page can also request a confirmed drain or
-reactivation. The application uses Next.js, TanStack Query, React Flow and shadcn/ui.
+The dashboard is a Next.js operations console for one EnderCloud cluster. It reads the central
+orchestrator through server-side proxy routes, so the browser never needs the private orchestrator
+URL.
+
+The application uses React 19, Next.js 16, TanStack Query, React Flow, Recharts, Tailwind CSS, and
+shadcn/ui.
 
 ## Pages
 
-| Route        | What it answers                                                                  |
-| ------------ | -------------------------------------------------------------------------------- |
-| `/`          | Fleet health at a glance: summary tiles, lifecycle distribution, capacity per group, what needs attention |
-| `/groups`    | Capacity policy, matchmaking or routing rules, lifecycle timeouts and variants of every group |
-| `/groups/[groupId]/variants` | Ordered template layers, effective runtime settings and file summaries for a group |
-| `/hosts`     | Agent health, administrative state, resource reservations and confirmed maintenance actions |
-| `/instances` | Sortable, filterable table of every managed container, with a detail panel per instance |
-| `/sessions`  | Matches formed by the matchmaker, their assigned instance and connection progress |
-| `/queues`    | Queue pressure per matchmaking group: parties, wait-time distribution and the queued parties themselves |
-| `/topology`  | React Flow map wiring each group's queue and warm pool to its instances and sessions |
-| `/monitoring` | Startup readiness and Paper TPS time series, grouped by variant with shared alert thresholds |
+| Route | Purpose |
+| --- | --- |
+| `/` | Fleet summary, lifecycle distribution, group capacity, host health, and current problems |
+| `/groups` | Group type, capacity, routing or matchmaking policy, timeouts, and variant count |
+| `/groups/[groupId]/variants` | Ordered template layers, effective Docker settings, revisions, file summaries, and startup status |
+| `/hosts` | Agent health, administration state, resource reservations, drain, and activation |
+| `/instances` | Filterable instance table and detailed lifecycle panel |
+| `/sessions` | Matchmaking sessions, assigned instance, players, profiles, and transfer progress |
+| `/queues` | Queue pressure, wait-time distribution, and oldest parties by minigame group |
+| `/topology` | React Flow graph connecting groups, warm pools, instances, and sessions |
+| `/monitoring` | Startup readiness and Paper TPS time series grouped by variant |
+| `/incidents` | Active and resolved operational incidents with kind, severity, scope, and evidence |
 
-Selecting an instance or a session opens the same detail panel wherever it appears. The panel
-shows players, commands, events, teams and transfers. Its Lifecycle section orders the completed
-steps, measures each duration and shows the one active deadline selected by the orchestrator.
+Selecting an instance or session opens the same detail panel wherever the record appears. The
+panel shows players, commands, events, profiles, transfers, lifecycle steps, and the one active
+deadline selected by the orchestrator.
 
-## Elapsed times
+The Hosts page requires confirmation before drain or activation. A blocked variant revision can
+also request a startup-policy reset from its group variant page. These actions call dashboard
+server routes, which forward them to the orchestrator.
 
-A single clock in `src/lib/clock.ts` drives every displayed age and countdown:
+## Data flow
 
-- it anchors on the `generatedAt` timestamp from the orchestrator, so a client with an incorrect
-  clock still shows server-relative durations;
-- it advances on its own once a second, and re-anchors whenever fresher data
-  lands. An out-of-order response is ignored rather than letting time run
-  backwards;
-- `syncClock` is called from the API layer, not from an effect, so the correction
-  is applied before React renders the data it came with;
-- the `Elapsed`, `RelativeTime` and `Countdown` components in
-  `src/components/live-time.tsx` subscribe independently, so only time cells rerender every
-  second.
+Browser components call local routes under `src/app/api/`. Those server routes either proxy the
+orchestrator or return synthetic data.
 
-The timeline counters continue while auto-refresh is paused, without issuing a
-network request every second. The client never infers a business deadline from
-an entity state. It renders `activeDeadline` from the versioned instance and session detail
-contracts.
-
-Anything with a fixed instant behind it (`title` and `dateTime` on the rendered
-`<time>`) keeps the exact UTC value one hover away.
-
-## UI foundation
-
-The interface is generated from the shadcn CLI using preset `b0`
-(`base-nova` style, neutral base colour, Inter, lucide icons). To inspect or
-re-apply it:
-
-```bash
-npx shadcn@latest preset decode b0
+```text
+Browser component
+    -> Next.js route handler
+        -> ORCHESTRATOR_URL
+            -> EnderCloud orchestrator
 ```
 
-Components live in `src/components/ui` and are managed by the CLI. Add more
-with `npx shadcn@latest add <component>` rather than hand-writing them. On top
-of the neutral preset, `src/app/globals.css` defines `--success`, `--warning`
-and `--info` so operational states stay readable in both themes; the mapping
-from a contract state to a tone lives in `src/lib/status.ts`.
+The proxy adds no authentication. Deploy the dashboard on a trusted operator network and keep the
+orchestrator private. `ORCHESTRATOR_URL` is server-side and must never be exposed through a
+`NEXT_PUBLIC_` variable.
 
-Light and dark themes both ship, following the system preference by default and
-switchable from the header.
+Upstream requests time out after eight seconds. The proxy preserves the orchestrator's
+`x-request-id` response header for diagnosis and returns HTTP 502 when the upstream cannot be
+reached.
 
-## Development
+## Environment variables
+
+Create a local file from the example:
 
 ```powershell
 Copy-Item .env.example .env.local
-bun install --frozen-lockfile
-bun run dev
 ```
 
-The console is served on `http://localhost:3000`. `ORCHESTRATOR_URL` is server-side only. The
-browser calls dashboard proxy routes for reads and for the two confirmed host maintenance
-actions. Those server routes do not add authentication, so the dashboard and orchestrator still
-belong on a private network.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `ORCHESTRATOR_URL` | `http://localhost:8080` | Server-side orchestrator base URL |
+| `DASHBOARD_MOCK_DATA` | Disabled | Serve a deterministic synthetic cluster |
 
-### Synthetic data
+Mock mode accepts `1`, `true`, `yes`, or `on`, ignoring case and surrounding spaces.
 
-Set `DASHBOARD_MOCK_DATA=true` to serve a synthetic cluster instead of proxying
-the orchestrator, so the console can be developed and demoed without Docker,
-PostgreSQL, Redis or a running orchestrator:
+The root Compose stack sets `ORCHESTRATOR_URL=http://orchestrator:8080` and disables mock mode.
+Published dashboard address and port are Compose-only values documented in
+[`docs/ENVIRONMENT.md`](../docs/ENVIRONMENT.md).
+
+## Local development
+
+From `dashboard/`:
 
 ```powershell
-"DASHBOARD_MOCK_DATA=true" | Add-Content .env.local
+bun install --frozen-lockfile
+Copy-Item .env.example .env.local
 bun run dev
 ```
 
-The sidebar shows a `Synthetic data` marker whenever the flag is on. The world
-is rebuilt from a fixed seed on every request, so identifiers stay stable across
-refreshes while ages, deadlines and queue waits keep ticking. It covers four
-groups (a hub, two live minigames and a disabled one), healthy and degraded
-instances, running and stalled sessions, populated queues, and deterministic
-monitoring series with alerts. Host maintenance requests return success in this mode but do not
-persist between requests. See `src/lib/mock-data.ts`.
+The console listens on `http://localhost:3000`.
+
+Run the orchestrator on `http://localhost:8080`, or enable synthetic data in `.env.local`:
+
+```dotenv
+DASHBOARD_MOCK_DATA=true
+```
+
+The sidebar displays a `Synthetic data` marker while mock mode is active.
+
+## Synthetic cluster
+
+`src/lib/mock-data.ts` builds a fixed cluster on every request. Identifiers stay stable across
+refreshes, while ages, deadlines, queue waits, and monitoring timestamps move with the current
+time.
+
+The data covers hub and minigame groups, a disabled group, healthy and degraded hosts, warm and
+reserved instances, running and stalled sessions, populated queues, startup retry states,
+monitoring series, and operational incidents.
+
+Maintenance and retry actions return a successful response in synthetic mode but do not persist
+between requests. The next request rebuilds the fixed cluster.
+
+Use mock mode for component work, screenshots, demos, and Playwright. Use a real orchestrator for
+transaction, deadline, and action behavior.
+
+## Time display
+
+`src/lib/clock.ts` owns one server-relative clock:
+
+- It anchors to the orchestrator's `generatedAt` timestamp instead of trusting the browser clock.
+- It advances once per second without issuing a request every second.
+- It re-anchors when a newer response arrives and ignores responses that would move time backward.
+- The API layer synchronizes the clock before React renders the response.
+- `Elapsed`, `RelativeTime`, and `Countdown` subscribe independently, so only live time cells
+  rerender each second.
+
+Timeline counters continue while query auto-refresh is paused. The client never invents a business
+deadline from entity state. It renders `activeDeadline` from the versioned instance and session
+contracts.
+
+Rendered `<time>` elements retain the exact UTC timestamp in `dateTime` and their hover title.
+
+## UI structure
+
+| Path | Role |
+| --- | --- |
+| `src/app/` | Next.js pages, layout, global styles, and server route handlers |
+| `src/components/` | Operational components shared across pages |
+| `src/components/ui/` | shadcn/ui primitives managed by the CLI |
+| `src/lib/api.ts` | Browser-facing data functions and clock synchronization |
+| `src/lib/contracts.ts` | Dashboard view contracts |
+| `src/lib/orchestrator-proxy.ts` | Server-side upstream boundary and timeout |
+| `src/lib/mock-data.ts` | Deterministic synthetic cluster |
+| `test/` | Bun unit and route tests |
+| `e2e/` | Playwright browser suite |
+
+The UI was initialized from shadcn preset `b0`, which uses the `base-nova` style, a neutral base
+color, Inter, and Lucide icons. Inspect the preset with:
+
+```powershell
+npx shadcn@latest preset decode b0
+```
+
+Add or update primitives through the CLI when possible:
+
+```powershell
+npx shadcn@latest add <component>
+```
+
+`src/app/globals.css` adds semantic success, warning, and information colors for both themes.
+`src/lib/status.ts` maps contract states to visual tones. Light and dark themes follow the system
+preference by default and can be changed from the header.
 
 ## Validation
+
+Run static checks, unit tests, and a production build:
 
 ```powershell
 bun run lint
 bun run typecheck
 bun test
-bun run test:e2e
 bun run build
 ```
 
-`bun test` covers the clock, timeline, topology and variant layout builders, formatting helpers,
-monitoring charts and synthetic cluster coherence. The Playwright suite builds the app and
-runs it on port 3100 with `DASHBOARD_MOCK_DATA=true`, covering desktop Chromium
-and a mobile viewport; browsers are installed with `npx playwright install
-chromium`.
+Install Chromium once, then run the browser suite:
+
+```powershell
+npx playwright install chromium
+bun run test:e2e
+```
+
+Playwright builds the dashboard and starts it on port 3100 with synthetic data. It runs desktop
+Chromium and a mobile viewport.
+
+See [the project test reference](../docs/TEST.md) for the full repository validation sequence.

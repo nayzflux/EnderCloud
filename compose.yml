@@ -1,11 +1,25 @@
 name: endercloud
 
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  init: true
+  stop_grace_period: 20s
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "5"
+  networks:
+    - endercloud
+
 services:
   postgres:
+    <<: *service-defaults
     image: postgres:18.1-alpine
-    restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-endercloud}
+      POSTGRES_USER: ${POSTGRES_USER:-endercloud}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -13,107 +27,107 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    networks:
-      - endercloud
 
   redis:
+    <<: *service-defaults
     image: redis:8.4.0-alpine
-    restart: unless-stopped
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
-    networks:
-      - endercloud
 
   orchestrator:
+    <<: *service-defaults
     build:
       context: ./orchestrator
-    restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      REDIS_URL: redis://redis:6379
+      ORCHESTRATOR_LISTEN_PORT: 8080
+      ORCHESTRATOR_GROUPS_DIRECTORY: /data/groups
+      ORCHESTRATOR_TEMPLATES_DIRECTORY: /data/templates
+      ORCHESTRATOR_LOG_LEVEL: ${ORCHESTRATOR_LOG_LEVEL:-info}
+      INSTANCE_START_CONCURRENCY: ${INSTANCE_START_CONCURRENCY:-4}
+      INSTANCE_START_RETRY_LIMIT: ${INSTANCE_START_RETRY_LIMIT:-5}
+      INSTANCE_START_RETRY_BASE_DELAY: ${INSTANCE_START_RETRY_BASE_DELAY:-1s}
+      SCHEDULER_CAPACITY_INTERVAL: ${SCHEDULER_CAPACITY_INTERVAL:-5s}
+      SCHEDULER_MATCHMAKING_INTERVAL: ${SCHEDULER_MATCHMAKING_INTERVAL:-1s}
+      SCHEDULER_RECONCILIATION_INTERVAL: ${SCHEDULER_RECONCILIATION_INTERVAL:-5s}
+      SCHEDULER_INCIDENT_INTERVAL: ${SCHEDULER_INCIDENT_INTERVAL:-5s}
+      HOST_OFFLINE_TIMEOUT: ${HOST_OFFLINE_TIMEOUT:-30s}
+      EXECUTOR_PROBE_TIMEOUT: ${EXECUTOR_PROBE_TIMEOUT:-3s}
+      EXECUTOR_OPERATION_TIMEOUT: ${EXECUTOR_OPERATION_TIMEOUT:-10m}
     volumes:
       - ./groups:/data/groups:ro
       - ./templates:/data/templates:ro
-    expose:
-      - "8080"
     ports:
-      - "8080:8080"
+      - "${ORCHESTRATOR_PUBLISH_ADDRESS:-127.0.0.1}:${ORCHESTRATOR_PUBLISH_PORT:-8080}:8080"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
-      test:
-        [
-          "CMD",
-          "bun",
-          "-e",
-          "const r=await fetch('http://localhost:8080/health/ready');process.exit(r.ok?0:1)",
-        ]
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://localhost:8080/health/ready');process.exit(r.ok?0:1)"]
       interval: 10s
       timeout: 3s
       retries: 12
-    networks:
-      - endercloud
 
   agent:
+    <<: *service-defaults
     build:
       context: ./orchestrator
     command: ["bun", "src/agent/index.ts"]
-    restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      AGENT_ID: ${AGENT_ID:?Set a stable AGENT_ID}
+      AGENT_VERSION: ${AGENT_VERSION:-0.1.0}
+      AGENT_LISTEN_PORT: 8090
+      AGENT_ADVERTISED_CONTROL_URL: http://agent:8090
+      AGENT_ADVERTISED_GAME_ADDRESS: ${AGENT_ADVERTISED_GAME_ADDRESS:?Set the game address}
+      AGENT_ALLOCATABLE_CPU: ${AGENT_ALLOCATABLE_CPU:?Set allocatable vCPU}
+      AGENT_ALLOCATABLE_MEMORY_BYTES: ${AGENT_ALLOCATABLE_MEMORY_BYTES:?Set allocatable memory}
+      AGENT_HEARTBEAT_INTERVAL: ${AGENT_HEARTBEAT_INTERVAL:-5s}
+      AGENT_GAME_PORT_START: ${AGENT_GAME_PORT_START:-25565}
+      AGENT_GAME_PORT_END: ${AGENT_GAME_PORT_END:-25664}
+      AGENT_LOG_LEVEL: ${AGENT_LOG_LEVEL:-info}
+      ORCHESTRATOR_URL: http://orchestrator:8080
+      AGENT_DOCKER_SOCKET: /var/run/docker.sock
+      AGENT_DOCKER_NETWORK: endercloud
+      AGENT_RUNTIME_DIRECTORY: /data/runtime
+      AGENT_RUNTIME_HOST_DIRECTORY: ${AGENT_RUNTIME_HOST_DIRECTORY:?Set the runtime path seen by Docker}
+      AGENT_TEMPLATE_CACHE_DIRECTORY: /data/template-cache
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./runtime:/data/runtime
+      - ${AGENT_RUNTIME_LOCAL_DIRECTORY:?Set the local runtime directory}:/data/runtime
       - agent-template-cache:/data/template-cache
-    expose:
-      - "8090"
     depends_on:
       orchestrator:
         condition: service_healthy
     healthcheck:
-      test:
-        [
-          "CMD",
-          "bun",
-          "-e",
-          "const r=await fetch('http://localhost:8090/health/live');process.exit(r.ok?0:1)",
-        ]
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://localhost:8090/health/ready');process.exit(r.ok?0:1)"]
       interval: 10s
       timeout: 3s
       retries: 12
-    networks:
-      - endercloud
 
   dashboard:
+    <<: *service-defaults
     build:
       context: ./dashboard
-    restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      ORCHESTRATOR_URL: http://orchestrator:8080
+      DASHBOARD_MOCK_DATA: "false"
     ports:
-      - "3000:3000"
+      - "${DASHBOARD_PUBLISH_ADDRESS:-127.0.0.1}:${DASHBOARD_PUBLISH_PORT:-3000}:3000"
     depends_on:
       orchestrator:
         condition: service_healthy
     healthcheck:
-      test:
-        [
-          "CMD",
-          "bun",
-          "-e",
-          "const r=await fetch('http://localhost:3000');process.exit(r.ok?0:1)",
-        ]
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://localhost:3000');process.exit(r.ok?0:1)"]
       interval: 10s
       timeout: 3s
       retries: 12
-    networks:
-      - endercloud
 
 volumes:
   postgres-data:

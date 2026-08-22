@@ -1,6 +1,24 @@
-# Tests
+# Test reference
 
-Install each dependency set once before running the checks:
+Run tests from the package directory shown below. The repository does not have one root test
+command because Bun and Gradle manage separate dependency graphs.
+
+## Test matrix
+
+| Area | Command | Docker required | Main coverage |
+| --- | --- | :---: | --- |
+| Orchestrator static check | `bun run typecheck` | No | TypeScript contracts and imports |
+| Orchestrator unit | `bun run test:unit` | No | Domain rules, configuration, API, scheduler, logger, executors, and startup policy |
+| Orchestrator integration | `bun run test:integration` | Yes by default | PostgreSQL transactions, controllers, workers, incidents, and simulations |
+| Java plugins | Gradle build and check tasks | No | JSON fixtures, client contracts, and Velocity endpoint parsing |
+| Dashboard static checks | `bun run lint` and `bun run typecheck` | No | ESLint, React, Next.js, and TypeScript |
+| Dashboard unit | `bun test` | No | Data shaping, clock, timeline, topology, monitoring, mock data, and route behavior |
+| Dashboard end to end | `bun run test:e2e` | No | Built dashboard in desktop and mobile Chromium using synthetic data |
+| Deployment smoke | Two-agent Compose stack | Yes | Orchestrator-to-agent HTTP path, ownership labels, placement, and port ranges |
+
+## Install dependencies
+
+Install each dependency set once:
 
 ```powershell
 cd orchestrator
@@ -9,70 +27,171 @@ bun install --frozen-lockfile
 cd ../dashboard
 bun install --frozen-lockfile
 
-cd ..
+cd ../plugins
+.\gradlew.bat help
 ```
 
-## Orchestrator
+On Linux or macOS, use `./gradlew`.
 
-Run the fast checks from `orchestrator/`. These do not start Docker:
+## Orchestrator checks
+
+Run the fast checks from `orchestrator/`:
 
 ```powershell
 bun run typecheck
 bun run test:unit
 ```
 
-The integration suite starts a disposable PostgreSQL container with Testcontainers. It covers
-matchmaking, concurrent placement, two fake HTTP agents, host recovery, maintenance, hub renewal,
-monitoring and a 50-player simulation:
+These commands do not start Docker.
+
+The integration suite uses Testcontainers to start a disposable PostgreSQL server:
 
 ```powershell
 bun run test:integration
 ```
 
-Docker Desktop or another Testcontainers-compatible runtime must be available. On Windows, use
-WSL when Testcontainers cannot reach the native Docker socket. `bun test` runs both unit and
-integration tests, so it also needs Docker.
+Docker Desktop or another Testcontainers-compatible runtime must be available. If native Windows
+socket discovery fails, run the suite from WSL with Docker integration enabled.
 
-## Java plugins
+`bun test` runs both unit and integration directories:
 
-From `plugins/`, run the Java tests and produce the three documented artifacts without invoking
-the project-specific copy tasks attached to `build`:
+```powershell
+bun test
+```
+
+It therefore needs Docker unless `TEST_DATABASE_URL` points to a reachable dedicated test
+database. Never point that variable at a production or shared development database.
+
+Generate Bun's coverage report with:
+
+```powershell
+bun run test:coverage
+```
+
+## Java plugin checks
+
+From `plugins/`, run:
 
 ```powershell
 .\gradlew.bat :core:build :paper:check :velocity:check :paper:shadowJar :velocity:shadowJar
 ```
 
-On Linux or macOS, use `./gradlew` with the same tasks. The output JARs are under each module's
-`build/libs/` directory. Paper and Velocity produce shaded JARs. Core produces the compile-time
-API and client JAR.
+This command compiles for Java 25, runs JUnit tests, validates the Paper and Velocity modules, and
+produces all three documented JARs.
 
-## Dashboard
+The shared fixture test reads `contracts/fixtures/` through the Gradle
+`endercloud.contracts.dir` system property. Keep fixture changes compatible with the TypeScript
+and Java representations.
 
-Run the dashboard checks from `dashboard/`:
+The Paper and Velocity shaded JARs are under their module `build/libs/` directories. Core produces
+the compile-time client and API JAR.
+
+Use `./gradlew` with the same tasks on Linux or macOS.
+
+## Dashboard checks
+
+Run these commands from `dashboard/`:
 
 ```powershell
-bun run typecheck
 bun run lint
+bun run typecheck
 bun test
 bun run build
 ```
 
-Install Chromium once before the browser suite, then run it:
+Unit tests do not require the orchestrator. Route tests enable synthetic data or mock their
+upstream boundary.
+
+Install Chromium once, then run the browser suite:
 
 ```powershell
 npx playwright install chromium
 bun run test:e2e
 ```
 
-Playwright builds the dashboard itself and starts it on port `3100` with
-`DASHBOARD_MOCK_DATA=true`. It does not need the orchestrator or Docker.
+Playwright builds the dashboard and starts it on port 3100 with `DASHBOARD_MOCK_DATA=true`. The
+suite covers desktop Chromium and a mobile viewport.
 
-## Deployment smoke test
+If port 3100 is already in use, stop the conflicting process before rerunning the suite.
 
-After the automated checks pass, validate a real local two-agent control path with the Compose
-scenario in [`MULTI_HOST.md`](MULTI_HOST.md). Run it from the repository root. This test creates
-containers and published game ports. Stop the stack when the check is complete:
+## Full local validation
+
+From the repository root, the complete Windows sequence is:
+
+```powershell
+cd orchestrator
+bun run typecheck
+bun run test:unit
+bun run test:integration
+
+cd ../plugins
+.\gradlew.bat :core:build :paper:check :velocity:check :paper:shadowJar :velocity:shadowJar
+
+cd ../dashboard
+bun run lint
+bun run typecheck
+bun test
+bun run build
+bun run test:e2e
+```
+
+Run independent package checks in separate terminals when you want faster feedback. Do not run
+multiple integration suites against the same `TEST_DATABASE_URL` unless that database is isolated
+per process.
+
+## Compose validation
+
+After changing a Compose file or environment example, validate interpolation without starting
+services:
+
+```powershell
+docker compose config --quiet
+docker compose --env-file .env.agent -f compose.agent.yml config --quiet
+```
+
+These commands still require every variable marked as required. Create local environment files
+from the supplied examples and replace placeholder paths first.
+
+## Two-agent deployment smoke test
+
+`compose.multi-host.test.yml` adds a second agent to the root stack while both agents share the
+local Docker daemon. Configure these values in `.env`:
+
+```dotenv
+SECONDARY_AGENT_GAME_ADDRESS=192.0.2.11
+SECONDARY_AGENT_CPU=4
+SECONDARY_AGENT_MEMORY_BYTES=8589934592
+SECONDARY_RUNTIME_HOST_ROOT=/absolute/path/to/EnderCloud/runtime-secondary
+```
+
+Start the combined stack:
+
+```powershell
+docker compose -f compose.yml -f compose.multi-host.test.yml up --build
+```
+
+Check that both hosts become `ONLINE`, instances receive the expected host IDs, their published
+ports come from separate ranges, and the dashboard can drain and reactivate the secondary host.
+
+Stop the exact same file set after the test:
 
 ```powershell
 docker compose -f compose.yml -f compose.multi-host.test.yml down
 ```
+
+This is a local control-path test. It does not validate routing or firewalls between physical
+hosts. See [Multi-host execution](MULTI_HOST.md) for that procedure.
+
+## What to run for common changes
+
+| Change | Minimum checks before full validation |
+| --- | --- |
+| Pure domain rule | Orchestrator typecheck and focused unit test |
+| Database schema or transaction | Orchestrator unit and integration suites |
+| Agent Docker behavior | Executor unit tests and two-agent smoke test |
+| HTTP contract | Orchestrator API and contract tests, Java core build, affected dashboard tests |
+| Paper or Velocity code | Relevant Gradle module check plus core build |
+| Dashboard component | Dashboard lint, typecheck, focused unit test, and affected Playwright path |
+| Group or template configuration | Orchestrator configuration tests and a real startup synchronization |
+| Environment or Compose change | Configuration unit tests and both Compose config checks |
+| Documentation only | Markdown link check and review every command against current package scripts |

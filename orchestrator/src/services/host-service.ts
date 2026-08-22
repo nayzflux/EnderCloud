@@ -4,6 +4,7 @@ import { events, executionHosts, serverInstances } from "../db/schema.ts";
 import { selectExecutionHost } from "../domain/host-placement.ts";
 import type { VariantRuntimeSpec } from "../domain/types.ts";
 import { nanoid } from "../id.ts";
+import type { Logger } from "../logger.ts";
 
 export interface HostHeartbeat {
   readonly controlUrl: string;
@@ -63,7 +64,10 @@ export type HostPlacementResult =
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 export class HostService {
-  public constructor(private readonly db: Database) {}
+  public constructor(
+    private readonly db: Database,
+    private readonly logger?: Logger,
+  ) {}
 
   public async heartbeat(hostId: string, heartbeat: HostHeartbeat): Promise<void> {
     await this.db.insert(executionHosts).values({
@@ -90,6 +94,12 @@ export class HostService {
         updatedAt: sql`now()`,
       },
     });
+    this.logger?.debug("host.heartbeat.received", "Execution host heartbeat received", {
+      hostId,
+      allocatableCpu: heartbeat.allocatableCpu,
+      allocatableMemoryBytes: heartbeat.allocatableMemoryBytes,
+      agentVersion: heartbeat.agentVersion,
+    });
   }
 
   public async getTarget(hostId: string): Promise<ExecutionHostTarget> {
@@ -112,12 +122,18 @@ export class HostService {
   }
 
   public async markOnline(hostId: string): Promise<void> {
-    await this.db.update(executionHosts).set({
+    const changed = await this.db.update(executionHosts).set({
       healthState: "ONLINE",
       lastControlContactAt: sql`now()`,
       lastError: null,
       updatedAt: sql`now()`,
-    }).where(eq(executionHosts.id, hostId));
+    }).where(and(
+      eq(executionHosts.id, hostId),
+      ne(executionHosts.healthState, "ONLINE"),
+    )).returning({ id: executionHosts.id });
+    if (changed.length > 0) {
+      this.logger?.info("host.online", "Execution host is online", { hostId });
+    }
   }
 
   public async markOffline(hostId: string, error: string): Promise<boolean> {
@@ -129,6 +145,9 @@ export class HostService {
       eq(executionHosts.id, hostId),
       ne(executionHosts.healthState, "OFFLINE"),
     )).returning({ id: executionHosts.id });
+    if (changed.length > 0) {
+      this.logger?.warn("host.offline", "Execution host is offline", { hostId, reason: error });
+    }
     return changed.length > 0;
   }
 
@@ -160,6 +179,7 @@ export class HostService {
         type: "HOST_DRAIN_REQUESTED",
         payload: {},
       });
+      this.logger?.info("host.drain.requested", "Execution host drain requested", { hostId });
       return true;
     });
   }
@@ -182,6 +202,7 @@ export class HostService {
         type: "HOST_ACTIVATED",
         payload: {},
       });
+      this.logger?.info("host.activated", "Execution host activated", { hostId });
       return true;
     });
   }
@@ -203,6 +224,7 @@ export class HostService {
         type: "HOST_MAINTENANCE_STARTED",
         payload: {},
       });
+      this.logger?.info("host.maintenance.started", "Execution host entered maintenance", { hostId });
     });
   }
 
@@ -265,13 +287,33 @@ export class HostService {
       candidates,
       { cpu: runtime.cpu, memoryBytes: runtime.memoryBytes },
     );
-    if (selected) return { status: "PLACED", hostId: selected.id };
+    if (selected) {
+      this.logger?.debug("placement.selected", "Execution host selected for placement", {
+        groupId: groupCapacity?.groupId,
+        hostId: selected.id,
+        requestedCpu: runtime.cpu,
+        requestedMemoryBytes: runtime.memoryBytes,
+        candidates: candidates.map((host) => ({
+          hostId: host.id,
+          freeCpu: host.allocatableCpu - host.reservedCpu,
+          freeMemoryBytes: host.allocatableMemoryBytes - host.reservedMemoryBytes,
+        })),
+      });
+      return { status: "PLACED", hostId: selected.id };
+    }
     const evidence = candidates.map((host) => ({
       hostId: host.id,
       freeCpu: host.allocatableCpu - host.reservedCpu,
       freeMemoryBytes: host.allocatableMemoryBytes - host.reservedMemoryBytes,
     }));
     const cause = classifyPlacementBlock(evidence, runtime);
+    this.logger?.debug("placement.blocked", "Execution host placement blocked", {
+      groupId: groupCapacity?.groupId,
+      cause,
+      requestedCpu: runtime.cpu,
+      requestedMemoryBytes: runtime.memoryBytes,
+      candidates: evidence,
+    });
     return {
       status: "BLOCKED",
       cause,

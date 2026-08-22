@@ -1,6 +1,5 @@
-import type { AppConfig } from "../config.ts";
 import type { Database } from "../db/client.ts";
-import { sql, and, eq, inArray, isNotNull, lt, notInArray } from "drizzle-orm";
+import { sql, and, eq, inArray, isNotNull, lt, notInArray, or } from "drizzle-orm";
 import {
   gameSessions,
   instancePlayers,
@@ -9,7 +8,6 @@ import {
   sessionPlayers,
   transferCommands,
 } from "../db/schema.ts";
-import { shouldRetryFailedSession } from "../domain/session-recovery.ts";
 import type { SessionState } from "../domain/types.ts";
 import type { Logger } from "../logger.ts";
 import type { InstanceController } from "./instance-controller.ts";
@@ -34,7 +32,6 @@ export class SessionController {
     private readonly instances: InstanceController,
     private readonly transfers: TransferService,
     private readonly hubs: HubRouter,
-    private readonly config: AppConfig,
     private readonly logger: Logger,
   ) {}
 
@@ -57,9 +54,9 @@ export class SessionController {
         try {
           await task();
         } catch (error) {
-          this.logger.error("Session tick stage failed", {
+          this.logger.error("session.tick_stage.failed", "Session tick stage failed", {
             stage,
-            error: String(error),
+            error,
           });
         }
       }
@@ -116,7 +113,7 @@ export class SessionController {
     for (const session of sessions) {
       if (session.state === "WAITING_FOR_INSTANCE") {
         if (session.instance_acquisition_deadline_reached) {
-          this.logger.info("Session timed out while waiting for an instance", {
+          this.logger.info("session.instance_wait.expired", "Session timed out while waiting for an instance", {
             sessionId: session.id,
           });
           await this.cancel(session.id, null);
@@ -126,7 +123,7 @@ export class SessionController {
       // Only the plugin decides whether a game may start. This is solely a
       // watchdog for a lobby that never progressed to GAME_STARTING.
       if (session.lobby_stale_deadline_reached) {
-        this.logger.info("Lobby stale deadline reached before game start", {
+        this.logger.info("session.lobby_stale.expired", "Lobby stale deadline reached before game start", {
           sessionId: session.id,
           connectedPlayers: session.connected_players,
         });
@@ -198,20 +195,25 @@ export class SessionController {
     }
   }
 
-  // Retry safe pre-start failures or fail sessions that can no longer be reassigned.
+  // Requeue safe pre-start failures or fail sessions that can no longer be reassigned.
   private async recoverFailedInstances(): Promise<void> {
     const failures = await this.db.select({
       session_id: gameSessions.id,
       instance_id: serverInstances.id,
       session_state: gameSessions.state,
-      retry_count: gameSessions.retryCount,
       connected_players: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} = 'CONNECTED')::int`,
     })
     .from(gameSessions)
     .innerJoin(serverInstances, eq(serverInstances.id, gameSessions.instanceId))
     .leftJoin(sessionPlayers, eq(sessionPlayers.sessionId, gameSessions.id))
     .where(and(
-      eq(serverInstances.lifecycleState, "FAILED"),
+      or(
+        eq(serverInstances.lifecycleState, "FAILED"),
+        and(
+          eq(serverInstances.lifecycleState, "STOPPED"),
+          isNotNull(serverInstances.failureReason),
+        ),
+      ),
       notInArray(gameSessions.state, ["FINISHED", "CANCELLED", "FAILED"])
     ))
     .groupBy(gameSessions.id, serverInstances.id) as unknown as 
@@ -219,23 +221,20 @@ export class SessionController {
         session_id: string;
         instance_id: string;
         session_state: SessionState;
-        retry_count: number;
         connected_players: number;
       }[];
     // Each failed instance owns at most one active session, so recover them independently.
     for (const failure of failures) {
-      if (
-        shouldRetryFailedSession(
-          failure.session_state,
-          failure.connected_players,
-          failure.retry_count,
-          this.config.maxInstanceRetries,
-        )
-      ) {
-        this.logger.warn("Retrying session after pre-start instance failure", {
+      const preStart = (
+        failure.session_state === "FORMING" ||
+        failure.session_state === "WAITING_FOR_INSTANCE" ||
+        failure.session_state === "TRANSFERRING" ||
+        failure.session_state === "WAITING"
+      ) && failure.connected_players === 0;
+      if (preStart) {
+        this.logger.warn("session.instance.released", "Session returned to instance waiting after a startup failure", {
           sessionId: failure.session_id,
           instanceId: failure.instance_id,
-          retry: failure.retry_count + 1,
         });
         await this.transfers.cancelForInstance(failure.instance_id);
         // Reset the session and its players atomically so no observer sees mixed retry state.
@@ -245,11 +244,7 @@ export class SessionController {
               state: "WAITING_FOR_INSTANCE",
               instanceId: null,
               transferStartedAt: null,
-              instanceAcquisitionDeadline: sql`now() + (
-                (SELECT instance_acquisition_timeout_ms FROM server_groups WHERE id = ${gameSessions.groupId}) * interval '1 millisecond'
-              )`,
               lobbyStaleDeadline: null,
-              retryCount: sql`${gameSessions.retryCount} + 1`,
               updatedAt: sql`now()`
             })
             .where(eq(gameSessions.id, failure.session_id));
@@ -261,7 +256,7 @@ export class SessionController {
             ));
         });
       } else {
-        this.logger.warn("Failing session after active instance failure", {
+        this.logger.warn("session.instance.failed", "Session failed after losing its active instance", {
           sessionId: failure.session_id,
           instanceId: failure.instance_id,
           state: failure.session_state,
@@ -272,8 +267,6 @@ export class SessionController {
           .where(eq(gameSessions.id, failure.session_id));
         await this.transfers.cancelForInstance(failure.instance_id);
       }
-      // Cleanup happens after the session is detached or failed, making retries safe.
-      await this.instances.stopAndDelete(failure.instance_id);
     }
   }
 

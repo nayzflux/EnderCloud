@@ -10,6 +10,7 @@ import { nanoid } from "../id.ts";
 import type { HostService } from "../services/host-service.ts";
 import type { TemplateArchiveService } from "../services/template-archive-service.ts";
 import type { IncidentController } from "../services/incident-controller.ts";
+import type { VariantStartController } from "../services/variant-start-controller.ts";
 
 const playerUuid = t.String({ format: "uuid" });
 const internalId = t.String({ pattern: "^[A-Za-z0-9]{16}$" });
@@ -64,6 +65,7 @@ export interface ApiDependencies {
   readonly hosts: HostService;
   readonly templates: TemplateArchiveService;
   readonly incidents: IncidentController;
+  readonly startup?: VariantStartController;
   readonly logger: Logger;
   readonly isReady: () => boolean;
 }
@@ -83,15 +85,21 @@ export function createApp(dependencies: ApiDependencies) {
       }),
     )
     .onRequest(({ request, store }) => {
-      (store as { requestId?: string }).requestId =
-        request.headers.get("x-request-id") ?? nanoid();
+      const context = store as { requestId?: string; startedAt?: number };
+      context.requestId = request.headers.get("x-request-id") ?? nanoid();
+      context.startedAt = performance.now();
+      dependencies.logger.enterContext({ requestId: context.requestId });
     })
     .onAfterHandle(({ set, store }) => {
-      set.headers["x-request-id"] = (store as { requestId?: string }).requestId ?? "";
+      const context = store as { requestId?: string; startedAt?: number };
+      set.headers["x-request-id"] = context.requestId ?? "";
     })
     .onError(({ error, code, set, store }) => {
-      const requestId = (store as { requestId?: string }).requestId;
+      const requestStore = store as { requestId?: string; requestError?: unknown };
+      const requestId = requestStore.requestId;
+      requestStore.requestError = error;
       const message = error instanceof Error ? error.message : String(error);
+      set.headers["x-request-id"] = requestId ?? "";
       if (code === "VALIDATION") {
         set.status = 400;
         return { error: "VALIDATION_ERROR", message, requestId };
@@ -100,9 +108,29 @@ export function createApp(dependencies: ApiDependencies) {
         set.status = 409;
         return { error: "CONFLICT", message, requestId };
       }
-      dependencies.logger.error("API request failed", { code, message, requestId });
       set.status = 500;
       return { error: "INTERNAL_ERROR", message: "Internal server error", requestId };
+    })
+    .onAfterResponse(({ request, route, set, store }) => {
+      const context = store as { requestId?: string; startedAt?: number; requestError?: unknown };
+      const status = typeof set.status === "number" ? set.status : 200;
+      const fields = {
+        requestId: context.requestId,
+        method: request.method,
+        route,
+        status,
+        durationMs: Math.round(performance.now() - (context.startedAt ?? performance.now())),
+        outcome: status >= 500 ? "failure" : "success",
+      };
+      if (status >= 500) {
+        dependencies.logger.error("orchestrator.request.server_error", "Orchestrator API request returned a server error", {
+          ...fields,
+          error: context.requestError,
+        });
+      }
+      dependencies.logger.debug("orchestrator.request.completed", "Orchestrator API request completed", {
+        ...fields,
+      });
     })
     .get("/health/live", () => ({ status: "UP" }), {
       detail: { tags: ["Health"] },
@@ -207,7 +235,6 @@ export function createApp(dependencies: ApiDependencies) {
                 t.Literal("HOST_UNAVAILABLE"),
                 t.Literal("HOST_RECOVERY_STUCK"),
                 t.Literal("HOST_MAINTENANCE_BLOCKED"),
-                t.Literal("SESSION_RETRIES_EXHAUSTED"),
                 t.Literal("TRANSFER_FAILURE_LOOP"),
                 t.Literal("COMMAND_FAILURE_LOOP"),
                 t.Literal("CONTROL_LOOP_FAILURE"),
@@ -345,6 +372,47 @@ export function createApp(dependencies: ApiDependencies) {
               tags: ["Dashboard"],
               summary: "Read tickets, feasible profiles and transfers for a game session",
             },
+          },
+        )
+        .post(
+          "/groups/:groupId/variants/:variantId/revisions/:revision/startup-retry",
+          async ({ params, set, store }) => {
+            if (!dependencies.startup) {
+              set.status = 503;
+              return { error: "UNAVAILABLE", message: "Startup retry controller is unavailable" };
+            }
+            const result = await dependencies.startup.requestReset(
+              params.groupId,
+              params.variantId,
+              Number.parseInt(params.revision, 10),
+            );
+            if (result.status === "NOT_FOUND") {
+              set.status = 404;
+              return {
+                error: "NOT_FOUND",
+                message: "Variant revision was not found",
+                requestId: (store as { requestId?: string }).requestId,
+              };
+            }
+            if (result.status === "CONFLICT") {
+              set.status = 409;
+              return {
+                error: "CONFLICT",
+                message: "Variant revision is not blocked",
+                startup: result.startup,
+                requestId: (store as { requestId?: string }).requestId,
+              };
+            }
+            set.status = 202;
+            return result.startup;
+          },
+          {
+            params: t.Object({
+              groupId,
+              variantId: groupId,
+              revision: t.String({ pattern: "^[1-9][0-9]*$" }),
+            }),
+            detail: { tags: ["Dashboard"], summary: "Reset a blocked variant startup policy" },
           },
         )
         .post(

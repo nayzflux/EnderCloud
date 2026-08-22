@@ -46,6 +46,24 @@ export function firstAvailablePort(
   return null;
 }
 
+export function decodeDockerLogBuffer(buffer: Buffer): Buffer {
+  const chunks: Buffer[] = [];
+  let offset = 0;
+  while (offset + 8 <= buffer.length) {
+    const stream = buffer[offset];
+    if ((stream !== 0 && stream !== 1 && stream !== 2) ||
+      buffer[offset + 1] !== 0 || buffer[offset + 2] !== 0 || buffer[offset + 3] !== 0) {
+      return buffer;
+    }
+    const length = buffer.readUInt32BE(offset + 4);
+    const frameEnd = offset + 8 + length;
+    if (frameEnd > buffer.length) return buffer;
+    chunks.push(buffer.subarray(offset + 8, frameEnd));
+    offset = frameEnd;
+  }
+  return chunks.length > 0 && offset === buffer.length ? Buffer.concat(chunks) : buffer;
+}
+
 export async function materializeLayers(
   layers: InstanceSpec["templateLayers"],
   destination: string,
@@ -81,12 +99,7 @@ export class LocalDockerExecutor implements Executor {
 
   // Materialize a template, create its container, and return the proxy endpoint.
   public async createInstance(spec: InstanceSpec): Promise<CreatedInstance> {
-    const operation = this.creationQueue.then(() => this.createInstanceLocked(spec));
-    this.creationQueue = operation.then(() => undefined, () => undefined);
-    return operation;
-  }
-
-  private async createInstanceLocked(spec: InstanceSpec): Promise<CreatedInstance> {
+    const startedAt = performance.now();
     this.assertHost(spec.hostId);
     const existing = await this.findByInstanceId(spec.instanceId);
     const runtimePath = join(this.config.runtimeRoot, "instances", spec.instanceId);
@@ -95,6 +108,10 @@ export class LocalDockerExecutor implements Executor {
     if (existing) {
       // Reuse the labeled container to make CREATE safe to retry after crashes.
       if (existing.State !== "running") await this.docker.getContainer(existing.Id).start();
+      this.logger.debug("docker.instance.reused", "Existing managed container reused", {
+        instanceId: spec.instanceId,
+        containerId: existing.Id,
+      });
       return {
         containerId: existing.Id,
         runtimePath,
@@ -103,6 +120,7 @@ export class LocalDockerExecutor implements Executor {
     }
 
     // Rebuild runtime data from the immutable template to avoid leftovers from failed attempts.
+    const materializationStartedAt = performance.now();
     const instancesRoot = join(this.config.runtimeRoot, "instances");
     await mkdir(instancesRoot, { recursive: true });
     const stagingPath = await mkdtemp(join(instancesRoot, `${spec.instanceId}-staging-`));
@@ -114,43 +132,67 @@ export class LocalDockerExecutor implements Executor {
       await rm(stagingPath, { recursive: true, force: true }).catch(() => undefined);
       throw error;
     }
-    await this.ensureImage(spec.runtime.image);
-    const hostPort = await this.allocatePort();
-
-    // Labels are the durable ownership metadata used for discovery after orchestrator restarts.
-    const labels: Record<string, string> = {
-      "orchestrator.managed": "true",
-      "orchestrator.instance-id": spec.instanceId,
-      "orchestrator.group-id": spec.groupId,
-      "orchestrator.variant-id": spec.variantId,
-      "orchestrator.host-id": spec.hostId,
-      "orchestrator.host-port": String(hostPort),
-    };
-    if (spec.sessionId) labels["orchestrator.session-id"] = spec.sessionId;
-    // Explicit request values override variant defaults, then orchestrator identity is enforced.
-    const env = {
-      ...spec.runtime.environment,
-      ...spec.environment,
-      ENDERCLOUD_INSTANCE_ID: spec.instanceId,
-      ENDERCLOUD_ORCHESTRATOR_URL: this.config.publicUrl,
-    };
-    const container = await this.docker.createContainer({
-      name,
-      Image: spec.runtime.image,
-      Env: Object.entries(env).map(([key, value]) => `${key}=${value}`),
-      Labels: labels,
-      ExposedPorts: { "25565/tcp": {} },
-      HostConfig: {
-        AutoRemove: false,
-        Binds: [`${hostRuntimePath}:/data`],
-        Memory: spec.runtime.memoryBytes,
-        NanoCpus: Math.round(spec.runtime.cpu * 1_000_000_000),
-        NetworkMode: this.config.dockerNetwork,
-        PortBindings: {
-          "25565/tcp": [{ HostIp: "0.0.0.0", HostPort: String(hostPort) }],
-        },
-      },
+    this.logger.debug("docker.runtime.materialized", "Instance runtime materialized", {
+      instanceId: spec.instanceId,
+      durationMs: Math.round(performance.now() - materializationStartedAt),
+      layerCount: spec.templateLayers.length,
     });
+    await this.ensureImage(spec.runtime.image);
+    // Only port selection and container creation need serialization. Runtime
+    // materialization and image checks remain concurrent across startup slots.
+    const prepared = await this.withCreationLock(async () => {
+      const concurrentExisting = await this.findByInstanceId(spec.instanceId);
+      if (concurrentExisting) return { existing: concurrentExisting } as const;
+      const hostPort = await this.allocatePort();
+      this.logger.debug("docker.port.allocated", "Game port allocated", {
+        instanceId: spec.instanceId,
+        hostPort,
+      });
+      const labels: Record<string, string> = {
+        "orchestrator.managed": "true",
+        "orchestrator.instance-id": spec.instanceId,
+        "orchestrator.group-id": spec.groupId,
+        "orchestrator.variant-id": spec.variantId,
+        "orchestrator.host-id": spec.hostId,
+        "orchestrator.host-port": String(hostPort),
+      };
+      if (spec.sessionId) labels["orchestrator.session-id"] = spec.sessionId;
+      const env = {
+        ...spec.runtime.environment,
+        ...spec.environment,
+        ENDERCLOUD_INSTANCE_ID: spec.instanceId,
+        ENDERCLOUD_ORCHESTRATOR_URL: this.config.publicUrl,
+      };
+      const container = await this.docker.createContainer({
+        name,
+        Image: spec.runtime.image,
+        Env: Object.entries(env).map(([key, value]) => `${key}=${value}`),
+        Labels: labels,
+        ExposedPorts: { "25565/tcp": {} },
+        HostConfig: {
+          AutoRemove: false,
+          Binds: [`${hostRuntimePath}:/data`],
+          Memory: spec.runtime.memoryBytes,
+          NanoCpus: Math.round(spec.runtime.cpu * 1_000_000_000),
+          NetworkMode: this.config.dockerNetwork,
+          PortBindings: {
+            "25565/tcp": [{ HostIp: "0.0.0.0", HostPort: String(hostPort) }],
+          },
+        },
+      });
+      return { container, hostPort } as const;
+    });
+    if ("existing" in prepared) {
+      if (prepared.existing.State !== "running") {
+        await this.docker.getContainer(prepared.existing.Id).start();
+      }
+      return {
+        containerId: prepared.existing.Id,
+        runtimePath,
+        endpoint: `${this.config.gameAddress}:${this.portFromContainer(prepared.existing)}`,
+      };
+    }
+    const { container, hostPort } = prepared;
     try {
       await container.start();
     } catch (error) {
@@ -158,16 +200,24 @@ export class LocalDockerExecutor implements Executor {
       await container.remove({ force: true }).catch(() => undefined);
       throw error;
     }
-    this.logger.info("Docker instance started", {
+    this.logger.info("docker.instance.started", "Docker instance started", {
       instanceId: spec.instanceId,
       containerId: container.id,
       image: spec.runtime.image,
+      hostPort,
+      durationMs: Math.round(performance.now() - startedAt),
     });
     return {
       containerId: container.id,
       runtimePath,
       endpoint: `${this.config.gameAddress}:${hostPort}`,
     };
+  }
+
+  private async withCreationLock<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.creationQueue.then(operation);
+    this.creationQueue = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   // Gracefully stop a managed container when it is still running.
@@ -190,6 +240,27 @@ export class LocalDockerExecutor implements Executor {
       throw new Error(`Refusing to delete unsafe runtime path for ${target.instanceId}`);
     }
     await rm(runtimePath, { recursive: true, force: true });
+  }
+
+  public async getInstanceLogs(
+    target: InstanceTarget,
+    lines: number,
+    maxBytes: number,
+  ): Promise<string> {
+    this.assertHost(target.hostId);
+    const existing = await this.findByInstanceId(target.instanceId);
+    if (!existing) return "";
+    const output = await this.docker.getContainer(existing.Id).logs({
+      stdout: true,
+      stderr: true,
+      follow: false,
+      tail: Math.max(1, Math.min(lines, 1_000)),
+    });
+    const raw = Buffer.isBuffer(output) ? output : Buffer.from(String(output));
+    const buffer = decodeDockerLogBuffer(raw);
+    return buffer.subarray(Math.max(0, buffer.length - Math.max(1, maxBytes)))
+      .toString("utf8")
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "");
   }
 
   // Delete the exact Docker object observed by reconciliation, then clean its safe runtime path.
@@ -221,7 +292,7 @@ export class LocalDockerExecutor implements Executor {
 
     const runtimePath = this.safeOrphanRuntimePath(instance.instanceId);
     if (!runtimePath) {
-      this.logger.warn("Skipped unsafe orphan runtime directory cleanup", {
+      this.logger.warn("docker.runtime.cleanup_refused", "Skipped unsafe orphan runtime directory cleanup", {
         instanceId: instance.instanceId,
         containerId: instance.containerId,
       });
@@ -341,7 +412,7 @@ export class LocalDockerExecutor implements Executor {
       await this.docker.getImage(image).inspect();
       return;
     } catch {
-      this.logger.info("Pulling Docker image", { image });
+      this.logger.info("docker.image.pull_started", "Pulling Docker image", { image });
     }
     const stream = await this.docker.pull(image);
     await new Promise<void>((resolve, reject) => {
@@ -349,5 +420,6 @@ export class LocalDockerExecutor implements Executor {
         error ? reject(error) : resolve(),
       );
     });
+    this.logger.info("docker.image.pull_completed", "Docker image pull completed", { image });
   }
 }

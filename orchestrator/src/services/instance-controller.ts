@@ -21,6 +21,7 @@ import type {
 } from "../domain/types.ts";
 import type { RedisEventBus } from "../events/redis-bus.ts";
 import type { Executor } from "../executor/executor.ts";
+import { ExecutionHostUnavailableError } from "../executor/executor.ts";
 import type { Logger } from "../logger.ts";
 import { nanoid } from "../id.ts";
 import type { VariantSelector } from "./variant-selector.ts";
@@ -33,6 +34,8 @@ import type { TransferService } from "./transfer-service.ts";
 import type { HubRouter } from "./hub-router.ts";
 import type { MonitoringService } from "./monitoring-service.ts";
 import type { HostService } from "./host-service.ts";
+import type { VariantStartController } from "./variant-start-controller.ts";
+import { countsAsStartupFailure } from "../domain/startup-policy.ts";
 
 interface CreateRow {
   id: string;
@@ -65,6 +68,7 @@ export class InstanceController {
     private readonly logger: Logger,
     private readonly monitoring?: MonitoringService,
     private readonly hosts?: HostService,
+    private readonly startPolicy?: VariantStartController,
   ) {}
 
   // Move an instance into the shared failure path and remove it from proxy routing.
@@ -76,12 +80,18 @@ export class InstanceController {
     const changed = await this.db.transaction(async (tx) => {
       const rows = await tx.update(serverInstances).set({
         lifecycleState: "FAILED",
+        failedAt: sql`now()`,
+        failureReason: reason,
+        failureDetails: details,
         updatedAt: sql`now()`,
       }).where(and(
         eq(serverInstances.id, instanceId),
         inArray(serverInstances.lifecycleState, ["CREATING", "STARTING", "RUNNING", "DRAINING"]),
-      )).returning({ id: serverInstances.id });
-      if (rows.length === 0) return false;
+      )).returning({
+        id: serverInstances.id,
+        runningAt: serverInstances.runningAt,
+      });
+      if (rows.length === 0) return null;
       await tx.insert(events).values({
         id: nanoid(),
         aggregateType: "instance",
@@ -89,10 +99,28 @@ export class InstanceController {
         type: "INSTANCE_FAILED",
         payload: { reason, ...details },
       });
-      return true;
+      return rows[0]!;
     });
-    if (changed) await this.bus.publishRegistry("SERVER_UNREGISTERED", { instanceId });
-    return changed;
+    if (!changed) return false;
+    await this.bus.publishRegistry("SERVER_UNREGISTERED", { instanceId });
+    const startupFailure = countsAsStartupFailure(reason, changed.runningAt !== null);
+    if (startupFailure && this.startPolicy) {
+      const state = await this.startPolicy.recordFailure(instanceId, reason);
+      if (state && (
+        state.state !== "BLOCKED" || state.lastFailedInstanceId !== instanceId
+      )) {
+        await this.stopAndDelete(instanceId);
+      }
+    }
+    const failureFields = { instanceId, reason, details };
+    if (startupFailure) {
+      this.logger.info("instance.lifecycle.failed", "Instance entered failed state", failureFields);
+    } else if (reason === "HOST_OFFLINE") {
+      this.logger.warn("instance.lifecycle.host_lost", "Instance host became unavailable", failureFields);
+    } else {
+      this.logger.error("instance.lifecycle.failed", "Instance entered failed state", failureFields);
+    }
+    return true;
   }
 
   // Create an unassigned warm instance for the requested server group.
@@ -102,6 +130,10 @@ export class InstanceController {
     replacementReason: "HUB_RENEWAL" | "HOST_MAINTENANCE" = "HUB_RENEWAL",
   ): Promise<string | null> {
     const variant = await this.variants.select(groupId);
+    if (!variant) {
+      this.logger.debug("capacity.variant.unavailable", "No variant revision is eligible for startup", { groupId });
+      return null;
+    }
     const instanceId = nanoid();
     // Track deletion separately so failed cleanup is visible and retryable.
     const commandId = nanoid();
@@ -181,6 +213,7 @@ export class InstanceController {
         id: instanceId,
         groupId: groupId,
         variantId: variant.id,
+        variantRevision: variant.revision,
         hostId,
         reservedCpu: variant.runtime_spec.cpu,
         reservedMemoryBytes: variant.runtime_spec.memoryBytes,
@@ -189,6 +222,13 @@ export class InstanceController {
         replacesInstanceId: replacesInstanceId ?? null,
         replacementReason: replacesInstanceId ? replacementReason : null,
       });
+      if (
+        this.startPolicy &&
+        !await this.startPolicy.reserveAttempt(tx, groupId, variant.id, variant.revision, instanceId)
+      ) {
+        await tx.delete(serverInstances).where(eq(serverInstances.id, instanceId));
+        return false;
+      }
       await tx.insert(commands).values({
         id: commandId,
         instanceId: instanceId,
@@ -198,7 +238,13 @@ export class InstanceController {
       return true;
     });
     if (!persisted) return null;
-    await this.performCreate(instanceId, commandId);
+    this.logger.info("instance.start.planned", "Instance startup planned", {
+      instanceId,
+      commandId,
+      groupId,
+      variantId: variant.id,
+      revision: variant.revision,
+    });
     return instanceId;
   }
 
@@ -220,11 +266,14 @@ export class InstanceController {
         state: "PENDING",
       });
     }
-    await this.performCreate(instanceId, commandId);
   }
 
   // Execute the recoverable database-to-Docker creation workflow.
-  private async performCreate(instanceId: string, commandId: string): Promise<void> {
+  public async executeCreate(
+    instanceId: string,
+    commandId: string,
+    interrupted: () => boolean = () => false,
+  ): Promise<void> {
     const rows = await this.db
       .select({
         id: serverInstances.id,
@@ -243,11 +292,14 @@ export class InstanceController {
         )
       );
     const row = rows[0] as unknown as CreateRow;
-    if (!row) return;
-    await this.db
-      .update(commands)
-      .set({ state: "RUNNING", attempts: sql`${commands.attempts} + 1` })
-      .where(and(eq(commands.id, commandId), sql`${commands.state} <> 'SUCCEEDED'`));
+    if (!row) {
+      await this.db.update(commands).set({
+        state: "FAILED",
+        completedAt: sql`now()`,
+        lastError: "Instance is no longer eligible for creation",
+      }).where(eq(commands.id, commandId));
+      return;
+    }
     try {
       const templateLayersForVariant = await this.db
         .select({
@@ -303,15 +355,49 @@ export class InstanceController {
           })
           .where(eq(commands.id, commandId));
       });
+      this.logger.info("instance.start.requested", "Execution agent started the instance container", {
+        instanceId,
+        commandId,
+        hostId: row.host_id,
+        groupId: row.group_id,
+        variantId: row.variant_id,
+        containerId: created.containerId,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (interrupted()) {
+        await this.db.update(commands).set({
+          state: "PENDING",
+          startedAt: null,
+          lastError: null,
+        }).where(eq(commands.id, commandId));
+        this.logger.info("instance.start.interrupted", "Instance startup returned to the pending queue", {
+          instanceId,
+          commandId,
+        });
+        return;
+      }
       await this.db.update(commands).set({
         state: "FAILED",
         completedAt: sql`now()`,
         lastError: message,
       }).where(eq(commands.id, commandId));
-      await this.failInstance(instanceId, "CREATE_FAILED", { error: message });
-      this.logger.error("Instance creation failed", { instanceId, error: message });
+      const reason = error instanceof ExecutionHostUnavailableError
+        ? "HOST_OFFLINE"
+        : "CREATE_FAILED";
+      await this.failInstance(instanceId, reason, { error: message });
+      const failureFields = {
+        instanceId,
+        commandId,
+        hostId: row.host_id,
+        reason,
+        error,
+      };
+      if (reason === "HOST_OFFLINE") {
+        this.logger.warn("instance.start.host_unavailable", "Instance creation was interrupted by an unavailable host", failureFields);
+      } else {
+        this.logger.error("instance.start.failed", "Instance creation failed", failureFields);
+      }
     }
   }
 
@@ -392,8 +478,15 @@ export class InstanceController {
         replacementReason: serverInstances.replacementReason,
       })) as unknown as ReadyRow[];
     if (rows[0]) {
+      await this.startPolicy?.markReady(instanceId);
       // Publish registration only for the transaction that actually performed STARTING -> RUNNING.
       await this.bus.publishRegistry("SERVER_REGISTERED", rows[0]);
+      this.logger.info("instance.lifecycle.ready", "Instance reported server readiness", {
+        instanceId,
+        groupId: rows[0].groupId,
+        variantId: rows[0].variantId,
+        endpoint: rows[0].endpoint,
+      });
       if (rows[0].replacesInstanceId) {
         await this.completeReplacement(instanceId);
       }
@@ -534,7 +627,7 @@ export class InstanceController {
     );
     const moved = result.acceptedPlayers.length;
     if (moved > 0) {
-      this.logger.info("Cancelled minigame evacuation scheduled", {
+      this.logger.info("instance.evacuation.scheduled", "Cancelled minigame evacuation scheduled", {
         instanceId: sourceInstanceId,
         playerCount: moved,
       });
@@ -604,7 +697,11 @@ export class InstanceController {
         .update(commands)
         .set({ state: "FAILED", completedAt: sql`now()`, lastError: message })
         .where(eq(commands.id, commandId));
-      this.logger.error("Instance deletion failed", { instanceId, error: message });
+      this.logger.error("instance.delete.failed", "Instance deletion failed", {
+        instanceId,
+        commandId,
+        error,
+      });
     }
   }
 
@@ -660,9 +757,9 @@ export class InstanceController {
     try {
       await this.bus.publishRegistry("SERVER_UPDATED", rows[0]);
     } catch (error) {
-      this.logger.warn("Unable to publish server load update", {
+      this.logger.warn("instance.routing_update.failed", "Unable to publish server load update", {
         instanceId,
-        error: String(error),
+        error,
       });
     }
   }

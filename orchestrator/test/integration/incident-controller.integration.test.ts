@@ -17,6 +17,7 @@ import {
   serverVariants,
   templateLayers,
   transferCommands,
+  variantStartStates,
 } from "../../src/db/schema.ts";
 import type { Logger } from "../../src/logger.ts";
 import { IncidentController } from "../../src/services/incident-controller.ts";
@@ -31,8 +32,8 @@ let resolved: Record<string, unknown>[];
 const logger = {
   debug: () => {},
   error: () => {},
-  warn: (_message: string, fields: Record<string, unknown>) => opened.push(fields),
-  info: (_message: string, fields: Record<string, unknown>) => resolved.push(fields),
+  warn: (_event: string, _message: string, fields: Record<string, unknown>) => opened.push(fields),
+  info: (_event: string, _message: string, fields: Record<string, unknown>) => resolved.push(fields),
 } as unknown as Logger;
 
 async function seedGroup({ minimum = 0, warm = 0 }: { minimum?: number; warm?: number } = {}) {
@@ -101,14 +102,13 @@ describe("persistent operational incidents", () => {
     sqlClient = client.sql;
     db = client.db;
     config = {
-      ...loadConfig(),
+      ...loadConfig({ DATABASE_URL: uri }),
       databaseUrl: uri,
       incidentBlockedAfterMs: 30_000,
       incidentFailureThreshold: 3,
       incidentFailureWindowMs: 900_000,
       incidentHostRecoveryAfterMs: 60_000,
       incidentHistoryRetentionMs: 7_776_000_000,
-      maxInstanceRetries: 2,
     };
   }, 30_000);
 
@@ -163,7 +163,7 @@ describe("persistent operational incidents", () => {
     expect(stored).toHaveLength(0);
   });
 
-  test("aggregates variant, session, transfer and command failure loops without duplicates", async () => {
+  test("aggregates variant, transfer and command failure loops without duplicates", async () => {
     const { groupId, variantId } = await seedGroup();
     await seedHost();
     const instanceIds = ["failed-instance-1", "failed-instance-2", "failed-instance-3"];
@@ -174,18 +174,15 @@ describe("persistent operational incidents", () => {
       lifecycleState: "FAILED" as const,
       availabilityState: "OPEN" as const,
     })));
-    await db.insert(events).values(instanceIds.map((aggregateId, index) => ({
-      id: `failure-event-${index}`,
-      aggregateType: "instance",
-      aggregateId,
-      type: "INSTANCE_FAILED",
-      payload: { reason: "STARTUP_TIMEOUT" },
-    })));
-    await db.insert(gameSessions).values({
-      id: "failed-session",
+    await db.insert(variantStartStates).values({
       groupId,
-      state: "FAILED",
-      retryCount: 2,
+      variantId,
+      variantRevision: 1,
+      state: "BLOCKED",
+      failureCount: 3,
+      lastFailedInstanceId: instanceIds.at(-1),
+      lastFailureReason: "STARTUP_TIMEOUT",
+      lastFailureAt: new Date(),
     });
     await db.insert(transferCommands).values(instanceIds.map((instanceId, index) => ({
       id: `expired-transfer-${index}`,
@@ -212,24 +209,22 @@ describe("persistent operational incidents", () => {
     const active = await controller.list({ status: "active", limit: 200 });
     expect(new Set(active.incidents.map((incident) => incident.kind))).toEqual(new Set([
       "INSTANCE_FAILURE_LOOP",
-      "SESSION_RETRIES_EXHAUSTED",
       "TRANSFER_FAILURE_LOOP",
       "COMMAND_FAILURE_LOOP",
     ]));
     const failureLoop = active.incidents.find((incident) => incident.kind === "INSTANCE_FAILURE_LOOP");
     expect(failureLoop?.occurrenceCount).toBe(3);
-    expect(new Set(failureLoop?.evidence.instanceIds as string[])).toEqual(new Set(instanceIds));
-    expect(await db.select().from(operationalIncidents)).toHaveLength(4);
-    expect(opened).toHaveLength(4);
+    expect(failureLoop?.evidence.lastFailedInstanceId).toBe(instanceIds.at(-1));
+    expect(await db.select().from(operationalIncidents)).toHaveLength(3);
+    expect(opened).toHaveLength(3);
 
     const expired = new Date(Date.now() - config.incidentFailureWindowMs - 1_000);
-    await db.update(events).set({ createdAt: expired });
-    await db.update(gameSessions).set({ updatedAt: expired });
+    await db.delete(variantStartStates);
     await db.update(transferCommands).set({ completedAt: expired });
     await db.update(commands).set({ completedAt: expired });
     await controller.tick();
     expect((await controller.list({})).incidents).toHaveLength(0);
-    expect((await controller.list({ status: "resolved", limit: 200 })).incidents).toHaveLength(4);
+    expect((await controller.list({ status: "resolved", limit: 200 })).incidents).toHaveLength(3);
   });
 
   test("tracks host state, maintenance replacement and three consecutive loop failures", async () => {

@@ -102,14 +102,14 @@ export class Matchmaker {
         try {
           await this.processGroup(group);
         } catch (error) {
-          this.logger.error("Matchmaking group tick failed", {
+          this.logger.error("matchmaking.group.failed", "Matchmaking group tick failed", {
             groupId: group.id,
-            error: String(error),
+            error,
           });
         }
       }
     } catch (error) {
-      this.logger.error("Matchmaking tick failed", { error: String(error) });
+      this.logger.error("matchmaking.tick.failed", "Matchmaking tick failed", { error });
       throw error;
     } finally {
       this.running = false;
@@ -228,7 +228,7 @@ export class Matchmaker {
       raw.instanceAcquisitionTimeoutMs == null ||
       raw.lobbyStaleTimeoutMs == null
     ) {
-      this.logger.error("Skipping minigame group with incomplete policy", {
+      this.logger.error("matchmaking.group.invalid", "Skipping minigame group with incomplete policy", {
         groupId: raw.id,
       });
       return null;

@@ -1,148 +1,266 @@
 # Multi-host execution
 
-EnderCloud runs one agent on every Docker host. PostgreSQL remains the source of truth and the
-central orchestrator remains the only component allowed to place instances. Agents only execute
-requested Docker operations, allocate ports and maintain local files.
+EnderCloud runs one agent on every Docker host. The central orchestrator remains the only process
+that places instances and changes durable lifecycle state. Agents execute Docker operations,
+allocate local ports, cache templates, and report runtime inventory.
+
+PostgreSQL and Redis stay central. Remote agents do not connect to either service.
 
 ## Network requirements
 
-The MVP has no API authentication. Use a private routed network, VPN or overlay network between
-the central host and every execution host.
+The current MVP has no API authentication. Connect hosts through a private routed network, VPN,
+or overlay network and restrict each control port with a firewall.
 
-- Agents must reach `ORCHESTRATOR_URL` for heartbeats, template downloads and Minecraft callbacks.
-- The orchestrator must reach each `AGENT_PUBLIC_URL`.
-- Velocity and players must reach `AGENT_GAME_ADDRESS` on the configured game-port range.
-- PostgreSQL, Redis, Docker sockets and control ports must not be publicly reachable.
+| Source | Destination | Purpose |
+| --- | --- | --- |
+| Agent | `ORCHESTRATOR_URL` | Heartbeats and template archives |
+| Managed Paper container | `ORCHESTRATOR_URL` | Readiness, presence, assignments, and game events |
+| Orchestrator | `AGENT_ADVERTISED_CONTROL_URL` | Inventory, create, inspect, logs, stop, and delete |
+| Velocity | `AGENT_ADVERTISED_GAME_ADDRESS` and game-port range | Backend Minecraft connections |
+| Velocity | Central Redis and orchestrator | Registry events, transfers, and HTTP snapshot |
+| Dashboard server | Orchestrator | Operational reads and confirmed actions |
 
-The standalone Compose file publishes the agent API only on `AGENT_BIND_ADDRESS`. Set it to a
-private interface, never `0.0.0.0` on an Internet-facing machine. The main `compose.yml` currently
-publishes ports `8080` and `3000` on every host interface. Restrict those mappings in
-`compose.yml`, or enforce the same restriction with the host firewall. Remote agents need access
-to port `8080`; they do not need dashboard access.
+PostgreSQL, Redis, Docker sockets, agent control APIs, and the orchestrator API must not be
+Internet-facing. Only Velocity's public listener normally needs public player access. Backend game
+ports still need private reachability from Velocity.
+
+The standalone agent publishes its API only on `AGENT_PUBLISH_ADDRESS`. Never set it to
+`0.0.0.0` on an Internet-facing host. The root stack publishes the orchestrator and dashboard on
+`127.0.0.1` by default. Set `ORCHESTRATOR_PUBLISH_ADDRESS` to a private interface when remote
+agents need it. Remote agents do not need dashboard access.
+
+## Address meanings
+
+Several variables describe different sides of the same connection:
+
+| Variable | Who must reach it |
+| --- | --- |
+| `ORCHESTRATOR_URL` | The agent and every managed Paper container on that host |
+| `AGENT_ADVERTISED_CONTROL_URL` | The central orchestrator |
+| `AGENT_ADVERTISED_GAME_ADDRESS` | Velocity on the path to published Minecraft ports |
+| `AGENT_PUBLISH_ADDRESS` | Host interface where standalone Compose binds the control API |
+| `ORCHESTRATOR_PUBLISH_ADDRESS` | Central host interface where Compose binds the orchestrator API |
+
+An advertised URL is part of application protocol. A publish address is a Compose host binding.
+They often contain the same IP on a remote Linux host, but they are not interchangeable.
 
 ## Central host
 
-Required agent settings in the root `.env`:
+The root `compose.yml` starts:
 
-| Variable | Meaning |
-| --- | --- |
-| `AGENT_ID` | Stable lowercase host id. Do not change it after containers exist. |
-| `AGENT_PUBLIC_URL` | Agent control URL reached by the orchestrator. Use `http://agent:8090` for the main Compose stack. |
-| `AGENT_GAME_ADDRESS` | Private address returned in Minecraft endpoints. |
-| `AGENT_CPU` | Allocatable vCPU advertised to the scheduler. |
-| `AGENT_MEMORY_BYTES` | Allocatable memory advertised to the scheduler. |
-| `RUNTIME_HOST_ROOT` | Absolute runtime directory as seen by the Docker daemon. |
-| `AGENT_GAME_PORT_START` / `AGENT_GAME_PORT_END` | Inclusive published game-port range. |
+- PostgreSQL;
+- Redis;
+- the central orchestrator;
+- the primary execution agent;
+- the dashboard.
 
-Start the central stack with:
+Required primary-agent values in the root `.env` are:
 
-```powershell
-docker compose up --build
+```dotenv
+AGENT_ID=primary-host
+AGENT_ADVERTISED_GAME_ADDRESS=10.20.0.10
+AGENT_ALLOCATABLE_CPU=8
+AGENT_ALLOCATABLE_MEMORY_BYTES=17179869184
+AGENT_RUNTIME_LOCAL_DIRECTORY=./runtime
+AGENT_RUNTIME_HOST_DIRECTORY=/srv/endercloud/runtime
 ```
 
-The `agent` service uses the same image as the orchestrator but starts
-`src/agent/index.ts`. It mounts the Docker socket, runtime directory and a persistent template
-cache. The orchestrator does not mount any of them.
+The main stack fixes the primary agent's internal control URL to `http://agent:8090` and its
+orchestrator URL to `http://orchestrator:8080`. These Docker service names work only inside the
+central Compose network.
 
-`ORCHESTRATOR_URL=http://orchestrator:8080` is valid inside the main Compose network and is used
-by both the primary agent and dashboard. It is different from the URL configured on a remote host,
-which must resolve to the central machine's private address.
+Start the central stack:
 
-## Remote hosts
+```powershell
+docker compose up --build -d
+```
 
-Copy the repository to the remote host, then copy `.env.agent.example` to `.env.agent`. Adjust at
-least these values:
+If remote agents must reach the orchestrator, publish it on the central machine's private
+interface:
+
+```dotenv
+ORCHESTRATOR_PUBLISH_ADDRESS=10.20.0.10
+ORCHESTRATOR_PUBLISH_PORT=8080
+```
+
+Allow inbound TCP 8080 only from execution hosts, managed server networks, Velocity, and operator
+networks that need the API.
+
+## Remote host
+
+Copy the repository or the required build context and Compose file to the execution host. Create
+`.env.agent` from the example:
+
+```powershell
+Copy-Item .env.agent.example .env.agent
+```
+
+A Linux host at `10.20.0.12` could use:
 
 ```dotenv
 AGENT_ID=game-paris-02
-AGENT_PUBLIC_URL=http://10.20.0.12:8090
-AGENT_BIND_ADDRESS=10.20.0.12
-AGENT_GAME_ADDRESS=10.20.0.12
-AGENT_CPU=8
-AGENT_MEMORY_BYTES=17179869184
-ORCHESTRATOR_URL=http://10.20.0.10:8080
-RUNTIME_HOST_ROOT=/srv/endercloud/runtime
-RUNTIME_LOCAL_PATH=/srv/endercloud/runtime
+AGENT_VERSION=0.1.0
+AGENT_ADVERTISED_CONTROL_URL=http://10.20.0.12:8090
+AGENT_ADVERTISED_GAME_ADDRESS=10.20.0.12
+AGENT_ALLOCATABLE_CPU=8
+AGENT_ALLOCATABLE_MEMORY_BYTES=17179869184
+AGENT_RUNTIME_LOCAL_DIRECTORY=/srv/endercloud/runtime
+AGENT_RUNTIME_HOST_DIRECTORY=/srv/endercloud/runtime
+AGENT_PUBLISH_ADDRESS=10.20.0.12
+AGENT_PUBLISH_PORT=8090
+AGENT_DOCKER_NETWORK=endercloud
 AGENT_GAME_PORT_START=25565
 AGENT_GAME_PORT_END=25664
+ORCHESTRATOR_URL=http://10.20.0.10:8080
 ```
 
-Then start only the agent:
+Start only the agent:
 
 ```powershell
 docker compose --env-file .env.agent -f compose.agent.yml up --build -d
 ```
 
-The configured Docker network is local to that Docker host. The agent attaches Minecraft
-containers to it. Compose can create the local bridge, but it does not create routing between
-machines. The addresses in `AGENT_PUBLIC_URL`, `ORCHESTRATOR_URL` and `AGENT_GAME_ADDRESS` must
-therefore use the private routed network, VPN or overlay network, not Docker service names from
-another host.
+Check its local readiness:
 
-`RUNTIME_LOCAL_PATH` is the directory mounted into the agent. `RUNTIME_HOST_ROOT` is the same
-directory as the Docker daemon sees it when it binds instance data into Minecraft containers.
-They are usually identical on Linux and can differ with Docker Desktop or a remote daemon.
+```powershell
+Invoke-RestMethod http://10.20.0.12:8090/health/ready
+```
+
+The host should first appear as `RECOVERING`, then `ONLINE` after inventory reconciliation.
+
+## Docker networks do not span hosts
+
+`AGENT_DOCKER_NETWORK` names a network local to one Docker daemon. The standalone Compose file may
+create a bridge with the same name on several machines, but those bridges are unrelated.
+
+Do not use a Docker service name from another host in an advertised address. Use a DNS name or IP
+that the private routed network resolves and carries between machines.
+
+Managed containers also receive the agent's `ORCHESTRATOR_URL`. Confirm that the selected Docker
+network can route to that address, not only the agent container itself.
+
+## Runtime paths
+
+Two path variables refer to the same underlying directory from different viewpoints:
+
+- `AGENT_RUNTIME_LOCAL_DIRECTORY` is the host path that Compose mounts into the agent.
+- `AGENT_RUNTIME_HOST_DIRECTORY` is the path the Docker daemon uses when the agent asks it to bind
+  an instance directory into a Minecraft container.
+
+On native Linux they are normally identical. With Docker Desktop or a remote daemon, the daemon
+may see a different path. A wrong host path lets the agent create files but causes the child
+container to mount an empty or missing directory.
+
+After deployment, start one test instance and verify that its `/data` contains the expected
+materialized template before enabling production traffic.
 
 ## Placement and reservations
 
-Only hosts in `ONLINE` health and `ACTIVE` administrative state receive new work. Placement is
-serialized in PostgreSQL. It subtracts every physical reservation except confirmed `STOPPED`
-instances, then chooses the host with the lowest dominant CPU or memory utilization. Host id is
-the deterministic tie-breaker.
+Only hosts with health `ONLINE` and administration state `ACTIVE` receive new work. Placement runs
+inside a PostgreSQL transaction and uses durable CPU and memory reservations.
 
-`STOPPING`, `FAILED` and `ORPHANED` instances keep their physical reservation until agent cleanup
-is confirmed. They do not count toward a group's logical capacity, so replacements may run on a
-different host without overcommitting the original one.
+For each eligible host, EnderCloud computes CPU utilization and memory utilization after current
+reservations. It compares the larger of the two values, called dominant utilization, and chooses
+the smallest. Host ID breaks ties.
 
-## Failure and recovery
+Instances in `STOPPING`, `FAILED`, or `ORPHANED` keep physical reservations until the agent
+confirms cleanup. They no longer count toward logical group capacity, which allows a replacement
+on another host without pretending the original resources are free.
 
-Agents heartbeat every five seconds by default. A host becomes `OFFLINE` after 30 seconds without
-a heartbeat or successful control call. The orchestrator checks this on its reconciliation loop.
-These values are configured with
-`AGENT_HEARTBEAT_INTERVAL_MS`, `HOST_RECONCILE_INTERVAL_MS` and `HOST_OFFLINE_AFTER_MS`.
+Set allocatable resources below the machine's physical total when the operating system, Docker,
+Velocity, monitoring, or other services need reserved headroom.
 
-When an agent returns, its host remains `RECOVERING`. The orchestrator inventories its containers,
-removes owned orphans and resolves missing desired instances before marking it `ONLINE`. Pending
-deletions are retained while the host is unreachable.
+## Heartbeat, failure, and recovery
 
-Template layers are cached under `layerId/checksum`. The agent streams each download as a
-gzip-compressed tar archive, extracts it into a temporary directory, rejects unsafe paths,
-verifies the canonical checksum and renames it atomically. The current implementation does not
-evict valid cached layers, so monitor the cache volume on long-lived hosts.
+Agents heartbeat every five seconds by default. The orchestrator marks a host `OFFLINE` after 30
+seconds without a heartbeat or successful control call. The relevant settings are:
 
-## Maintenance
+```text
+AGENT_HEARTBEAT_INTERVAL
+SCHEDULER_RECONCILIATION_INTERVAL
+HOST_OFFLINE_TIMEOUT
+```
 
-The dashboard Hosts page exposes two confirmed actions:
+While a host is offline:
 
-1. **Drain host** immediately moves an `ACTIVE` host to `DRAINING`. It receives no new work.
-2. Empty sessions are reassigned. Occupied games finish on the source.
-3. Open hubs and warm instances are replaced one by one elsewhere. Each group gets at most one
-   surge instance above `maximum_instances`, and the source drains only after its replacement is
-   running.
-4. If no replacement fits, the source stays active and maintenance waits.
-5. Once no physical instance remains, the host enters `MAINTENANCE` and can be reactivated.
+- it receives no new placement;
+- pending cleanup remains durable;
+- the orchestrator may replace logical capacity elsewhere;
+- physical reservations stay on the offline host until reconciliation proves the runtime gone.
 
-Reactivation puts the host back into `RECOVERING`. It becomes eligible for placement only after a
-successful inventory reconciliation.
+When the agent returns, the host enters `RECOVERING`. The orchestrator inventories containers
+carrying EnderCloud ownership labels, removes exact owned orphans, and resolves desired instances
+whose containers are missing. Only a successful pass changes health to `ONLINE`.
+
+The agent cache stores template layers under `layerId/checksum`. Missing layers are downloaded and
+verified during create. Valid cache entries are not evicted automatically, so include the cache
+volume in disk monitoring.
+
+## Host maintenance
+
+The dashboard exposes confirmed drain and activate actions.
+
+Drain proceeds in this order:
+
+1. Change administration state from `ACTIVE` to `DRAINING` so placement stops immediately.
+2. Reassign empty sessions when possible. Occupied games finish on the source host.
+3. Replace open hubs and warm instances one at a time on other hosts.
+4. Wait for each replacement to reach `RUNNING` before draining its source.
+5. Enter `MAINTENANCE` only after no physical instance remains.
+
+Each group gets at most one maintenance replacement above `maximum_instances`. If no other host
+has enough resources, the source instance remains available and maintenance waits. EnderCloud
+does not sacrifice live capacity to make the dashboard look drained.
+
+Activation changes the host back to `RECOVERING`. It becomes eligible for placement only after a
+fresh successful inventory pass.
 
 ## Local two-agent scenario
 
-`compose.multi-host.test.yml` adds a second agent to the main stack. It uses a separate runtime,
-cache and game-port range while sharing the local Docker daemon. This validates the complete HTTP
-path and ownership labels without requiring a second machine:
+`compose.multi-host.test.yml` adds a second agent to the main stack. Both agents share the local
+Docker daemon but use separate runtime directories, cache volumes, host IDs, and port ranges.
+
+Set these values in the root `.env`:
+
+```dotenv
+SECONDARY_AGENT_GAME_ADDRESS=192.0.2.11
+SECONDARY_AGENT_CPU=4
+SECONDARY_AGENT_MEMORY_BYTES=8589934592
+SECONDARY_RUNTIME_HOST_ROOT=/absolute/path/to/EnderCloud/runtime-secondary
+```
+
+Start the combined files:
 
 ```powershell
 docker compose -f compose.yml -f compose.multi-host.test.yml up --build
 ```
 
-Set `SECONDARY_RUNTIME_HOST_ROOT` to the absolute host path for `runtime-secondary`. This scenario
-is a deployment smoke test, not a substitute for validating private routing and firewalls between
-two physical hosts.
+The primary uses ports 25565 through 25664 by default. The secondary uses 25665 through 25764.
+Both advertised game addresses must be reachable by the Velocity process used for the test.
 
-Both agents advertise the `AGENT_GAME_ADDRESS` from the root `.env`, but use separate port ranges.
-That address must be reachable by the Velocity process used for the smoke test. Stop the combined
-stack with the same file set:
+Stop the same file set:
 
 ```powershell
 docker compose -f compose.yml -f compose.multi-host.test.yml down
 ```
+
+This scenario tests the complete HTTP control path and ownership labels. It does not test routing,
+latency, firewall rules, MTU, or failure between physical machines.
+
+## Deployment checklist
+
+- Every agent has a unique stable ID.
+- The central orchestrator is reachable from agents and managed Paper containers.
+- The orchestrator can reach every advertised agent control URL.
+- Velocity can reach every advertised game address and port range.
+- Agent control ports accept traffic only from the orchestrator network.
+- PostgreSQL, Redis, and Docker sockets are not exposed between untrusted hosts.
+- Runtime local and Docker-daemon paths resolve to the same data.
+- Port ranges do not overlap for agents sharing a Docker daemon or host address.
+- Allocatable CPU and memory leave operating-system headroom.
+- Agent cache and runtime disks have monitoring and enough free space.
+- A real instance reaches `RUNNING` on each host before production placement is enabled.
+- Drain and activation have been tested without terminating an occupied game.
+
+See [Agent](AGENT.md) for the complete variable reference and [Tests](TEST.md) for the local smoke
+test.

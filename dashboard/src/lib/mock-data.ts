@@ -19,6 +19,7 @@ import type {
   LifecycleState,
   SessionPlayerState,
   SessionState,
+  VariantStartupStatus,
   VariantRuntimePatch,
 } from "./contracts";
 
@@ -94,6 +95,10 @@ interface VariantBlueprint {
   readonly memoryGiB: number;
   readonly cpu: number;
   readonly enabled?: boolean;
+  readonly startup?: Pick<
+    VariantStartupStatus,
+    "state" | "failureCount" | "retryLimit" | "lastFailureReason"
+  >;
 }
 
 interface InstanceBlueprint {
@@ -204,6 +209,12 @@ const blueprints: readonly GroupBlueprint[] = [
         image: "itzg/minecraft-server:java25",
         memoryGiB: 4,
         cpu: 2,
+        startup: {
+          state: "BLOCKED",
+          failureCount: 6,
+          retryLimit: 5,
+          lastFailureReason: "STARTUP_TIMEOUT",
+        },
       },
       {
         id: "skywars-legacy",
@@ -458,24 +469,33 @@ function buildWorld(now: number): MockWorld {
   const queues = new Map<string, readonly MockQueueEntry[]>();
 
   for (const blueprint of blueprints) {
-    const variants: DashboardVariant[] = blueprint.variants.map((variant) => ({
-      id: variant.id,
-      enabled: variant.enabled ?? true,
-      revision: between(random, 1, 9),
-      weight: variant.weight,
-      runtime: {
-        image: variant.image,
-        memoryBytes: variant.memoryGiB * 1024 ** 3,
-        cpu: variant.cpu,
-        environment: {
-          EULA: "TRUE",
-          TYPE: "PAPER",
-          MEMORY: `${variant.memoryGiB}G`,
-          EC_GROUP: blueprint.id,
-          EC_VARIANT: variant.id,
+    const variants: DashboardVariant[] = blueprint.variants.map((variant) => {
+      const revision = between(random, 1, 9);
+      return {
+        id: variant.id,
+        enabled: variant.enabled ?? true,
+        revision,
+        weight: variant.weight,
+        runtime: {
+          image: variant.image,
+          memoryBytes: variant.memoryGiB * 1024 ** 3,
+          cpu: variant.cpu,
+          environment: {
+            EULA: "TRUE",
+            TYPE: "PAPER",
+            MEMORY: `${variant.memoryGiB}G`,
+            EC_GROUP: blueprint.id,
+            EC_VARIANT: variant.id,
+          },
         },
-      },
-    }));
+        startup: variant.startup ? {
+          ...variant.startup,
+          nextRetryAt: null,
+          lastFailureAt: ago(now, 45),
+          lastFailedInstanceId: null,
+        } : null,
+      };
+    });
 
     const groupInstances: DashboardInstance[] = [];
     const groupSessions: DashboardSession[] = [];
@@ -509,7 +529,6 @@ function buildWorld(now: number): MockWorld {
               : null,
           instanceAcquisitionDeadline: null,
           lobbyStaleDeadline: ago(now, spec.session.ageSeconds - 135),
-          retryCount: spec.session.state === "TRANSFERRING" ? 1 : 0,
           maximumPlayerCount: blueprint.maximumPlayers,
           activePlayerCount: spec.session.players,
           connectedPlayerCount: spec.session.connected,
@@ -581,7 +600,6 @@ function buildWorld(now: number): MockWorld {
         assignmentAcknowledgedAt: null,
         instanceAcquisitionDeadline: ago(now, spec.ageSeconds - 45),
         lobbyStaleDeadline: null,
-        retryCount: between(random, 0, 2),
         maximumPlayerCount: blueprint.maximumPlayers,
         activePlayerCount: spec.players,
         connectedPlayerCount: spec.connected,

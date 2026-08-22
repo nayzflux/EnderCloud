@@ -167,7 +167,7 @@ export class TransferService {
       })) as unknown as { id: string; instance_id: string }[];
     // Emit one warning per command so operators can identify the affected destination.
     for (const command of expired) {
-      this.logger.warn("Transfer command expired", {
+      this.logger.warn("transfer.command.expired", "Transfer command expired", {
         commandId: command.id,
         instanceId: command.instance_id,
       });
@@ -210,9 +210,9 @@ export class TransferService {
             eq(schema.transferCommands.state, "PENDING")
           )
         );
-      this.logger.warn("Transfer publication failed", {
+      this.logger.warn("transfer.publication.failed", "Transfer publication failed", {
         commandId: command.id,
-        error: String(error),
+        error,
       });
     }
   }

@@ -349,6 +349,32 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
               </div>
             </div>
 
+            {instance.failureReason ? (
+              <section className="space-y-3">
+                <Alert variant="destructive">
+                  <CircleAlertIcon />
+                  <AlertTitle>{instance.failureReason}</AlertTitle>
+                  <AlertDescription>
+                    Failed <RelativeTime value={instance.failedAt ?? instance.updatedAt} />
+                    {instance.runtimeRetained ? " · runtime retained for investigation" : ""}
+                  </AlertDescription>
+                </Alert>
+                {instance.failureDetails ? (
+                  <pre className="max-h-48 overflow-auto rounded-lg border bg-muted/40 p-3 font-mono text-xs leading-5 whitespace-pre-wrap wrap-break-word">
+                    {JSON.stringify(instance.failureDetails, null, 2)}
+                  </pre>
+                ) : null}
+                {instance.failureLogTail ? (
+                  <div className="space-y-1.5">
+                    <SectionTitle>Last game logs</SectionTitle>
+                    <pre className="max-h-80 overflow-auto rounded-lg border bg-muted/40 p-3 font-mono text-xs leading-5 whitespace-pre-wrap wrap-break-word">
+                      {instance.failureLogTail}
+                    </pre>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
+
             <section className="space-y-3">
               <SectionTitle>Runtime</SectionTitle>
               <KeyValueGrid>
@@ -621,7 +647,6 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
                   )}
                 </KeyValue>
                 <KeyValue label="Revision">{session.assignmentRevision}</KeyValue>
-                <KeyValue label="Retries">{session.retryCount}</KeyValue>
                 <KeyValue label="Acknowledged">
                   <RelativeTime value={session.assignmentAcknowledgedAt} />
                 </KeyValue>

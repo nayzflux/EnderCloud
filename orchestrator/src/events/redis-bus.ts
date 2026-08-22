@@ -17,7 +17,7 @@ export class RedisEventBus {
       retryStrategy: (attempt) => Math.min(250 * 2 ** attempt, 5_000),
     });
     this.redis.on("error", (error) =>
-      logger.error("Redis publisher error", { error: String(error) }),
+      logger.error("redis.publisher.failed", "Redis publisher failed", { error }),
     );
   }
 

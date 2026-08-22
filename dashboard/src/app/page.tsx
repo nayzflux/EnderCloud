@@ -17,6 +17,7 @@ import { PageHeader } from "@/components/page-header";
 import { OverviewMonitoringAlerts } from "@/components/monitoring-alerts";
 import { OverviewIncidentAlerts } from "@/components/incident-alerts";
 import { StatCard } from "@/components/stat-card";
+import { VariantStartupAction } from "@/components/variant-startup-action";
 import {
   GroupTypeBadge,
   LifecycleBadge,
@@ -155,7 +156,8 @@ interface AttentionItem {
   readonly groupId: string;
   readonly detail: ReactNode;
   readonly badge: React.ReactNode;
-  readonly open: () => void;
+  readonly open?: () => void;
+  readonly action?: React.ReactNode;
 }
 
 function AttentionCard({
@@ -179,6 +181,35 @@ function AttentionCard({
         badge: <LifecycleBadge state={instance.lifecycleState} />,
         open: () => openInstance(instance.id),
       })),
+    ),
+    ...snapshot.groups.flatMap((group) =>
+      group.variants.flatMap((variant) => {
+        const startup = variant.startup;
+        if (!startup) return [];
+        return [{
+          key: `startup:${group.id}:${variant.id}:${variant.revision}`,
+          id: `${variant.id}@${variant.revision}`,
+          groupId: group.id,
+          detail: (
+            <>
+              {humanizeState(startup.state)} · {startup.failureCount} failed start
+              {startup.failureCount === 1 ? "" : "s"}
+            </>
+          ),
+          badge: (
+            <Badge variant={startup.state === "BLOCKED" ? "destructive" : "secondary"}>
+              {humanizeState(startup.state)}
+            </Badge>
+          ),
+          action: startup.state === "BLOCKED" ? (
+            <VariantStartupAction
+              groupId={group.id}
+              variantId={variant.id}
+              revision={variant.revision}
+            />
+          ) : undefined,
+        }];
+      }),
     ),
     ...snapshot.groups.flatMap((group) =>
       group.sessions
@@ -235,12 +266,23 @@ function AttentionCard({
           <ScrollArea className="max-h-64">
             <ul className="divide-y">
               {items.map((item) => (
-                <li key={item.key}>
-                  <button
-                    type="button"
-                    onClick={item.open}
-                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-muted/60"
-                  >
+                <li key={item.key} className="flex items-center gap-2 px-4 py-2.5">
+                  {item.open ? (
+                    <button
+                      type="button"
+                      onClick={item.open}
+                      className="flex min-w-0 flex-1 items-center gap-3 text-left transition-colors hover:text-foreground"
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-mono text-xs">{item.id}</span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {item.groupId} · {item.detail}
+                        </span>
+                      </span>
+                      {item.badge}
+                    </button>
+                  ) : (
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
                     <span className="min-w-0 flex-1">
                       <span className="block truncate font-mono text-xs">
                         {item.id}
@@ -250,7 +292,9 @@ function AttentionCard({
                       </span>
                     </span>
                     {item.badge}
-                  </button>
+                    </div>
+                  )}
+                  {item.action}
                 </li>
               ))}
             </ul>

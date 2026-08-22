@@ -1,24 +1,10 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Providers } from "@/components/providers";
 import { SiteHeader } from "@/components/site-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { isMockEnabled } from "@/lib/mock-data";
-import { cn } from "@/lib/utils";
 import "./globals.css";
-
-const sans = Inter({
-  subsets: ["latin"],
-  variable: "--font-sans",
-  display: "swap",
-});
-
-const mono = JetBrains_Mono({
-  subsets: ["latin"],
-  variable: "--font-mono-code",
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: "EnderCloud · Cluster control",
@@ -42,7 +28,6 @@ export default function RootLayout({
     <html
       lang="en"
       suppressHydrationWarning
-      className={cn(sans.variable, mono.variable)}
     >
       <body className="min-h-svh bg-background font-sans antialiased">
         <a

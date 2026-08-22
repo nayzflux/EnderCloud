@@ -1,48 +1,75 @@
-# Deadlines et timeouts
+# Timeouts and deadlines
 
-EnderCloud distingue deux notions :
+EnderCloud distinguishes a timeout from a deadline:
 
-- un **timeout** est une durée configurée dans le server group ;
-- une **deadline** est l’instant UTC absolu calculé et persisté lorsque l’étape commence.
+- A timeout is a configured duration, such as `90s`.
+- A deadline is the absolute UTC timestamp persisted when an operation starts.
 
-L'orchestrateur lit les groupes au démarrage. Après une modification, il faut donc le redémarrer
-pour synchroniser la nouvelle durée. Une deadline déjà persistée ne change pas. La nouvelle durée
-s'applique seulement aux opérations créées après la synchronisation.
+This distinction matters after a restart. The orchestrator resumes against the stored deadline
+instead of granting the full timeout again.
 
-## Timeouts configurables par server group
+The orchestrator synchronizes group configuration at startup. Changing a timeout requires a
+restart and affects only deadlines created after synchronization. It does not rewrite existing
+deadlines.
 
-Toutes les durées utilisent `ms`, `s`, `m` ou `h`.
+## Group duration format
 
-| Clé `timeouts` | Groupes | Exemple | Départ | Deadline persistée | Effet à expiration |
-| --- | --- | ---: | --- | --- | --- |
-| `startup` | Tous | `90s` | Passage de l’instance à `STARTING` | `server_instances.startup_deadline` | L’instance devient `FAILED` si Paper n’a pas annoncé `SERVER_READY`. |
-| `drain` | Tous | `15m` | Drain normal d’une instance | `server_instances.drain_deadline` avec raison `NORMAL` | L’instance est arrêtée même si des joueurs sont encore observés. |
-| `cancelled_drain` | Tous | `10s` | Annulation d’une session minigame | `server_instances.drain_deadline` avec raison `SESSION_CANCELLED` | Borne l’évacuation active vers un hub avant l’arrêt forcé. |
-| `shutdown` | Tous | `20s` | Passage à `STOPPING` | `server_instances.shutdown_deadline` | Délai accordé au serveur Minecraft avant l’arrêt Docker forcé. |
-| `transfer` | Tous | `20s` | Création d’une commande de transfert | `transfer_commands.expires_at` et `session_players.transfer_deadline` | La commande expire et les joueurs de session non arrivés passent à `LEFT`. Le groupe cible fournit la durée. |
-| `player_stale` | Tous | `30s` | Dernière observation d’un joueur | `instance_players.stale_deadline` | Le joueur est retiré du comptage et marqué parti de sa session. |
-| `instance_lifetime` | Hub | `4h` | Passage du hub à `RUNNING` | `server_instances.renewal_deadline` | Démarre un remplaçant si une place est disponible, puis met l’ancien hub en drain lorsque le nouveau est prêt. |
-| `instance_acquisition` | Minigame | `45s` | Session éligible sans instance chaude disponible | `game_sessions.instance_acquisition_deadline` | La session est annulée si aucune instance n’a été réservée. |
-| `lobby_stale` | Minigame | `135s` | Début des transferts vers l’instance | `game_sessions.lobby_stale_deadline` | Annule une session qui n’a pas progressé vers `GAME_STARTING`. |
-
-Le plugin minijeu possède l’autorité sur le démarrage. L’orchestrateur accepte son événement
-`GAME_STARTING` sans attendre ni valider une deadline de démarrage partiel. `lobby_stale` est
-uniquement un watchdog contre une session abandonnée.
-
-### Présence, heartbeat et transfert
-
-Le plugin Paper envoie environ toutes les dix secondes un heartbeat contenant la liste des joueurs
-connectés. Chaque observation renouvelle la deadline `player_stale`. Si cette deadline expire,
-l’orchestrateur considère seulement que son observation est périmée : il ne kicke pas le joueur.
-
-La deadline `transfer` mesure plutôt le temps accordé à un joueur pour rejoindre le serveur cible
-après l’émission d’une commande de transfert.
-
-## Exemple
+Group YAML accepts a positive integer followed by `ms`, `s`, `m`, or `h`:
 
 ```yaml
 timeouts:
-  instance_lifetime: 4h # hubs uniquement
+  startup: 90s
+  drain: 15m
+  cancelled_drain: 10s
+  shutdown: 20s
+  transfer: 20s
+  player_stale: 30s
+```
+
+Values such as `500ms`, `45s`, `5m`, and `4h` are valid. A bare number or a `d` suffix is not valid
+in group YAML.
+
+## Group timeouts
+
+| `timeouts` key | Group type | Starts when | Persisted deadline | Expiry behavior |
+| --- | --- | --- | --- | --- |
+| `startup` | All | Instance enters `STARTING` after Docker creation | `server_instances.startup_deadline` | Mark the instance `FAILED` if Paper has not sent `SERVER_READY` |
+| `drain` | All | Normal drain begins | `server_instances.drain_deadline` with reason `NORMAL` | Stop the instance even if players are still observed |
+| `cancelled_drain` | All | A minigame session is cancelled | `server_instances.drain_deadline` with reason `SESSION_CANCELLED` | Bound active hub evacuation before forced stop |
+| `shutdown` | All | Instance enters `STOPPING` | `server_instances.shutdown_deadline` | End graceful Minecraft shutdown and force Docker cleanup |
+| `transfer` | All | A transfer command is created | `transfer_commands.expires_at` and `session_players.transfer_deadline` | Expire the command and mark session players that did not arrive as `LEFT` |
+| `player_stale` | All | Paper last observes a player | `instance_players.stale_deadline` | Remove the player from instance counts and mark session presence left |
+| `instance_lifetime` | Hub | Hub first enters `RUNNING` | `server_instances.renewal_deadline` | Request a replacement, then drain the old hub after the replacement is ready |
+| `instance_acquisition` | Minigame | A feasible session needs an instance but none can be reserved | `game_sessions.instance_acquisition_deadline` | Cancel the session if no instance becomes available |
+| `lobby_stale` | Minigame | Transfers toward the reserved instance begin | `game_sessions.lobby_stale_deadline` | Cancel a lobby that never reaches `GAME_STARTING` |
+
+The transfer timeout comes from the target group. This lets hub and minigame destinations use
+different arrival expectations.
+
+## Hub example
+
+```yaml
+timeouts:
+  instance_lifetime: 4h
+  startup: 90s
+  drain: 5m
+  cancelled_drain: 10s
+  shutdown: 20s
+  transfer: 20s
+  player_stale: 30s
+```
+
+`instance_lifetime` defaults to `4h` when omitted. The renewal deadline is set on the first move
+to `RUNNING` and remains unchanged after later configuration edits.
+
+`maximum_instances` is still strict during ordinary renewal. If no slot is available, the expired
+hub remains open until a replacement can start. Host maintenance has a separate bounded surge
+rule for one replacement per group.
+
+## Minigame example
+
+```yaml
+timeouts:
   startup: 90s
   drain: 15m
   cancelled_drain: 10s
@@ -53,47 +80,78 @@ timeouts:
   lobby_stale: 135s
 ```
 
-`instance_lifetime` est absent des groupes minigame. Les deux dernières clés sont absentes des
-groupes `hub`.
+The minigame plugin decides when to publish `GAME_STARTING`. EnderCloud does not impose a
+partial-start deadline. `lobby_stale` only detects a session that stopped progressing before the
+plugin claimed start authority.
 
-La deadline de renouvellement est persistée au premier passage à `RUNNING` et ne change pas lors
-d’une modification ultérieure du timeout. `maximum_instances` reste une limite absolue : un hub
-expiré continue d’accepter les joueurs si aucune place n’est disponible pour son remplaçant.
+## Presence and transfer
 
-## Compatibilité
+The Paper bridge sends a heartbeat every ten seconds with the complete set of connected players.
+Each observation renews `player_stale` for that player. Expiry means EnderCloud's observation is
+stale. It does not kick the player from Minecraft.
 
-Les anciens champs `lifecycle.startup_timeout`, `lifecycle.draining_timeout`,
-`lifecycle.shutdown_timeout`, `matchmaking.waiting_timeout`,
-`matchmaking.instance_wait_timeout` et `matchmaking.maximum_waiting_timeout` restent acceptés
-temporairement. L’orchestrateur journalise un avertissement lorsqu’il les rencontre et refuse un
-fichier qui définit simultanément l’ancien et le nouveau nom d’une même durée.
+The transfer deadline measures a different interval. It starts when EnderCloud asks Velocity to
+move a player and ends when the durable command can no longer be retried. A player may remain
+present on the source while the target transfer is pending.
 
-`timeouts.ineligible_lobby` reste temporairement accepté comme alias de `timeouts.lobby_stale`.
-`timeouts.partial_start` est accepté mais ignoré avec un avertissement : le plugin décide désormais
-seul quand démarrer. La politique d’équilibrage anciennement nommée
-`matchmaking.partial_start` devient `matchmaking.team_balance`.
+## Cancellation drain
 
-`TRANSFER_TIMEOUT_MS` et `CANCELLED_DRAIN_TIMEOUT_MS` restent disponibles comme fallbacks
-dépréciés pour les anciens fichiers. Les nouveaux groupes doivent déclarer leurs durées dans
-`timeouts`.
+`GAME_CANCELLED` closes incoming transfers, unregisters the minigame instance from Velocity, and
+schedules its connected players across available hubs. EnderCloud retries evacuation while
+players remain present.
 
-## Délais techniques non liés aux groupes
+`cancelled_drain` is the final safety bound. When it expires, EnderCloud proceeds toward shutdown
+even if presence still reports players on the cancelled instance.
 
-| Délai | Valeur actuelle | Rôle |
-| --- | ---: | --- |
-| Proxy dashboard vers orchestrateur | `8s` | Annule une requête dashboard bloquée. |
-| Client HTTP Java | `10s` | Timeout de connexion et de requête des plugins Paper/Velocity. |
-| Sonde orchestrateur vers agent | `3s` par défaut | Borne les inventaires et sondes courtes. Configurable avec `AGENT_PROBE_TIMEOUT_MS`. |
-| Opération orchestrateur vers agent | `10m` par défaut | Borne une création ou suppression longue. Configurable avec `AGENT_OPERATION_TIMEOUT_MS`. |
-| Heartbeat agent | `5s` par défaut | Fréquence d'annonce d'un agent. Configurable avec `AGENT_HEARTBEAT_INTERVAL_MS`. |
-| Détection d'un hôte hors ligne | `30s` par défaut | Passe un hôte sans activité à `OFFLINE`. Configurable avec `HOST_OFFLINE_AFTER_MS`. |
-| Connexion PostgreSQL | `10s` | Borne l’établissement d’une connexion. |
-| Connexion PostgreSQL inactive | `20s` | Ferme une connexion inutilisée du pool. |
-| Fermeture PostgreSQL | `10s` | Borne l’arrêt gracieux de l’orchestrateur. |
-| Retry Redis | `250ms` exponentiel, maximum `5s` | Reconnexion du bus Redis. |
-| Retry d’un transfert | `2s`, puis maximum `30s` | Réémet une commande durable jusqu’à son expiration. |
-| Healthchecks Compose | `3s` | Borne chaque sonde d’infrastructure. |
+## Startup backoff
 
-Les intervalles `CAPACITY_INTERVAL_MS`, `MATCHMAKING_INTERVAL_MS` et
-`HOST_RECONCILE_INTERVAL_MS` pilotent la fréquence des boucles de contrôle. Ce ne sont pas des
-deadlines. `RECONCILE_INTERVAL_MS` n'est plus utilisé.
+Variant startup retry is not a group timeout. It is a durable policy for one group, variant, and
+revision.
+
+The first counted failure waits `INSTANCE_START_RETRY_BASE_DELAY`. Later failures double that
+delay. When the failure count exceeds `INSTANCE_START_RETRY_LIMIT`, the revision becomes
+`BLOCKED` and has no next retry deadline. An operator reset or a new revision is required.
+
+## Infrastructure timeouts and intervals
+
+These values are not group policy:
+
+| Setting | Default or fixed value | Purpose |
+| --- | --- | --- |
+| Dashboard proxy request | 8 seconds | Abort a dashboard request when the orchestrator does not respond |
+| Java HTTP client | 10 seconds | Bound plugin connection and request time |
+| `EXECUTOR_PROBE_TIMEOUT` | `3s` | Bound agent inventory, inspection, and short probes |
+| `EXECUTOR_OPERATION_TIMEOUT` | `10m` | Bound long agent create, stop, and delete operations |
+| `AGENT_HEARTBEAT_INTERVAL` | `5s` | Set heartbeat cadence. One heartbeat times out after at most 3 seconds |
+| `HOST_OFFLINE_TIMEOUT` | `30s` | Mark a host offline after no heartbeat or successful control contact |
+| PostgreSQL connect timeout | 10 seconds | Bound opening a database connection |
+| PostgreSQL idle timeout | 20 seconds | Close an unused pool connection |
+| PostgreSQL shutdown timeout | 10 seconds | Bound graceful pool shutdown |
+| Redis reconnect delay | 250 ms exponential, capped at 5 seconds | Reconnect the event bus |
+| Transfer retry delay | 2 seconds after a successful publish, or 1 to 30 seconds exponential after a publish failure | Reissue a durable transfer before its expiry |
+| Compose healthcheck timeout | 3 seconds | Bound one infrastructure health probe |
+
+Environment durations accept `ms`, `s`, `m`, `h`, and `d`. Each variable also has a minimum value
+documented in [Orchestrator](ORCHESTRATOR.md#environment-variables) or
+[Agent](AGENT.md#environment-variables).
+
+The four scheduler variables control how often a loop checks state:
+
+```text
+SCHEDULER_CAPACITY_INTERVAL
+SCHEDULER_MATCHMAKING_INTERVAL
+SCHEDULER_RECONCILIATION_INTERVAL
+SCHEDULER_INCIDENT_INTERVAL
+```
+
+They are intervals, not deadlines. A slower interval delays observation but does not alter a
+persisted expiry timestamp.
+
+## Removed timeout settings
+
+The configuration loader rejects old `lifecycle.*` fields, matchmaking timeout aliases,
+`timeouts.ineligible_lobby`, and `timeouts.partial_start`.
+
+The environment variables `TRANSFER_TIMEOUT_MS` and `CANCELLED_DRAIN_TIMEOUT_MS` were also
+removed. Set `timeouts.transfer` and `timeouts.cancelled_drain` in each group so the policy stays
+with the traffic it governs.

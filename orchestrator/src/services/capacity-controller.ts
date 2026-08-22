@@ -77,7 +77,7 @@ export class CapacityController {
           if (dueHub && current.length < group.maximumInstances) {
             const created = await this.instances.createWarm(group.id, dueHub.id);
             if (created) {
-              this.logger.info("Hub renewal replacement started", {
+              this.logger.info("instance.renewal.planned", "Hub renewal replacement planned", {
                 groupId: group.id,
                 sourceInstanceId: dueHub.id,
                 replacementInstanceId: created,
@@ -106,6 +106,13 @@ export class CapacityController {
                 )
               : 0,
           );
+          this.logger.debug("capacity.group.decided", "Capacity decision calculated", {
+            groupId: group.id,
+            enabled: group.enabled,
+            activeInstances: current.length,
+            createCount: decision.create,
+            drainCount: decision.drain,
+          });
           // Create exactly the deficit calculated by the pure capacity policy.
           for (let index = 0; index < decision.create; index += 1) {
             await this.instances.createWarm(group.id);
@@ -133,14 +140,14 @@ export class CapacityController {
             await this.instances.beginDrain(candidate.id);
           }
         } catch (error) {
-          this.logger.error("Capacity group tick failed", {
+          this.logger.error("capacity.group.failed", "Capacity group reconciliation failed", {
             groupId: group.id,
-            error: String(error),
+            error,
           });
         }
       }
     } catch (error) {
-      this.logger.error("Capacity tick failed", { error: String(error) });
+      this.logger.error("capacity.tick.failed", "Capacity reconciliation failed", { error });
       throw error;
     } finally {
       this.running = false;

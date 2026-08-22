@@ -11,6 +11,7 @@ import type {
   DashboardIncidentPage,
   IncidentKind,
   IncidentSeverity,
+  VariantStartupStatus,
 } from "./contracts";
 
 export class DashboardApiError extends Error {
@@ -126,4 +127,14 @@ export function drainHost(hostId: string): Promise<{ accepted: boolean }> {
 
 export function activateHost(hostId: string): Promise<{ accepted: boolean }> {
   return postJson(`/api/hosts/${encodeURIComponent(hostId)}/activate`);
+}
+
+export function retryVariantStartup(
+  groupId: string,
+  variantId: string,
+  revision: number,
+): Promise<VariantStartupStatus> {
+  return postJson(
+    `/api/groups/${encodeURIComponent(groupId)}/variants/${encodeURIComponent(variantId)}/revisions/${revision}/startup-retry`,
+  );
 }
