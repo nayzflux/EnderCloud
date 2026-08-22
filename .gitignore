@@ -1,4 +1,5 @@
 .env
+deployment/
 .idea/
 .vscode/
 

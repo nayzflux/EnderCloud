@@ -67,6 +67,30 @@ both services.
 
 ## Quick start
 
+On Linux, the interactive installer can create a local master, worker, or both configurations:
+
+```bash
+bash install.sh
+```
+
+It writes generated Compose files and private environment files to `deployment/`. The directory is
+ignored by Git. The installer checks Docker, asks for the private network addresses and agent
+resources, validates the generated Compose configuration, then asks before starting services.
+
+### Install Docker on Linux
+
+Install Docker Engine with the procedure for your distribution in the [official Docker
+documentation](https://docs.docker.com/engine/install/). Then install the [Docker Compose
+plugin](https://docs.docker.com/compose/install/linux/) if it is not included by your Docker
+package.
+
+Confirm both commands work before starting the EnderCloud installer:
+
+```bash
+docker --version
+docker compose version
+```
+
 Copy the minimal environment example and set the required host values:
 
 ```powershell
