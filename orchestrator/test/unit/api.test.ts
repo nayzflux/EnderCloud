@@ -1,6 +1,6 @@
 import { expect, mock, test } from "bun:test";
 import { createApp } from "../../src/api/app.ts";
-import type { Logger } from "../../src/logger.ts";
+import { Logger } from "../../src/logger.ts";
 import type { DashboardService } from "../../src/services/dashboard-service.ts";
 import type { InstanceController } from "../../src/services/instance-controller.ts";
 import type { QueueService } from "../../src/services/queue-service.ts";
@@ -9,6 +9,7 @@ import type { MonitoringService } from "../../src/services/monitoring-service.ts
 import type { HostService } from "../../src/services/host-service.ts";
 import type { TemplateArchiveService } from "../../src/services/template-archive-service.ts";
 import type { IncidentController } from "../../src/services/incident-controller.ts";
+import type { VariantStartController } from "../../src/services/variant-start-controller.ts";
 
 function testApp(
   hubs: HubRouter = {} as HubRouter,
@@ -29,6 +30,7 @@ function testApp(
       nextCursor: null,
     }),
   } as unknown as IncidentController,
+  startup?: VariantStartController,
 ) {
   const dashboard = {
     getCluster: async () => ({
@@ -64,10 +66,77 @@ function testApp(
     hosts,
     templates,
     incidents,
-    logger: { error: () => {} } as unknown as Logger,
+    ...(startup ? { startup } : {}),
+    logger: new Logger("error", { sink: () => {} }),
     isReady: () => true,
   });
 }
+
+test("blocked variant startup retry returns the durable resetting state", async () => {
+  const resetting = {
+      groupId: "skywars-solo",
+      variantId: "skywars-map-a",
+      revision: 3,
+      state: "RESETTING" as const,
+      failureCount: 6,
+      retryLimit: 5,
+      nextRetryAt: null,
+      lastFailureAt: "2026-08-21T12:00:00.000Z",
+      lastFailedInstanceId: "abcdefghijklmnop",
+      lastFailureReason: "STARTUP_TIMEOUT",
+  } as const;
+  const requestReset = mock(async (_groupId: string, _variantId: string, revision: number) => {
+    if (revision === 4) return { status: "CONFLICT" as const };
+    if (revision === 5) return { status: "NOT_FOUND" as const };
+    return { status: "ACCEPTED" as const, startup: resetting };
+  });
+  const startup = { requestReset } as unknown as VariantStartController;
+  const response = await testApp(
+    {} as HubRouter,
+    {} as InstanceController,
+    undefined,
+    {} as HostService,
+    {} as TemplateArchiveService,
+    undefined,
+    startup,
+  ).handle(new Request(
+    "http://endercloud/api/v1/groups/skywars-solo/variants/skywars-map-a/revisions/3/startup-retry",
+    { method: "POST" },
+  ));
+  expect(response.status).toBe(202);
+  expect(await response.json()).toMatchObject({ state: "RESETTING", failureCount: 6 });
+  expect(requestReset).toHaveBeenCalledWith("skywars-solo", "skywars-map-a", 3);
+
+  const repeat = await testApp(
+    {} as HubRouter,
+    {} as InstanceController,
+    undefined,
+    {} as HostService,
+    {} as TemplateArchiveService,
+    undefined,
+    startup,
+  ).handle(new Request(
+    "http://endercloud/api/v1/groups/skywars-solo/variants/skywars-map-a/revisions/3/startup-retry",
+    { method: "POST" },
+  ));
+  expect(repeat.status).toBe(202);
+
+  for (const [revision, expectedStatus] of [[4, 409], [5, 404]] as const) {
+    const rejected = await testApp(
+      {} as HubRouter,
+      {} as InstanceController,
+      undefined,
+      {} as HostService,
+      {} as TemplateArchiveService,
+      undefined,
+      startup,
+    ).handle(new Request(
+      `http://endercloud/api/v1/groups/skywars-solo/variants/skywars-map-a/revisions/${revision}/startup-retry`,
+      { method: "POST" },
+    ));
+    expect(rejected.status).toBe(expectedStatus);
+  }
+});
 
 test("dashboard cluster endpoint returns a versioned snapshot", async () => {
   const response = await testApp().handle(

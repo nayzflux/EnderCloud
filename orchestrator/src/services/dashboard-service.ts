@@ -18,6 +18,7 @@ import {
   transferCommands,
   executionHosts,
   operationalIncidents,
+  variantStartStates,
 } from "../db/schema.ts";
 import type {
   DashboardClusterSnapshot,
@@ -85,6 +86,13 @@ export interface VariantRow {
   revision: number;
   selection_weight: number;
   runtime_spec: VariantRuntimeSpec;
+  startup_state?: "BACKING_OFF" | "PROBING" | "BLOCKED" | "RESETTING" | null;
+  startup_failure_count?: number | null;
+  startup_retry_limit?: number;
+  startup_next_retry_at?: DatabaseTimestamp | null;
+  startup_last_failure_at?: DatabaseTimestamp | null;
+  startup_last_failed_instance_id?: string | null;
+  startup_last_failure_reason?: string | null;
 }
 
 export interface InstanceRow {
@@ -92,6 +100,7 @@ export interface InstanceRow {
   host_id?: string | null;
   group_id: string;
   variant_id: string;
+  variant_revision?: number;
   session_id: string | null;
   lifecycle_state: LifecycleState;
   availability_state: AvailabilityState;
@@ -109,6 +118,11 @@ export interface InstanceRow {
   drain_reason: string | null;
   stopping_at: DatabaseTimestamp | null;
   shutdown_deadline: DatabaseTimestamp | null;
+  failed_at?: DatabaseTimestamp | null;
+  failure_reason?: string | null;
+  failure_details?: Readonly<Record<string, unknown>> | null;
+  failure_log_tail?: string | null;
+  runtime_retained?: boolean;
   updated_at: DatabaseTimestamp;
 }
 
@@ -138,7 +152,6 @@ export interface SessionRow {
   assignment_acknowledged_at: DatabaseTimestamp | null;
   instance_acquisition_deadline: DatabaseTimestamp | null;
   lobby_stale_deadline?: DatabaseTimestamp | null;
-  retry_count: number;
   maximum_player_count: number;
   active_player_count: number;
   connected_player_count: number;
@@ -185,6 +198,15 @@ function toVariant(row: VariantRow): DashboardVariant {
     revision: row.revision,
     weight: row.selection_weight,
     runtime: row.runtime_spec,
+    startup: row.startup_state ? {
+      state: row.startup_state,
+      failureCount: row.startup_failure_count ?? 0,
+      retryLimit: row.startup_retry_limit ?? 5,
+      nextRetryAt: iso(row.startup_next_retry_at ?? null),
+      lastFailureAt: iso(row.startup_last_failure_at ?? null),
+      lastFailedInstanceId: row.startup_last_failed_instance_id ?? null,
+      lastFailureReason: row.startup_last_failure_reason ?? null,
+    } : null,
   };
 }
 
@@ -193,6 +215,7 @@ function toInstance(row: InstanceRow): DashboardInstance {
     id: row.id,
     hostId: row.host_id ?? null,
     variantId: row.variant_id,
+    variantRevision: row.variant_revision ?? 1,
     sessionId: row.session_id,
     lifecycleState: row.lifecycle_state,
     availabilityState: row.availability_state,
@@ -210,6 +233,11 @@ function toInstance(row: InstanceRow): DashboardInstance {
     drainReason: row.drain_reason,
     stoppingAt: iso(row.stopping_at),
     shutdownDeadline: iso(row.shutdown_deadline),
+    failedAt: iso(row.failed_at ?? null),
+    failureReason: row.failure_reason ?? null,
+    failureDetails: row.failure_details ?? null,
+    failureLogTail: row.failure_log_tail ?? null,
+    runtimeRetained: row.runtime_retained ?? false,
     updatedAt: requiredIso(row.updated_at),
   };
 }
@@ -242,7 +270,6 @@ function toSession(row: SessionRow): DashboardSession {
     assignmentAcknowledgedAt: iso(row.assignment_acknowledged_at),
     instanceAcquisitionDeadline: iso(row.instance_acquisition_deadline),
     lobbyStaleDeadline: iso(row.lobby_stale_deadline ?? null),
-    retryCount: row.retry_count,
     maximumPlayerCount: row.maximum_player_count,
     activePlayerCount: row.active_player_count,
     connectedPlayerCount: row.connected_player_count,
@@ -481,7 +508,10 @@ export function normalizeDashboardLimit(value: number | undefined): number {
 }
 
 export class DashboardService {
-  public constructor(private readonly db: Database) {}
+  public constructor(
+    private readonly db: Database,
+    private readonly startupRetryLimit = 5,
+  ) {}
 
   public async getCluster(): Promise<DashboardClusterSnapshot> {
     const rows = await this.db.transaction(async (tx) => {
@@ -564,9 +594,21 @@ export class DashboardService {
         selection_weight: serverGroupVariants.selectionWeight,
         checksum: serverVariants.checksum,
         runtime_spec: serverVariants.runtimeSpec,
+        startup_state: variantStartStates.state,
+        startup_failure_count: variantStartStates.failureCount,
+        startup_retry_limit: sql<number>`${this.startupRetryLimit}`,
+        startup_next_retry_at: variantStartStates.nextRetryAt,
+        startup_last_failure_at: variantStartStates.lastFailureAt,
+        startup_last_failed_instance_id: variantStartStates.lastFailedInstanceId,
+        startup_last_failure_reason: variantStartStates.lastFailureReason,
       })
         .from(serverGroupVariants)
         .innerJoin(serverVariants, eq(serverVariants.id, serverGroupVariants.variantId))
+        .leftJoin(variantStartStates, and(
+          eq(variantStartStates.groupId, serverGroupVariants.groupId),
+          eq(variantStartStates.variantId, serverVariants.id),
+          eq(variantStartStates.variantRevision, serverVariants.revision),
+        ))
         .where(eq(serverGroupVariants.groupId, groupId))
         .orderBy(asc(serverVariants.id));
 
@@ -612,6 +654,15 @@ export class DashboardService {
           weight: variant.selection_weight,
           checksum: variant.checksum,
           runtime: variant.runtime_spec,
+          startup: variant.startup_state ? {
+            state: variant.startup_state,
+            failureCount: variant.startup_failure_count ?? 0,
+            retryLimit: variant.startup_retry_limit,
+            nextRetryAt: iso(variant.startup_next_retry_at),
+            lastFailureAt: iso(variant.startup_last_failure_at),
+            lastFailedInstanceId: variant.startup_last_failed_instance_id,
+            lastFailureReason: variant.startup_last_failure_reason,
+          } : null,
           layers: layerIdsByVariant.get(variant.id) ?? [],
         })),
       };
@@ -627,6 +678,7 @@ export class DashboardService {
         host_id: serverInstances.hostId,
         group_id: serverInstances.groupId,
         variant_id: serverInstances.variantId,
+        variant_revision: serverInstances.variantRevision,
         session_id: serverInstances.sessionId,
         lifecycle_state: serverInstances.lifecycleState,
         availability_state: serverInstances.availabilityState,
@@ -644,6 +696,11 @@ export class DashboardService {
         drain_reason: serverInstances.drainReason,
         stopping_at: serverInstances.stoppingAt,
         shutdown_deadline: serverInstances.shutdownDeadline,
+        failed_at: serverInstances.failedAt,
+        failure_reason: serverInstances.failureReason,
+        failure_details: serverInstances.failureDetails,
+        failure_log_tail: serverInstances.failureLogTail,
+        runtime_retained: serverInstances.runtimeRetained,
         updated_at: serverInstances.updatedAt,
         
         group_type: serverGroups.type,
@@ -652,7 +709,6 @@ export class DashboardService {
         stopped_at: serverInstances.stoppedAt,
         checksum: serverVariants.checksum,
         variant_enabled: sql<boolean>`coalesce(${serverGroupVariants.enabled}, false)`,
-        revision: serverVariants.revision,
         selection_weight: sql<number>`coalesce(${serverGroupVariants.selectionWeight}, 0)::int`,
         runtime_spec: serverVariants.runtimeSpec,
       })
@@ -730,10 +786,11 @@ export class DashboardService {
         variant: {
           id: instance.variant_id,
           enabled: instance.variant_enabled,
-          revision: instance.revision,
+          revision: instance.variant_revision,
           weight: instance.selection_weight,
           runtime: instance.runtime_spec as VariantRuntimeSpec,
           checksum: instance.checksum,
+          startup: null,
         },
         players: players.map((player) => ({
           playerId: player.player_id,
@@ -963,9 +1020,21 @@ export class DashboardService {
       revision: serverVariants.revision,
       selection_weight: serverGroupVariants.selectionWeight,
       runtime_spec: serverVariants.runtimeSpec,
+      startup_state: variantStartStates.state,
+      startup_failure_count: variantStartStates.failureCount,
+      startup_retry_limit: sql<number>`${this.startupRetryLimit}`,
+      startup_next_retry_at: variantStartStates.nextRetryAt,
+      startup_last_failure_at: variantStartStates.lastFailureAt,
+      startup_last_failed_instance_id: variantStartStates.lastFailedInstanceId,
+      startup_last_failure_reason: variantStartStates.lastFailureReason,
     })
     .from(serverGroupVariants)
     .innerJoin(serverVariants, eq(serverVariants.id, serverGroupVariants.variantId))
+    .leftJoin(variantStartStates, and(
+      eq(variantStartStates.groupId, serverGroupVariants.groupId),
+      eq(variantStartStates.variantId, serverVariants.id),
+      eq(variantStartStates.variantRevision, serverVariants.revision),
+    ))
     .orderBy(asc(serverGroupVariants.groupId), asc(serverVariants.id));
 
     const instances = await tx.select({
@@ -973,6 +1042,7 @@ export class DashboardService {
       host_id: serverInstances.hostId,
       group_id: serverInstances.groupId,
       variant_id: serverInstances.variantId,
+      variant_revision: serverInstances.variantRevision,
       session_id: serverInstances.sessionId,
       lifecycle_state: serverInstances.lifecycleState,
       availability_state: serverInstances.availabilityState,
@@ -990,6 +1060,11 @@ export class DashboardService {
       drain_reason: serverInstances.drainReason,
       stopping_at: serverInstances.stoppingAt,
       shutdown_deadline: serverInstances.shutdownDeadline,
+      failed_at: serverInstances.failedAt,
+      failure_reason: serverInstances.failureReason,
+      failure_details: serverInstances.failureDetails,
+      failure_log_tail: serverInstances.failureLogTail,
+      runtime_retained: serverInstances.runtimeRetained,
       updated_at: serverInstances.updatedAt,
     })
     .from(serverInstances)
@@ -1006,7 +1081,6 @@ export class DashboardService {
       assignment_acknowledged_at: gameSessions.assignmentAcknowledgedAt,
       instance_acquisition_deadline: gameSessions.instanceAcquisitionDeadline,
       lobby_stale_deadline: gameSessions.lobbyStaleDeadline,
-      retry_count: gameSessions.retryCount,
       maximum_player_count: sql<number>`coalesce(${serverGroups.maximumPlayers}, 0)::int`,
       active_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} <> 'LEFT')::int`,
       connected_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} = 'CONNECTED')::int`,
@@ -1079,7 +1153,6 @@ export class DashboardService {
       assignment_acknowledged_at: gameSessions.assignmentAcknowledgedAt,
       instance_acquisition_deadline: gameSessions.instanceAcquisitionDeadline,
       lobby_stale_deadline: gameSessions.lobbyStaleDeadline,
-      retry_count: gameSessions.retryCount,
       maximum_player_count: sql<number>`coalesce(${serverGroups.maximumPlayers}, 0)::int`,
       active_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} <> 'LEFT')::int`,
       connected_player_count: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} = 'CONNECTED')::int`,

@@ -1,399 +1,512 @@
-# Intégration d’un plugin de mini-jeu avec EnderCloud
+# Minigame plugin integration
 
-Ce document décrit le contrat entre un plugin de mini-jeu Paper et EnderCloud.
+This guide defines the contract between a Paper minigame plugin and EnderCloud.
 
-Le plugin de mini-jeu reste responsable des règles de jeu, des téléportations, des kits, des
-inventaires, de la victoire et des résultats. EnderCloud est responsable de la file d’attente,
-de la création d’instance, du transfert Velocity, du calcul des profils d’équipes réalisables et
-du cycle de vie de la session. Le plugin choisit l’affectation finale.
+The minigame plugin owns game rules, team names, teleports, kits, inventories, victory detection,
+and result calculation. EnderCloud owns queues, party selection, feasible team profiles, server
+instances, Velocity transfers, session state, and result storage. The minigame plugin chooses the
+final assignment of tickets to teams.
 
-## Architecture
+## Integration path
 
-    Plugin mini-jeu Paper
-            │ Bukkit ServicesManager
-            ▼
-    EnderCloudPaperPlugin
-            │ HTTP privé
-            ▼
-    Orchestrateur EnderCloud
-            │ Redis / Docker / PostgreSQL
-            ▼
-    Velocity + instance Paper
+```text
+Paper minigame plugin
+        |
+        | Bukkit ServicesManager
+        v
+EnderCloud Paper bridge
+        |
+        | Private HTTP
+        v
+EnderCloud orchestrator
+        |
+        | PostgreSQL, Redis, and host agents
+        v
+Velocity and managed Paper instances
+```
 
-Le plugin ne doit pas appeler directement PostgreSQL, Redis ou Docker. Il utilise le service
-Bukkit EnderCloudPaperApi, fourni par le bridge Paper EnderCloud.
+The minigame plugin must not call PostgreSQL, Redis, Docker, or an execution agent. It uses
+`EnderCloudPaperApi`, which the EnderCloud Paper bridge registers as a Bukkit service.
 
-## Installation et prérequis
+## Responsibilities
 
-La variante EnderCloud doit contenir :
+| Responsibility | EnderCloud | Minigame plugin |
+| --- | :---: | :---: |
+| Queue entries and atomic parties | Owns | Calls `enqueue` and `leaveQueue` |
+| Feasible anonymous team profiles | Calculates | Chooses the final ticket-to-team mapping |
+| Instance creation and placement | Owns | Does not manage |
+| Velocity transfer | Owns | Does not manage |
+| Assignment revision | Owns | Applies each new revision |
+| Map initialization | Does not manage | Owns |
+| Kits and inventories | Does not manage | Owns |
+| Start decision | Accepts reported event | Owns |
+| Victory and result calculation | Does not manage | Owns |
+| Durable result storage | Stores event payload | Publishes `GAME_FINISHED` |
+| Cancellation and evacuation | Executes | Publishes `GAME_CANCELLED` |
+| Presence heartbeat | Paper bridge | Reacts to Bukkit events as needed |
 
-- `EnderCloudPaper-0.1.0.jar` dans `plugins/` ;
-- le plugin du mini-jeu ;
-- la map et la configuration complète du mode ;
-- un variant final référencé par un groupe de type minigame, avec ses couches ordonnées.
+## Installation
 
-Le bridge Paper utilise :
+The effective final variant must contain:
 
-    ENDERCLOUD_INSTANCE_ID       Identifiant de l’instance
-    ENDERCLOUD_ORCHESTRATOR_URL  URL HTTP privée de l’orchestrateur
-    ENDERCLOUD_REPORTED_ENDPOINT Optionnel, remplace l'endpoint déjà alloué par l'agent
+- `EnderCloudPaper-0.1.0.jar` under `plugins/`;
+- the minigame plugin JAR;
+- the server JAR expected by the template's `CUSTOM_SERVER` setting;
+- the map and complete mode configuration;
+- a final `variant.yml` referenced by an enabled `minigame` group.
 
-Le plugin du mini-jeu peut déclarer `softdepend: [EnderCloud]` dans son `plugin.yml`. Il doit
-toutefois désactiver ses fonctions EnderCloud si le service Bukkit est absent.
+Compile against `EnderCloudCore-0.1.0.jar` without bundling it. For a plugin that keeps local API
+JARs under `libs/`, a Gradle dependency can be:
 
-L’API Java est disponible en compileOnly via plugins/core. Le bridge Paper fournit le service
-à l’exécution.
+```kotlin
+dependencies {
+    compileOnly(files("libs/EnderCloudCore-0.1.0.jar"))
+}
+```
 
-## Récupérer l’API
+The deployed Paper bridge provides the API classes and service implementation at runtime.
 
-    EnderCloudPaperApi cloud = Bukkit.getServicesManager()
-            .load(EnderCloudPaperApi.class);
+Declare a soft dependency in the minigame plugin's `plugin.yml`:
 
-    if (cloud == null) {
-        getLogger().severe("EnderCloud Paper bridge is unavailable");
-        getServer().getPluginManager().disablePlugin(this);
+```yaml
+softdepend:
+  - EnderCloud
+```
+
+A soft dependency only controls load order. The plugin must still handle an absent service and
+disable its EnderCloud-dependent behavior.
+
+## Container environment
+
+The Paper bridge reads:
+
+| Variable | Required | Default | Purpose |
+| --- | :---: | --- | --- |
+| `ENDERCLOUD_INSTANCE_ID` | Yes | None | Stable managed instance ID |
+| `ENDERCLOUD_ORCHESTRATOR_URL` | No | `http://localhost:8080` | Private orchestrator callback URL |
+| `ENDERCLOUD_REPORTED_ENDPOINT` | No | Agent-allocated endpoint | Optional endpoint override for `SERVER_READY` |
+
+The agent generates the first two values for managed containers. Most templates should not set an
+endpoint override.
+
+## Obtain the API
+
+Load the service during plugin enable:
+
+```java
+EnderCloudPaperApi cloud = Bukkit.getServicesManager()
+        .load(EnderCloudPaperApi.class);
+
+if (cloud == null) {
+    getLogger().severe("EnderCloud Paper bridge is unavailable");
+    getServer().getPluginManager().disablePlugin(this);
+    return;
+}
+```
+
+Network methods return `CompletableFuture`. Never call `get()` or `join()` on Paper's main thread.
+Handle success or failure asynchronously, then schedule Bukkit-only work back on the main thread
+when required.
+
+## API
+
+The public interface is:
+
+```java
+public interface EnderCloudPaperApi {
+    CompletableFuture<QueueResult> enqueue(QueueRequest request);
+    CompletableFuture<Boolean> leaveQueue(String groupId, String partyId);
+    Optional<SessionAssignment> currentAssignment();
+
+    CompletableFuture<Boolean> sendToHub(UUID playerId);
+    CompletableFuture<HubTransferResult> sendToHub(Collection<UUID> playerIds);
+
+    CompletableFuture<Void> reportGameStarting(String sessionId);
+    CompletableFuture<Void> reportGameStarted(String sessionId);
+    CompletableFuture<Void> reportPlayerEliminated(String sessionId, UUID playerId);
+    CompletableFuture<Void> reportGameCancelled(String sessionId, String reason);
+    CompletableFuture<Void> reportGameFinished(
+            String sessionId,
+            Map<String, Object> results);
+}
+```
+
+`currentAssignment()` is the only synchronous method. It reads the bridge's local cache and does
+not perform a network request.
+
+## Session lifecycle
+
+```text
+Players in a hub
+    |
+    | enqueue party
+    v
+FORMING
+    |
+    | feasible minimum profile
+    v
+WAITING_FOR_INSTANCE or TRANSFERRING
+    |
+    | Velocity transfers
+    v
+WAITING
+    |
+    | GAME_STARTING
+    v
+STARTING
+    |
+    | GAME_STARTED
+    v
+RUNNING
+    |
+    | GAME_FINISHED
+    v
+FINISHED
+```
+
+| State | Meaning for the game plugin |
+| --- | --- |
+| `FORMING` | The session is collecting tickets and has no locked game roster |
+| `WAITING_FOR_INSTANCE` | The session is eligible but no server can be reserved yet |
+| `TRANSFERRING` | EnderCloud is sending selected players to the reserved instance |
+| `WAITING` | The instance is waiting for arrivals or compatible backfill |
+| `STARTING` | The minigame plugin closed backfill and is performing final preparation |
+| `RUNNING` | The match has officially started |
+| `FINISHED` | EnderCloud stored the result payload |
+| `CANCELLED` | The session was explicitly cancelled and players are being evacuated |
+| `FAILED` | The session cannot continue because infrastructure or state failed |
+
+The minigame plugin owns the move into `STARTING` and `RUNNING`. EnderCloud rejects skipped,
+stale, or cross-instance transitions.
+
+## Enqueue an atomic party
+
+A queue request contains one group, one stable caller-supplied party ID, and distinct player UUIDs:
+
+```java
+QueueRequest request = new QueueRequest(
+        "skywars-solo",
+        "party-42",
+        List.of(player1, player2)
+);
+
+cloud.enqueue(request).whenComplete((result, error) -> {
+    if (error != null) {
+        getLogger().warning("Unable to join queue: " + error.getMessage());
         return;
     }
+    getLogger().info("Queue entry " + result.entryId()
+            + " is now " + result.state());
+});
+```
 
-Les méthodes réseau sont asynchrones. Ne pas utiliser get() ou join() sur le thread principal
-de Paper.
+The request must satisfy these rules:
 
-## API disponible
+- `groupId` names an enabled minigame group.
+- The party contains at least one player.
+- Player UUIDs are distinct.
+- Party size does not exceed the group's `team_size`.
+- No player belongs to another active queue entry or session.
+- `partyId` remains stable while this enqueue attempt is active.
 
-    public interface EnderCloudPaperApi {
-        CompletableFuture<Boolean> sendToHub(UUID playerId);
-        CompletableFuture<HubTransferResult> sendToHub(Collection<UUID> playerIds);
+EnderCloud never splits the party. Validation and conflict responses complete the future
+exceptionally. Active-membership conflicts normally use HTTP 409.
 
-        CompletableFuture<QueueResult> enqueue(QueueRequest request);
-        CompletableFuture<Boolean> leaveQueue(String groupId, String partyId);
-        Optional<SessionAssignment> currentAssignment();
-        CompletableFuture<Void> reportGameStarting(String sessionId);
-        CompletableFuture<Void> reportGameStarted(String sessionId);
-        CompletableFuture<Void> reportPlayerEliminated(String sessionId, UUID playerId);
-        CompletableFuture<Void> reportGameCancelled(String sessionId, String reason);
-        CompletableFuture<Void> reportGameFinished(
-                String sessionId,
-                Map<String, Object> results);
+The returned `entryId` is the ticket identifier later exposed in assignments. A future enqueue
+may reuse the same `partyId`, so do not treat `partyId` as a unique session ticket.
+
+## Leave the queue
+
+```java
+cloud.leaveQueue("skywars-solo", "party-42")
+        .thenAccept(removed -> {
+            if (!removed) {
+                getLogger().info("Party was not queued");
+            }
+        });
+```
+
+This removes a party only while its entry remains queued. After the matchmaker selects it into a
+session, `leaveQueue` does not remove a player from the game. The minigame plugin owns its policy
+for disconnects, reconnects, forfeits, and substitutes.
+
+## Read and acknowledge assignments
+
+The Paper bridge refreshes its assignment once per second and acknowledges each new revision.
+Read the current cache without blocking:
+
+```java
+cloud.currentAssignment().ifPresent(assignment -> {
+    String sessionId = assignment.sessionId();
+    List<Integer> recommendedProfile = assignment.recommendedProfile();
+
+    for (SessionAssignment.AssignedPlayer player : assignment.players()) {
+        UUID uuid = UUID.fromString(player.playerId());
+        String partyId = player.partyId();
+        String ticketId = player.ticketId();
+        // Place each indivisible ticket into teams compatible with the profile.
     }
+});
+```
 
-## Cycle de vie d’une partie
+An assignment contains:
 
-    Joueurs dans le hub
-        │ enqueue(party)
-        ▼
-    FORMING
-        │ profil minimal réalisable
-        ▼
-    WAITING_FOR_INSTANCE / TRANSFERRING
-        │ transfert Velocity
-        ▼
-    WAITING
-        │ préparation du mini-jeu
-        ├─ GAME_STARTING
-        ├─ GAME_STARTED
-        ▼
-    RUNNING
-        │ partie terminée
-        └─ GAME_FINISHED
+- `sessionId`, `groupId`, session `state`, and numeric `revision`;
+- `expectedPlayerCount` and `connectedPlayerCount`;
+- `acceptingTickets` and `lockEligible` policy hints;
+- all `feasibleProfiles` and one `recommendedProfile`;
+- assigned players with UUID, `partyId`, `ticketId`, and player state.
 
-États utiles :
+Player states are `SELECTED`, `TRANSFERRING`, `CONNECTED`, and `LEFT`.
 
-| État | Signification |
-|---|---|
-| FORMING | La session collecte des tickets hors serveur. |
-| WAITING_FOR_INSTANCE | La session attend un serveur disponible. |
-| TRANSFERRING | Les joueurs sont transférés vers l’instance. |
-| WAITING | L’instance attend les arrivées ou le remplissage. |
-| STARTING | Le mini-jeu prépare son démarrage définitif. |
-| RUNNING | La partie est officiellement démarrée. |
-| FINISHED | Les résultats sont enregistrés. |
-| CANCELLED / FAILED | La session ne peut pas continuer. |
+Profiles are anonymous sorted team sizes. The minigame plugin assigns indivisible tickets to its
+actual teams and spawns. Every chosen team size must match one feasible profile. Never split
+players that share a `ticketId`.
 
-## Inscrire une party dans la file
+`lockEligible` means the current membership satisfies the configured team policy. It does not
+start the game and does not remove the plugin's authority over `GAME_STARTING`.
 
-Une entrée de file correspond à une party atomique. EnderCloud ne sépare jamais ses joueurs.
+## Handle backfill and assignment revisions
 
-    QueueRequest request = new QueueRequest(
-            "skywars-solo",
-            "party-42",
-            List.of(player1, player2)
-    );
+EnderCloud may add compatible tickets while a session is `FORMING`, `WAITING_FOR_INSTANCE`,
+`TRANSFERRING`, or `WAITING`, provided its lobby deadline has not expired. `GAME_STARTING` closes
+backfill.
 
-    cloud.enqueue(request).whenComplete((result, error) -> {
-        if (error != null) {
-            getLogger().warning("Unable to join queue: " + error.getMessage());
-            return;
-        }
-        getLogger().info("Queue entry " + result.entryId()
-                + " is now " + result.state());
-    });
+When the assignment revision increases, the plugin must:
 
-Règles :
+1. Read the complete new assignment.
+2. Keep every already placed player on the same team.
+3. Add new indivisible tickets without violating a feasible profile.
+4. Update readiness checks for the new expected player count.
+5. Reject arrivals once the game is `STARTING` or `RUNNING` according to the game's own policy.
 
-- groupId doit être un groupe minigame activé ;
-- la party doit contenir au moins un joueur ;
-- les UUID doivent être distincts ;
-- la party ne doit pas dépasser team_size ;
-- un joueur ne peut pas être dans deux files ou sessions actives ;
-- partyId doit rester stable pendant l’opération.
+For a mode that cannot support backfill, configure a fixed player count and publish
+`GAME_STARTING` as soon as all required players and game assets are ready.
 
-Une erreur de validation ou de conflit doit être affichée comme un échec d’inscription. Les
-conflits utilisent généralement HTTP 409.
+## Start the game
 
-## Quitter la file
+Publish `GAME_STARTING` only after the selected players, map, teams, kits, inventories, and other
+game prerequisites are ready:
 
-    cloud.leaveQueue("skywars-solo", "party-42")
-            .thenAccept(removed -> {
-                if (!removed) {
-                    getLogger().info("Party was not queued");
-                }
-            });
+```java
+cloud.reportGameStarting(sessionId)
+        .exceptionally(error -> {
+            getLogger().warning("Unable to report STARTING: " + error.getMessage());
+            return null;
+        });
+```
 
-Après la sélection d’une session, cette méthode ne retire pas automatiquement un joueur de la
-partie. La politique de déconnexion/reconnexion appartient au plugin.
+After final preparation completes, publish `GAME_STARTED`:
 
-## Lire l’assignation
+```java
+cloud.reportGameStarted(sessionId)
+        .exceptionally(error -> {
+            getLogger().warning("Unable to report RUNNING: " + error.getMessage());
+            return null;
+        });
+```
 
-Le bridge Paper actualise l'assignation chaque seconde et acquitte automatiquement toute nouvelle
-révision. `currentAssignment()` lit ce cache local et ne fait pas de requête réseau :
+Do not publish `GAME_STARTED` before `GAME_STARTING`. Network retries may resend the same event for
+the same session and instance. Reuse the same `sessionId`; never continue sending events for an
+assignment that has changed to another session.
 
-    cloud.currentAssignment().ifPresent(assignment -> {
-        String sessionId = assignment.sessionId();
-        List<Integer> recommendedProfile = assignment.recommendedProfile();
+## Release an eliminated player
 
-        for (SessionAssignment.AssignedPlayer player : assignment.players()) {
-            UUID uuid = UUID.fromString(player.playerId());
-            String partyId = player.partyId();
-            String ticketId = player.ticketId();
-            // Le plugin place les tickets dans des équipes compatibles avec le profil.
-        }
-    });
+When a player is permanently eliminated from a running game, release the player before trying to
+enqueue them again:
 
-Une assignation contient sessionId, groupId, l’état de session, une revision, les comptes attendus
-et connectés, `acceptingTickets`, `lockEligible`, les profils réalisables et le profil recommandé.
-Chaque joueur contient son UUID, sa party, le `ticketId` de cette inscription et son état.
+```java
+cloud.reportPlayerEliminated(sessionId, playerId)
+        .thenCompose(ignored -> cloud.enqueue(new QueueRequest(
+                "skywars-solo",
+                nextPartyId,
+                List.of(playerId)
+        )))
+        .exceptionally(error -> {
+            getLogger().warning("Unable to requeue eliminated player: "
+                    + error.getMessage());
+            return null;
+        });
+```
 
-`lockEligible` est une indication calculée depuis la politique d’équilibrage, pas une autorisation :
-le plugin conserve l’autorité sur `GAME_STARTING`, que l’orchestrateur accepte sans deadline de
-démarrage partiel.
+Wait for `reportPlayerEliminated` to succeed before enqueueing. EnderCloud marks the player left in
+the session but keeps the player in observed instance counts. The player may remain as a spectator
+until a later transfer.
 
-Les états d’un joueur sont SELECTED, TRANSFERRING, CONNECTED et LEFT.
+The event is valid only for a player in a `RUNNING` session assigned to the current instance.
+EnderCloud does not reconstruct the player's previous party. The plugin must build and validate
+the next party itself.
 
-Les profils sont anonymes et triés. Le plugin mini-jeu reste responsable de l’affectation finale
-des tickets aux équipes ; il doit conserver chaque `ticketId` indivisible et produire le profil
-choisi. Deux tickets successifs peuvent partager le même `partyId`, notamment lorsqu’un joueur
-quitte puis revient en file.
+## Cancel a game
 
-## Démarrer le mini-jeu
+If the game cannot continue, report cancellation instead of stopping the container:
 
-Le plugin décide quand tous les prérequis sont réunis : joueurs présents, équipes préparées,
-map initialisée et inventaires prêts.
+```java
+cloud.reportGameCancelled(sessionId, "not enough teams")
+        .exceptionally(error -> {
+            getLogger().warning("Unable to report CANCELLED: " + error.getMessage());
+            return null;
+        });
+```
 
-    cloud.reportGameStarting(sessionId)
-            .exceptionally(error -> {
-                getLogger().warning("Unable to report STARTING: " + error.getMessage());
-                return null;
-            });
+`GAME_CANCELLED` is accepted while players are transferring, waiting, starting, or already
+running. EnderCloud closes incoming transfers, removes the instance from the Velocity registry,
+and schedules its connected players across available hubs. It retries evacuation while players
+remain present.
 
-Après la préparation finale :
+The group's `timeouts.cancelled_drain` is the final safety deadline before EnderCloud proceeds to
+forced shutdown. Do not call Docker or shut the server down directly, because that bypasses
+durable cancellation and player evacuation.
 
-    cloud.reportGameStarted(sessionId)
-            .exceptionally(error -> {
-                getLogger().warning("Unable to report RUNNING: " + error.getMessage());
-                return null;
-            });
+## Finish a game
 
-Ne pas envoyer `GAME_STARTED` avant `GAME_STARTING`. L'orchestrateur accepte le même événement
-plusieurs fois pour permettre les retries réseau, mais il refuse une transition sautée, obsolète
-ou liée à une autre instance.
+Result values are game-defined but must be serializable by the shared JSON mapper. Prefer stable,
+documented keys:
 
-## Libérer un joueur éliminé
+```java
+Map<String, Object> results = Map.of(
+        "winner", winnerUuid.toString(),
+        "durationSeconds", 642,
+        "placements", Map.of(
+                player1.toString(), 1,
+                player2.toString(), 2
+        )
+);
 
-Lorsqu’un joueur est définitivement éliminé d’une partie en cours, le plugin doit le libérer de
-la session avant de tenter une nouvelle inscription :
+cloud.reportGameFinished(sessionId, results)
+        .exceptionally(error -> {
+            getLogger().warning("Unable to report FINISHED: " + error.getMessage());
+            return null;
+        });
+```
 
-    cloud.reportPlayerEliminated(sessionId, playerId)
-            .thenCompose(ignored -> cloud.enqueue(new QueueRequest(
-                    "skywars-solo",
-                    nextPartyId,
-                    List.of(playerId)
-            )))
-            .exceptionally(error -> {
-                getLogger().warning("Unable to requeue eliminated player: "
-                        + error.getMessage());
-                return null;
-            });
+After `GAME_FINISHED`, the session is terminal and EnderCloud moves the instance through its normal
+drain and shutdown policy.
 
-Il faut attendre la réussite de `reportPlayerEliminated` avant d’appeler `enqueue`. EnderCloud
-marque alors le joueur comme sorti de l’ancienne session, mais le conserve dans le comptage du
-serveur : il peut donc rester spectateur jusqu’au transfert vers sa prochaine partie. L’événement
-n’est accepté que pour un joueur appartenant à une session `RUNNING` de cette instance.
+## Send players to a hub
 
-EnderCloud ne reconstruit pas la composition précédente de la party. La nouvelle demande est
-validée uniquement à partir des UUID qu’elle contient ; le plugin mini-jeu reste responsable de
-la cohérence de cette composition.
+Use `sendToHub` when a player leaves a game voluntarily or the plugin needs a normal lobby return:
 
-## Annuler la partie
+```java
+cloud.sendToHub(player.getUniqueId())
+        .thenAccept(accepted -> {
+            if (!accepted) {
+                getLogger().warning("No hub transfer was accepted");
+            }
+        });
+```
 
-Si le mini-jeu ne peut plus continuer, il doit signaler explicitement l’annulation :
+For several players, the batch result separates accepted and rejected UUIDs:
 
-    cloud.reportGameCancelled(sessionId, "not enough teams")
-            .exceptionally(error -> {
-                getLogger().warning("Unable to report CANCELLED: " + error.getMessage());
-                return null;
-            });
+```java
+cloud.sendToHub(playerIds).thenAccept(result -> {
+    result.acceptedPlayers().forEach(id ->
+            getLogger().fine("Hub transfer accepted for " + id));
+    result.rejectedPlayers().forEach(id ->
+            getLogger().warning("Hub transfer rejected for " + id));
+});
+```
 
-`GAME_CANCELLED` est accepté pendant le transfert, l’attente, le démarrage ou une partie déjà
-lancée. EnderCloud ferme immédiatement les transferts entrants, retire l’instance du registre
-Velocity et transfère activement les joueurs présents vers les hubs disponibles. L’évacuation est
-réessayée tant que l’instance contient des joueurs. `timeouts.cancelled_drain`, égal à 10 secondes
-dans l’exemple, constitue la deadline de sécurité avant l’arrêt forcé du serveur.
+EnderCloud balances accepted players across the least-loaded running hubs. The completed future
+means the durable transfer was scheduled. It does not wait for the player to arrive.
 
-## Terminer la partie
+## Presence and heartbeat
 
-    Map<String, Object> results = Map.of(
-            "winner", winnerUuid.toString(),
-            "durationSeconds", 642,
-            "placements", Map.of(
-                    player1.toString(), 1,
-                    player2.toString(), 2
-            )
-    );
+The Paper bridge automatically publishes:
 
-    cloud.reportGameFinished(sessionId, results)
-            .exceptionally(error -> {
-                getLogger().warning("Unable to report FINISHED: " + error.getMessage());
-                return null;
-            });
+- `SERVER_READY` until the orchestrator acknowledges startup;
+- `PLAYER_JOINED` for a Bukkit join;
+- `PLAYER_LEFT` for a Bukkit quit;
+- `HEARTBEAT` every ten seconds with all connected UUIDs and Paper TPS averages for 1, 5, and 15
+  minutes.
 
-Les résultats sont libres mais doivent rester sérialisables et utiliser des clés stables, par
-exemple winner, placements, scores et durationSeconds.
+The minigame plugin should not duplicate these events. It only needs Bukkit listeners for its own
+game state.
 
-## Arrivées, déconnexions et heartbeat
+Heartbeats let EnderCloud repair presence after a lost event or orchestrator restart. The TPS
+block is optional in the HTTP contract so older bridge versions remain compatible.
 
-Le bridge Paper publie automatiquement :
+## Group configuration example
 
-- PLAYER_JOINED lors de l’arrivée d’un joueur ;
-- PLAYER_LEFT lors de sa déconnexion ;
-- HEARTBEAT toutes les dix secondes avec la liste complète des joueurs présents et les moyennes TPS
-  Paper sur 1, 5 et 15 minutes.
+```yaml
+id: skywars-solo
+type: minigame
+enabled: true
 
-Le plugin de mini-jeu n’a normalement pas besoin de republier ces événements. Il doit seulement
-écouter les événements Bukkit nécessaires à sa logique.
-
-Le heartbeat permet à EnderCloud de corriger les états après une déconnexion ou un redémarrage.
-Le bloc TPS reste optionnel dans le contrat afin que les anciennes versions du bridge restent
-compatibles.
-
-## Backfill et changement de revision
-
-Tant qu’une session est en FORMING, WAITING_FOR_INSTANCE, TRANSFERRING ou WAITING et que
-`lobby_stale` n’est pas atteint, l’orchestrateur peut lui ajouter un ticket compatible.
-`GAME_STARTING` ferme définitivement le backfill.
-
-Le plugin doit :
-
-1. relire l’assignation quand sa revision augmente ;
-2. recalculer son affectation finale à partir des parties et profils reçus ;
-3. appliquer le même protocole de préparation ;
-4. ne jamais déplacer un joueur déjà assigné ;
-5. refuser les arrivées dès que le jeu est STARTING ou RUNNING.
-
-Pour un mode sans arrivée tardive, utilisez un nombre fixe de joueurs et démarrez rapidement
-après le transfert.
-
-## Configuration du groupe
-
-Exemple SkyWars Solo :
-
-    id: skywars-solo
-    type: minigame
+variants:
+  - id: sw-1s-japan
     enabled: true
+    weight: 100
 
-    variants:
-      - id: sw-1s-japan
-        enabled: true
-        weight: 100
+matchmaking:
+  minimum_players: 4
+  maximum_players: 12
+  team_count: 12
+  team_size: 1
+  candidate_window: 20
+  team_balance:
+    minimum_players_per_team: 0
+    maximum_team_spread: 1
 
-    matchmaking:
-      minimum_players: 4
-      maximum_players: 12
-      team_count: 12
-      team_size: 1
-      candidate_window: 20
-      team_balance:
-        minimum_players_per_team: 0
-        maximum_team_spread: 1
+capacity:
+  minimum_instances: 0
+  maximum_instances: 20
+  minimum_warm_instances: 1
+  maximum_warm_instances: 4
 
-    timeouts:
-      startup: 90s
-      drain: 15m
-      cancelled_drain: 10s
-      shutdown: 20s
-      transfer: 20s
-      player_stale: 30s
-      instance_acquisition: 45s
-      lobby_stale: 135s
+timeouts:
+  startup: 90s
+  drain: 15m
+  cancelled_drain: 10s
+  shutdown: 20s
+  transfer: 20s
+  player_stale: 30s
+  instance_acquisition: 45s
+  lobby_stale: 135s
+```
 
-Exemple BedWars 4v4v4v4 avec équilibrage des équipes :
+The matching final variant could be:
 
-    matchmaking:
-      minimum_players: 8
-      maximum_players: 16
-      team_count: 4
-      team_size: 4
-      team_balance:
-        minimum_players_per_team: 1
-        maximum_team_spread: 2
+```yaml
+id: sw-1s-japan
+revision: 2
+parents:
+  - skywars
+  - skywars-solo
 
-Exemple de variante :
+environment:
+  MAP_ID: japan
+```
 
-    id: sw-1s-japan
-    revision: 1
-    parents:
-      - skywars
-      - skywars-solo
+`maximum_players` must not exceed `team_count * team_size`. An enqueue request must not contain
+more players than `team_size`.
 
-La capacité maximale doit respecter maximum_players <= team_count * team_size. Une party
-supérieure à team_size est refusée à l’inscription.
+See [the group reference](../groups/GROUP.md) for every field.
 
-## Responsabilités
+## Common mistakes
 
-| Responsabilité | EnderCloud | Plugin mini-jeu |
-|---|:---:|:---:|
-| File d’attente | Oui | Utilise enqueue / leaveQueue |
-| Création d’instance | Oui | Non |
-| Transfert Velocity | Oui | Non |
-| Profils d’équipe réalisables | Oui | Choisit l’affectation finale |
-| Téléportation dans la map | Non | Oui |
-| Kits et inventaires | Non | Oui |
-| Détection de victoire | Non | Oui |
-| Calcul des résultats | Non | Oui |
-| Stockage des résultats | Oui | Publie GAME_FINISHED |
-| Annulation et évacuation | Oui | Publie GAME_CANCELLED |
-| Présence des joueurs | Bridge Paper | Réagit aux événements Bukkit |
+- Enqueueing into a hub group.
+- Sending a party larger than `team_size`.
+- Blocking Paper's main thread on a returned future.
+- Ignoring assignment revision changes.
+- Splitting one `ticketId` across teams.
+- Publishing `GAME_STARTED` before `GAME_STARTING`.
+- Starting before selected players and game assets are ready.
+- Reusing an old `sessionId` after the assignment changes.
+- Stopping the container instead of publishing `GAME_CANCELLED`.
+- Requeueing an eliminated player before the elimination future completes.
+- Republishing presence events already sent by the Paper bridge.
 
-## Erreurs fréquentes
+## Release checklist
 
-- utiliser un groupId de hub ;
-- inscrire une party plus grande que team_size ;
-- ignorer les changements de revision ;
-- démarrer avant que les joueurs soient connectés ;
-- appeler une API asynchrone en bloquant le thread principal ;
-- publier GAME_STARTED sans GAME_STARTING ;
-- arrêter directement le conteneur au lieu de publier GAME_CANCELLED ;
-- continuer une ancienne session après un changement de sessionId ;
-- republier les heartbeats déjà envoyés par le bridge.
-
-## Checklist de mise en production
-
-- Le groupe et la variante sont activés et synchronisés.
-- Le bridge Paper et le plugin du mini-jeu sont dans le template.
-- Les variables ENDERCLOUD_INSTANCE_ID et ENDERCLOUD_ORCHESTRATOR_URL sont disponibles.
-- Le plugin récupère EnderCloudPaperApi via ServicesManager.
-- L’inscription et l’annulation de file ont été testées.
-- Les parties restent indivisibles et l’affectation finale respecte un profil réalisable.
-- Les nouvelles revisions sont prises en compte.
-- Les retries de GAME_STARTING, GAME_STARTED, GAME_CANCELLED et GAME_FINISHED utilisent le même
-  sessionId.
-- Les erreurs réseau sont journalisées sans bloquer Paper.
+- The group and final variant are enabled and visible in the dashboard.
+- The final variant revision matches the template content being deployed.
+- The Paper bridge and minigame JAR are present in the effective layer stack.
+- `ENDERCLOUD_INSTANCE_ID` and `ENDERCLOUD_ORCHESTRATOR_URL` reach the Paper process.
+- The plugin loads `EnderCloudPaperApi` through `ServicesManager`.
+- Enqueue, leave, and active-membership conflicts have been tested.
+- Parties remain indivisible in every final team assignment.
+- New assignment revisions preserve already placed players.
+- Game lifecycle retries reuse the same current `sessionId`.
+- Cancellation evacuates players before shutdown.
+- Network failures are logged without blocking Paper's main thread.

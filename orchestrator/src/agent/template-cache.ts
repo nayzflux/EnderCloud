@@ -6,6 +6,7 @@ import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
 import { extract } from "tar-stream";
 import { inspectTemplateDirectory } from "../configuration/sync.ts";
+import type { Logger } from "../logger.ts";
 
 export interface RemoteTemplateLayer {
   readonly id: string;
@@ -22,6 +23,7 @@ export class TemplateCache {
   public constructor(
     private readonly root: string,
     private readonly orchestratorUrl: string,
+    private readonly logger?: Logger,
   ) {}
 
   public async resolveLayers(
@@ -51,7 +53,18 @@ export class TemplateCache {
   private async downloadLayer(layer: RemoteTemplateLayer): Promise<string> {
     const layerRoot = join(this.root, layer.id);
     const destination = join(layerRoot, layer.checksum);
-    if (await this.isDirectory(destination)) return destination;
+    if (await this.isDirectory(destination)) {
+      this.logger?.debug("template.cache.hit", "Template layer cache hit", {
+        layerId: layer.id,
+        checksum: layer.checksum,
+      });
+      return destination;
+    }
+    const startedAt = performance.now();
+    this.logger?.debug("template.cache.download_started", "Template layer download started", {
+      layerId: layer.id,
+      checksum: layer.checksum,
+    });
     await mkdir(layerRoot, { recursive: true });
     const staging = join(layerRoot, `${layer.checksum}-staging-${crypto.randomUUID()}`);
     await mkdir(staging, { recursive: true });
@@ -74,6 +87,11 @@ export class TemplateCache {
       }
       await rm(destination, { recursive: true, force: true });
       await rename(staging, destination);
+      this.logger?.debug("template.cache.download_completed", "Template layer download completed", {
+        layerId: layer.id,
+        checksum: layer.checksum,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
       return destination;
     } catch (error) {
       await rm(staging, { recursive: true, force: true }).catch(() => undefined);

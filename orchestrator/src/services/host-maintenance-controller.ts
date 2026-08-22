@@ -36,9 +36,9 @@ export class HostMaintenanceController {
         try {
           await this.drainHost(host.id);
         } catch (error) {
-          this.logger.error("Host maintenance failed", {
+          this.logger.error("host.maintenance.failed", "Host maintenance reconciliation failed", {
             hostId: host.id,
-            error: String(error),
+            error,
           });
         }
       }

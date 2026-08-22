@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RuntimeInstance } from "../../src/executor/executor.ts";
 import {
+  decodeDockerLogBuffer,
   instanceName,
   firstAvailablePort,
   LocalDockerExecutor,
@@ -88,6 +89,23 @@ test("Docker instance names include the variant and unique instance id", () => {
 test("game ports use the first free value in the configured range", () => {
   expect(firstAvailablePort(25565, 25568, new Set([25565, 25566]))).toBe(25567);
   expect(firstAvailablePort(25565, 25566, new Set([25565, 25566]))).toBeNull();
+});
+
+test("Docker log frames are demultiplexed before diagnostics are retained", () => {
+  const frame = (stream: number, value: string) => {
+    const content = Buffer.from(value);
+    const header = Buffer.alloc(8);
+    header[0] = stream;
+    header.writeUInt32BE(content.length, 4);
+    return Buffer.concat([header, content]);
+  };
+  const multiplexed = Buffer.concat([
+    frame(1, "server output\n"),
+    frame(2, "server error\n"),
+  ]);
+  expect(decodeDockerLogBuffer(multiplexed).toString("utf8"))
+    .toBe("server output\nserver error\n");
+  expect(decodeDockerLogBuffer(Buffer.from("plain tty output"))).toEqual(Buffer.from("plain tty output"));
 });
 
 test("ordered layers merge recursively and omit control descriptors", async () => {

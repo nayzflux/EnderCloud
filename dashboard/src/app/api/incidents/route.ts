@@ -22,7 +22,7 @@ export function GET(request: Request) {
   }
   if (kind && ![
     "CAPACITY_BLOCKED", "INSTANCE_FAILURE_LOOP", "HOST_UNAVAILABLE",
-    "HOST_RECOVERY_STUCK", "HOST_MAINTENANCE_BLOCKED", "SESSION_RETRIES_EXHAUSTED",
+    "HOST_RECOVERY_STUCK", "HOST_MAINTENANCE_BLOCKED",
     "TRANSFER_FAILURE_LOOP", "COMMAND_FAILURE_LOOP", "CONTROL_LOOP_FAILURE",
   ].includes(kind)) {
     return validationErrorResponse("Invalid incident type.");

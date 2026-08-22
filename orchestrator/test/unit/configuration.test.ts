@@ -9,6 +9,7 @@ describe("configuration", () => {
   test("parses duration units", () => {
     expect(parseDuration("45s", "test")).toBe(45_000);
     expect(parseDuration("15m", "test")).toBe(900_000);
+    expect(() => parseDuration(45_000, "test")).toThrow("duration such as");
   });
 
   test("defaults and validates the hub instance lifetime", () => {
@@ -107,53 +108,7 @@ describe("configuration", () => {
     });
   });
 
-  test("parses the legacy team-balancing policy alias", () => {
-    const group = parseGroup(
-      {
-        id: "bedwars-4v4v4v4",
-        type: "minigame",
-        variants: [{ id: "bedwars-map", enabled: true, weight: 100 }],
-        matchmaking: {
-          minimum_players: 8,
-          maximum_players: 16,
-          team_count: 4,
-          team_size: 4,
-          waiting_timeout: "60s",
-          instance_wait_timeout: "30s",
-          maximum_waiting_timeout: "4m",
-          candidate_window: 32,
-          partial_start: {
-            minimum_players_per_team: 1,
-            maximum_team_spread: 2,
-          },
-        },
-        capacity: {
-          minimum_instances: 0,
-          maximum_instances: 20,
-          minimum_warm_instances: 0,
-          maximum_warm_instances: 4,
-        },
-        lifecycle: {
-          startup_timeout: "90s",
-          draining_timeout: "15m",
-          shutdown_timeout: "20s",
-        },
-      },
-      "bedwars.yml",
-    );
-    expect(group.matchmaking).toMatchObject({
-      candidateWindow: 32,
-      minimumPlayersPerTeam: 1,
-      maximumTeamSpread: 2,
-    });
-    expect(group.timeouts).toMatchObject({
-      instanceAcquisitionMs: 30_000,
-      lobbyStaleMs: 240_000,
-    });
-  });
-
-  test("warns on legacy aliases and rejects duplicate timeout names", () => {
-    const warnings: string[] = [];
+  test("rejects removed lifecycle and matchmaking aliases", () => {
     const legacy = {
       id: "legacy-hub",
       type: "hub",
@@ -174,21 +129,32 @@ describe("configuration", () => {
         shutdown_timeout: "20s",
       },
     };
-    parseGroup(legacy, "legacy.yml", {
-      transferMs: 20_000,
-      cancelledDrainMs: 10_000,
-      warn: (message) => warnings.push(message),
-    });
-    expect(warnings.length).toBe(3);
-    expect(() =>
-      parseGroup(
-        {
-          ...legacy,
-          timeouts: { startup: "90s" },
-        },
-        "duplicate.yml",
-      )
-    ).toThrow("cannot define both");
+    expect(() => parseGroup(legacy, "legacy.yml")).toThrow("lifecycle was removed");
+    const minigame = {
+      id: "legacy-game",
+      type: "minigame",
+      variants: [{ id: "legacy-map", enabled: true, weight: 100 }],
+      capacity: legacy.capacity,
+      matchmaking: {
+        minimum_players: 2,
+        maximum_players: 4,
+        team_count: 2,
+        team_size: 2,
+        instance_wait_timeout: "30s",
+      },
+      timeouts: {
+        startup: "90s",
+        drain: "5m",
+        cancelled_drain: "10s",
+        shutdown: "20s",
+        transfer: "20s",
+        player_stale: "30s",
+        instance_acquisition: "45s",
+        lobby_stale: "135s",
+      },
+    };
+    expect(() => parseGroup(minigame, "legacy-game.yml"))
+      .toThrow("matchmaking.instance_wait_timeout was removed");
   });
 
   test("rejects non-positive durations and duplicate lobby-stale aliases", () => {
@@ -227,7 +193,7 @@ describe("configuration", () => {
         },
         "invalid.yml",
       )
-    ).toThrow("duplicate timeout names");
+    ).toThrow("timeouts.ineligible_lobby was removed");
   });
 
   test("rejects latest images", () => {

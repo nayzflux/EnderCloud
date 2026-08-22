@@ -61,7 +61,6 @@ function boolean(value: unknown, context: string, fallback?: boolean): boolean {
 
 // Convert human-readable duration values into milliseconds.
 export function parseDuration(value: unknown, context: string): number {
-  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
   if (typeof value !== "string") {
     throw new Error(`${context} must be a duration such as 45s or 2m`);
   }
@@ -73,74 +72,14 @@ export function parseDuration(value: unknown, context: string): number {
   return amount * multipliers[match[2] as keyof typeof multipliers];
 }
 
-export interface GroupTimeoutFallbacks {
-  readonly transferMs: number;
-  readonly cancelledDrainMs: number;
-  readonly playerStaleMs?: number;
-  readonly warn?: (message: string) => void;
-}
-
 function timeoutValue(
   canonical: Record<string, unknown>,
   canonicalKey: string,
-  legacy: Record<string, unknown>,
-  legacyKey: string,
   context: string,
   fallback?: number,
-  warn?: (message: string) => void,
 ): number {
-  const next = canonical[canonicalKey];
-  const previous = legacy[legacyKey];
-  if (next !== undefined && previous !== undefined) {
-    throw new Error(
-      `${context} cannot define both timeouts.${canonicalKey} and deprecated ${legacyKey}`,
-    );
-  }
-  if (next !== undefined) return parseDuration(next, `${context}.timeouts.${canonicalKey}`);
-  if (previous !== undefined) {
-    warn?.(`${context}.${legacyKey} is deprecated; use timeouts.${canonicalKey}`);
-    return parseDuration(previous, `${context}.${legacyKey}`);
-  }
-  if (fallback !== undefined) return fallback;
-  throw new Error(`${context}.timeouts.${canonicalKey} is required`);
-}
-
-function renamedTimeoutValue(
-  canonical: Record<string, unknown>,
-  canonicalKey: string,
-  aliases: readonly {
-    readonly container: Record<string, unknown>;
-    readonly key: string;
-    readonly path: string;
-  }[],
-  context: string,
-  fallback?: number,
-  warn?: (message: string) => void,
-): number {
-  const candidates = [
-    {
-      value: canonical[canonicalKey],
-      path: `${context}.timeouts.${canonicalKey}`,
-      deprecated: false,
-    },
-    ...aliases.map((alias) => ({
-      value: alias.container[alias.key],
-      path: `${context}.${alias.path}`,
-      deprecated: true,
-    })),
-  ].filter((candidate) => candidate.value !== undefined);
-  if (candidates.length > 1) {
-    throw new Error(
-      `${context} defines duplicate timeout names: ${candidates.map((item) => item.path).join(", ")}`,
-    );
-  }
-  const selected = candidates[0];
-  if (selected) {
-    if (selected.deprecated) {
-      warn?.(`${selected.path} is deprecated; use timeouts.${canonicalKey}`);
-    }
-    return parseDuration(selected.value, selected.path);
-  }
+  const value = canonical[canonicalKey];
+  if (value !== undefined) return parseDuration(value, `${context}.timeouts.${canonicalKey}`);
   if (fallback !== undefined) return fallback;
   throw new Error(`${context}.timeouts.${canonicalKey} is required`);
 }
@@ -157,13 +96,11 @@ function validateId(value: unknown, context: string): string {
 export function parseGroup(
   document: unknown,
   source: string,
-  timeoutFallbacks: GroupTimeoutFallbacks = {
-    transferMs: 20_000,
-    cancelledDrainMs: 10_000,
-    playerStaleMs: 30_000,
-  },
 ): ServerGroupConfig {
   const root = object(document, source);
+  if (root.lifecycle !== undefined) {
+    throw new Error(`${source}.lifecycle was removed; use ${source}.timeouts`);
+  }
   const id = validateId(root.id, `${source}.id`);
   const type = root.type;
   if (type !== "hub" && type !== "minigame") {
@@ -189,7 +126,6 @@ export function parseGroup(
   }
   const capacity = object(root.capacity, `${source}.capacity`);
   const timeouts = object(root.timeouts ?? {}, `${source}.timeouts`);
-  const lifecycle = object(root.lifecycle ?? {}, `${source}.lifecycle`);
   const parsed: ServerGroupConfig = {
     id,
     type,
@@ -216,26 +152,22 @@ export function parseGroup(
     },
     timeouts: {
       startupMs: timeoutValue(
-        timeouts, "startup", lifecycle, "startup_timeout", source, undefined, timeoutFallbacks.warn,
+        timeouts, "startup", source,
       ),
       drainMs: timeoutValue(
-        timeouts, "drain", lifecycle, "draining_timeout", source, undefined, timeoutFallbacks.warn,
+        timeouts, "drain", source,
       ),
       cancelledDrainMs: timeoutValue(
-        timeouts, "cancelled_drain", {}, "cancelled_drain_timeout", source,
-        timeoutFallbacks.cancelledDrainMs, timeoutFallbacks.warn,
+        timeouts, "cancelled_drain", source,
       ),
       shutdownMs: timeoutValue(
-        timeouts, "shutdown", lifecycle, "shutdown_timeout", source, undefined,
-        timeoutFallbacks.warn,
+        timeouts, "shutdown", source,
       ),
       transferMs: timeoutValue(
-        timeouts, "transfer", {}, "transfer_timeout", source,
-        timeoutFallbacks.transferMs, timeoutFallbacks.warn,
+        timeouts, "transfer", source,
       ),
       playerStaleMs: timeoutValue(
-        timeouts, "player_stale", {}, "player_stale_timeout", source,
-        timeoutFallbacks.playerStaleMs ?? 30_000, timeoutFallbacks.warn,
+        timeouts, "player_stale", source,
       ),
     },
   };
@@ -252,36 +184,30 @@ export function parseGroup(
       throw new Error(`${source}.timeouts.instance_lifetime is only valid for hub groups`);
     }
     const matchmaking = object(root.matchmaking, `${source}.matchmaking`);
-    const legacyWaitingMs = matchmaking.waiting_timeout === undefined
-      ? undefined
-      : parseDuration(matchmaking.waiting_timeout, `${source}.matchmaking.waiting_timeout`);
-    if (matchmaking.waiting_timeout !== undefined) {
-      timeoutFallbacks.warn?.(
-        `${source}.matchmaking.waiting_timeout is deprecated and no longer controls game start`,
-      );
+    const removedMatchmakingKeys = {
+      waiting_timeout: "timeouts.instance_acquisition and timeouts.lobby_stale",
+      instance_wait_timeout: "timeouts.instance_acquisition",
+      maximum_waiting_timeout: "timeouts.lobby_stale",
+      partial_start: "matchmaking.team_balance",
+    } as const;
+    for (const [key, replacement] of Object.entries(removedMatchmakingKeys)) {
+      if (matchmaking[key] !== undefined) {
+        throw new Error(`${source}.matchmaking.${key} was removed; use ${replacement}`);
+      }
+    }
+    if (timeouts.ineligible_lobby !== undefined) {
+      throw new Error(`${source}.timeouts.ineligible_lobby was removed; use timeouts.lobby_stale`);
     }
     if (timeouts.partial_start !== undefined) {
-      timeoutFallbacks.warn?.(
-        `${source}.timeouts.partial_start is deprecated and ignored; the minigame plugin controls game start`,
-      );
+      throw new Error(`${source}.timeouts.partial_start was removed; the minigame plugin controls game start`);
     }
     const teamSize = integer(
       matchmaking.team_size,
       `${source}.matchmaking.team_size`,
       1,
     );
-    if (matchmaking.team_balance !== undefined && matchmaking.partial_start !== undefined) {
-      throw new Error(
-        `${source} cannot define both matchmaking.team_balance and deprecated matchmaking.partial_start`,
-      );
-    }
-    if (matchmaking.partial_start !== undefined) {
-      timeoutFallbacks.warn?.(
-        `${source}.matchmaking.partial_start is deprecated; use matchmaking.team_balance`,
-      );
-    }
     const teamBalance = object(
-      matchmaking.team_balance ?? matchmaking.partial_start ?? {},
+      matchmaking.team_balance ?? {},
       `${source}.matchmaking.team_balance`,
     );
     const policy = {
@@ -322,30 +248,12 @@ export function parseGroup(
     const instanceAcquisitionMs = timeoutValue(
       timeouts,
       "instance_acquisition",
-      matchmaking,
-      "instance_wait_timeout",
       source,
-      legacyWaitingMs,
-      timeoutFallbacks.warn,
     );
-    const lobbyStaleMs = renamedTimeoutValue(
+    const lobbyStaleMs = timeoutValue(
       timeouts,
       "lobby_stale",
-      [
-        {
-          container: timeouts,
-          key: "ineligible_lobby",
-          path: "timeouts.ineligible_lobby",
-        },
-        {
-          container: matchmaking,
-          key: "maximum_waiting_timeout",
-          path: "matchmaking.maximum_waiting_timeout",
-        },
-      ],
       source,
-      legacyWaitingMs === undefined ? undefined : legacyWaitingMs * 3,
-      timeoutFallbacks.warn,
     );
     return {
       ...parsed,
@@ -528,7 +436,6 @@ function effectiveChecksum(layers: readonly TemplateLayerSpec[]): string {
 export async function loadConfiguration(
   groupsRoot: string,
   templatesRoot: string,
-  timeoutFallbacks?: GroupTimeoutFallbacks,
 ) {
   const groupFiles = (await readdir(groupsRoot, { withFileTypes: true }))
     .filter((entry) => entry.isFile() && /\.ya?ml$/i.test(entry.name))
@@ -536,7 +443,7 @@ export async function loadConfiguration(
   // Group files are independent, so parse them concurrently during startup.
   const groups = await Promise.all(
     groupFiles.map(async (path) =>
-      parseGroup(parse(await readFile(path, "utf8")), path, timeoutFallbacks)
+      parseGroup(parse(await readFile(path, "utf8")), path)
     ),
   );
   const layers: TemplateLayerSpec[] = [];
@@ -613,14 +520,8 @@ export async function synchronizeConfiguration(
   groupsRoot: string,
   templatesRoot: string,
   logger: Logger,
-  timeoutFallbacks?: Omit<GroupTimeoutFallbacks, "warn">,
 ): Promise<void> {
-  const configuration = await loadConfiguration(groupsRoot, templatesRoot, {
-    transferMs: timeoutFallbacks?.transferMs ?? 20_000,
-    cancelledDrainMs: timeoutFallbacks?.cancelledDrainMs ?? 10_000,
-    playerStaleMs: timeoutFallbacks?.playerStaleMs ?? 30_000,
-    warn: (message) => logger.warn("Deprecated group timeout configuration", { message }),
-  });
+  const configuration = await loadConfiguration(groupsRoot, templatesRoot);
   // Groups and variants are committed together so readers never observe a partial config refresh.
   await db.transaction(async (tx) => {
     // Upsert preserves runtime rows that reference stable group identifiers.
@@ -754,7 +655,7 @@ export async function synchronizeConfiguration(
       );
     }
   });
-  logger.info("Configuration synchronized", {
+  logger.info("configuration.synchronized", "Configuration synchronized", {
     groups: configuration.groups.length,
     layers: configuration.layers.length,
     variants: configuration.variants.length,

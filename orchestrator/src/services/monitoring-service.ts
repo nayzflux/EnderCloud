@@ -114,9 +114,9 @@ export class MonitoringService {
           sample_count = server_tps_metrics.sample_count + 1
       `);
     } catch (error) {
-      this.logger.warn("Unable to record TPS metrics", {
+      this.logger.warn("monitoring.tps.failed", "Unable to record TPS metrics", {
         instanceId,
-        error: String(error),
+        error,
       });
     }
   }

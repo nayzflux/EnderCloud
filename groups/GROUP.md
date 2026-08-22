@@ -1,45 +1,90 @@
-# Groups
+# Server group configuration
 
-Groups define how EnderCloud creates, routes and manages Minecraft server instances. Each YAML
-file in this directory is loaded and validated when the orchestrator starts, then synchronized
-to the database.
+A server group defines traffic policy for one class of Minecraft server. Each `.yml` or `.yaml`
+file in this directory is parsed at orchestrator startup and synchronized to PostgreSQL.
 
-## Basic fields
+There are two schemas:
+
+- `hub` groups run shared lobby servers and route players by current load.
+- `minigame` groups match queued parties into isolated sessions.
+
+Invalid configuration stops orchestrator startup. The loader does not watch this directory, so
+restart the orchestrator after every change.
+
+## Common fields
+
+Every group starts with these fields:
 
 ```yaml
-id: skywars-solo       # lowercase letters, numbers and hyphens
-type: minigame         # hub or minigame
-enabled: true          # defaults to true when omitted
+id: skywars-solo
+type: minigame
+enabled: true
 
 variants:
-  - id: sw-1s-japan
+  - id: sw-1s-dome
     enabled: true
     weight: 60
-  - id: sw-1s-dome
+  - id: sw-1s-japan
     enabled: true
     weight: 40
 ```
 
-The `id` must be unique and contain 2 to 63 lowercase letters, digits or hyphens. `enabled`
-defaults to `true` for both groups and variant references. A group enabled for traffic must have at
-least one enabled final variant. The same final variant may belong to several groups with
-different weights.
+| Field | Required | Default | Rules |
+| --- | :---: | --- | --- |
+| `id` | Yes | None | Unique identifier with 2 to 63 lowercase letters, digits, or dashes |
+| `type` | Yes | None | `hub` or `minigame` |
+| `enabled` | No | `true` | Disabled groups receive no new traffic |
+| `variants` | Yes | None | Array of final variant references. IDs cannot repeat inside a group |
+| `variants[].id` | Yes | None | Existing final layer ID from `templates/` |
+| `variants[].enabled` | No | `true` | Disabled references remain synchronized but are not selected |
+| `variants[].weight` | Yes | None | Positive integer selection weight |
 
-Weights are relative. EnderCloud first selects the variants that are underrepresented in the
-current warm pool, then uses their weights to break ties. A weight of `2` can therefore maintain
-about twice as many warm instances as a weight of `1`; it is not a percentage.
+An enabled group needs at least one enabled variant. A disabled group may have no enabled
+variants. The same final variant may belong to several groups with different weights.
 
-## Capacity and timeouts
+Weights are relative, not percentages. EnderCloud first looks for variants that are
+underrepresented in the current warm pool. It uses weight when choosing among otherwise suitable
+variants. Equal weights give equal preference over time.
 
-Both group types require these sections:
+## Capacity
+
+All groups require the complete capacity block:
 
 ```yaml
 capacity:
   minimum_instances: 0
   maximum_instances: 20
-  minimum_warm_instances: 2
+  minimum_warm_instances: 1
   maximum_warm_instances: 4
+```
 
+| Field | Minimum | Meaning |
+| --- | ---: | --- |
+| `minimum_instances` | 0 | Floor for active physical instances in the group |
+| `maximum_instances` | 1 | Strict ceiling for normal active physical instances |
+| `minimum_warm_instances` | 0 | Floor for open instances that are ready or starting |
+| `maximum_warm_instances` | 0 | Ceiling for open instances kept ahead of demand |
+
+The limits must satisfy:
+
+```text
+minimum_instances <= maximum_instances
+minimum_warm_instances <= maximum_warm_instances <= maximum_instances
+```
+
+Lifecycle states `CREATING`, `STARTING`, `RUNNING`, and `DRAINING` count as active for normal
+capacity. Warm pending instances are `CREATING` or `STARTING` with availability `OPEN`. Warm ready
+instances are `RUNNING` and `OPEN`.
+
+During host maintenance, one replacement per group may temporarily exceed
+`maximum_instances`. This bounded surge prevents an open source instance from draining before its
+replacement is ready.
+
+## Common timeouts
+
+Every group requires these six durations:
+
+```yaml
 timeouts:
   startup: 90s
   drain: 15m
@@ -49,52 +94,88 @@ timeouts:
   player_stale: 30s
 ```
 
-`minimum_instances` and `maximum_instances` bound instances in `CREATING`, `STARTING`, `RUNNING`
-or `DRAINING`. Warm instances are open instances that are ready, or are being prepared, for new
-work. The limits must satisfy:
+Group durations are positive integers followed by `ms`, `s`, `m`, or `h`. Values such as `500ms`,
+`45s`, and `4h` are valid. Bare numbers and day suffixes are not valid in group YAML.
 
-```text
-minimum_instances <= maximum_instances
-minimum_warm_instances <= maximum_warm_instances <= maximum_instances
-```
+| Field | Starts when | Expiry behavior |
+| --- | --- | --- |
+| `startup` | Docker has started and the instance enters `STARTING` | Fail the instance if Paper has not sent `SERVER_READY` |
+| `drain` | Normal instance drain begins | Stop the instance even if players are still observed |
+| `cancelled_drain` | A minigame session is cancelled | Bound active hub evacuation before forced stop |
+| `shutdown` | The instance enters `STOPPING` | Bound graceful Minecraft shutdown before forceful Docker cleanup |
+| `transfer` | A transfer command is created | Expire the command and release session players that did not arrive |
+| `player_stale` | Paper last reports a player present | Remove the player from observed counts and mark session presence left |
 
-Durations use `ms`, `s`, `m` or `h`, for example `500ms`, `45s` or `5m`.
+The orchestrator persists an absolute deadline when an operation starts. Editing the timeout does
+not alter deadlines already stored in PostgreSQL. See [the timeout reference](../docs/TIMEOUTS.md).
 
 ## Hub groups
 
-Hub groups route players to shared lobby servers. Add these keys to the common fields above:
+A hub group adds `routing` and may set `timeouts.instance_lifetime`:
 
 ```yaml
+id: hub
+type: hub
+enabled: true
+
+variants:
+  - id: hub
+    enabled: true
+    weight: 100
+
+capacity:
+  minimum_instances: 2
+  maximum_instances: 5
+  minimum_warm_instances: 2
+  maximum_warm_instances: 4
+
 routing:
   maximum_players_per_instance: 100
   target_players_per_instance: 70
 
 timeouts:
+  instance_lifetime: 4h
   startup: 90s
   drain: 5m
   cancelled_drain: 10s
   shutdown: 20s
   transfer: 20s
   player_stale: 30s
-  instance_lifetime: 4h
 ```
 
-The target must not exceed the maximum. It is a soft aggregate scale-out threshold: reaching the
-combined target capacity of the active and starting instances requests another instance, up to
-`maximum_instances`. Players already connected above the target stay in place, and new arrivals
-continue toward the least-loaded hub until the strict maximum is reached. The `hub` group in
-`hub.yml` is the default example and fallback destination used by the proxy.
+| Field | Required | Default | Rules |
+| --- | :---: | --- | --- |
+| `routing.maximum_players_per_instance` | Yes | None | Positive integer and strict per-hub routing limit |
+| `routing.target_players_per_instance` | Yes | None | Positive integer no greater than the maximum |
+| `timeouts.instance_lifetime` | No | `4h` | Maximum age before replacement and drain |
 
-`instance_lifetime` defaults to `4h` when omitted. Once a hub reaches that persisted deadline, EnderCloud
-starts a replacement using the current variant selection and drains the old hub only after the
-replacement is ready. `maximum_instances` remains a strict limit: if the group is full, the
-expired hub stays open until a slot becomes available. Only one renewal runs per group at a time.
+The target is a soft aggregate scale-out threshold. When observed players reach the combined
+target capacity of running and starting hubs, the controller requests another hub up to
+`maximum_instances`. Players already above the target stay in place. New transfers still choose
+the least-loaded open hub until its strict maximum is reached.
+
+When a running hub reaches its persisted lifetime deadline, EnderCloud starts one replacement
+using current variant selection. It drains the expired hub only after the replacement reports
+ready. If no capacity slot is available, the expired hub remains open. One renewal runs per group
+at a time.
 
 ## Minigame groups
 
-Minigame groups match parties into sessions:
+A minigame group adds a matchmaking policy and two timeouts:
 
 ```yaml
+id: skywars-solo
+type: minigame
+enabled: true
+
+variants:
+  - id: sw-1s-dome
+    enabled: true
+    weight: 100
+  - id: sw-1s-japan
+    enabled: true
+    weight: 100
+
 matchmaking:
   minimum_players: 4
   maximum_players: 12
@@ -104,15 +185,13 @@ matchmaking:
   team_balance:
     minimum_players_per_team: 0
     maximum_team_spread: 1
-```
 
-The first ticket creates a `FORMING` session. Once `minimum_players` and the team-balance profile
-constraints are satisfied, EnderCloud reserves an instance. The game plugin has sole authority
-to emit `GAME_STARTING`; the orchestrator does not impose a partial-start deadline.
-`candidate_window` defaults to `20` and bounds the number of FIFO candidates evaluated per
-matchmaking tick. Minigame groups add two deadlines to the common `timeouts` block:
+capacity:
+  minimum_instances: 0
+  maximum_instances: 20
+  minimum_warm_instances: 1
+  maximum_warm_instances: 4
 
-```yaml
 timeouts:
   startup: 90s
   drain: 15m
@@ -124,12 +203,28 @@ timeouts:
   lobby_stale: 135s
 ```
 
-They respectively bound capacity acquisition and cancel a lobby that never progresses to
-`GAME_STARTING`. See [the timeout reference](../docs/TIMEOUTS.md) for every deadline.
+### Matchmaking fields
 
-The cap cannot exceed `team_count * team_size`; a party larger than `team_size` is rejected.
-`minimum_players_per_team` defaults to `0` and `maximum_team_spread` defaults to `team_size`.
-For a 4v4v4v4 formation with at least one player per team and a spread of at most two, use:
+| Field | Required | Default | Rules |
+| --- | :---: | --- | --- |
+| `minimum_players` | Yes | None | Positive integer no greater than `maximum_players` |
+| `maximum_players` | Yes | None | Positive integer no greater than `team_count * team_size` |
+| `team_count` | Yes | None | Positive integer number of teams |
+| `team_size` | Yes | None | Positive integer maximum players in one team and maximum party size |
+| `candidate_window` | No | `20` | Positive integer number of oldest FIFO entries considered per tick |
+| `team_balance.minimum_players_per_team` | No | `0` | Integer from 0 through `team_size` |
+| `team_balance.maximum_team_spread` | No | `team_size` | Integer from 0 through `team_size` |
+
+The matchmaker never splits a queue entry. A party larger than `team_size` is rejected before
+matchmaking. Feasible profiles must fit every atomic party, the player limits, and the balance
+rules.
+
+`minimum_players_per_team` can require every used team to reach a floor.
+`maximum_team_spread` bounds the difference between the largest and smallest team in a feasible
+profile.
+
+For a 4v4v4v4 mode that may start with eight players, requires at least one player per team, and
+allows a spread of at most two:
 
 ```yaml
 matchmaking:
@@ -137,21 +232,56 @@ matchmaking:
   maximum_players: 16
   team_count: 4
   team_size: 4
+  candidate_window: 32
   team_balance:
     minimum_players_per_team: 1
     maximum_team_spread: 2
 ```
 
-## Adding or changing a group
+### Minigame timeouts
 
-1. Copy an existing YAML file and choose a unique `id`.
-2. Use the schema for its `type` (`routing` for hubs or `matchmaking` for minigames).
-3. Add the final variant id to `variants` with a positive weight.
-4. Add or update its ordered template layers and make sure their resolved content is complete.
-5. Set `enabled: true` only when the group is ready, then restart the orchestrator.
+| Field | Required | Starts when | Expiry behavior |
+| --- | :---: | --- | --- |
+| `timeouts.instance_acquisition` | Yes | A feasible session needs an instance but none is available | Cancel the session if no instance can be reserved |
+| `timeouts.lobby_stale` | Yes | Transfers to the reserved instance begin | Cancel a lobby that never progresses to `GAME_STARTING` |
 
-The orchestrator reads and synchronizes every group only during startup. A missing field, invalid
-reference or inconsistent limit prevents startup. Restart the orchestrator after editing YAML.
-After changing a final variant or any of its effective files, increment the final variant's
-`revision`. A parent change updates every dependent checksum, but it does not increment those
-revisions for you. Running instances keep their already-materialized data.
+The minigame plugin has sole authority to publish `GAME_STARTING`. EnderCloud has no partial-start
+timer. `lobby_stale` is a watchdog for an abandoned lobby, not permission for the orchestrator to
+start a game.
+
+## Variant references
+
+Each referenced ID must resolve to one immediate directory under `templates/` with a valid
+`variant.yml`. Because it is a final variant, that descriptor must declare a positive `revision`.
+Its ordered layer stack must resolve `docker.image`, `docker.memory`, and `docker.cpu`.
+
+The group owns `enabled` and `weight`. Those fields are invalid inside `variant.yml`.
+
+After changing effective template files or runtime settings:
+
+1. Increment the final variant revision.
+2. Restart the orchestrator.
+3. Confirm the new revision and checksum in the dashboard.
+4. Watch startup status before routing production traffic to it.
+
+Existing instances keep their current materialized runtime. The revision affects new instance
+records.
+
+## Adding a group
+
+1. Copy the closest existing YAML file.
+2. Choose a unique ID and the correct `type`.
+3. Set all common capacity and timeout fields.
+4. Add `routing` for a hub or `matchmaking` plus its two timeouts for a minigame.
+5. Reference at least one complete final variant with a positive weight.
+6. Keep the group disabled until its server JAR, plugins, maps, and configuration are complete.
+7. Restart the orchestrator and check the configuration synchronization log.
+
+The group filename does not define its ID. Use the same stem as the ID anyway, because it makes
+operator searches and reviews less error-prone.
+
+## Removed fields
+
+The loader rejects the old `lifecycle` block, matchmaking timeout aliases, `partial_start`, and
+`timeouts.ineligible_lobby`. Use the canonical `timeouts` block and
+`matchmaking.team_balance`. Startup errors name the expected replacement.

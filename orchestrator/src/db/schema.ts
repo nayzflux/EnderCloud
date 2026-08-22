@@ -61,6 +61,13 @@ export const commandStateEnum = pgEnum("command_state", [
   "RUNNING",
   "SUCCEEDED",
   "FAILED",
+  "CANCELLED",
+]);
+export const variantStartStateEnum = pgEnum("variant_start_state", [
+  "BACKING_OFF",
+  "PROBING",
+  "BLOCKED",
+  "RESETTING",
 ]);
 
 const auditColumns = {
@@ -212,7 +219,6 @@ export const gameSessions = pgTable(
     instanceAcquisitionDeadline: timestamp("instance_acquisition_deadline", { withTimezone: true }),
     lobbyStaleDeadline: timestamp("lobby_stale_deadline", { withTimezone: true }),
     transferStartedAt: timestamp("transfer_started_at", { withTimezone: true }),
-    retryCount: integer("retry_count").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
@@ -234,6 +240,7 @@ export const serverInstances = pgTable(
     variantId: text("variant_id")
       .notNull()
       .references(() => serverVariants.id),
+    variantRevision: integer("variant_revision").notNull().default(1),
     sessionId: text("session_id").references(() => gameSessions.id),
     hostId: text("host_id").references(() => executionHosts.id),
     reservedCpu: doublePrecision("reserved_cpu"),
@@ -251,6 +258,11 @@ export const serverInstances = pgTable(
     drainDeadline: timestamp("drain_deadline", { withTimezone: true }),
     drainReason: text("drain_reason"),
     shutdownDeadline: timestamp("shutdown_deadline", { withTimezone: true }),
+    failedAt: timestamp("failed_at", { withTimezone: true }),
+    failureReason: text("failure_reason"),
+    failureDetails: jsonb("failure_details").$type<Readonly<Record<string, unknown>>>(),
+    failureLogTail: text("failure_log_tail"),
+    runtimeRetained: boolean("runtime_retained").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     startingAt: timestamp("starting_at", { withTimezone: true }),
     runningAt: timestamp("running_at", { withTimezone: true }),
@@ -294,6 +306,37 @@ export const serverInstances = pgTable(
       )`,
     ),
     index("server_instances_host_state_idx").on(table.hostId, table.lifecycleState),
+  ],
+);
+
+export const variantStartStates = pgTable(
+  "variant_start_states",
+  {
+    groupId: text("group_id").notNull().references(() => serverGroups.id, {
+      onDelete: "cascade",
+    }),
+    variantId: text("variant_id").notNull().references(() => serverVariants.id, {
+      onDelete: "cascade",
+    }),
+    variantRevision: integer("variant_revision").notNull(),
+    state: variantStartStateEnum("state").notNull(),
+    failureCount: integer("failure_count").notNull().default(0),
+    nextRetryAt: timestamp("next_retry_at", { withTimezone: true }),
+    probeInstanceId: text("probe_instance_id").references(() => serverInstances.id, {
+      onDelete: "set null",
+    }),
+    lastFailedInstanceId: text("last_failed_instance_id").references(() => serverInstances.id, {
+      onDelete: "set null",
+    }),
+    lastFailureReason: text("last_failure_reason"),
+    lastFailureAt: timestamp("last_failure_at", { withTimezone: true }),
+    resetRequestedAt: timestamp("reset_requested_at", { withTimezone: true }),
+    ...auditColumns,
+  },
+  (table) => [
+    primaryKey({ columns: [table.groupId, table.variantId, table.variantRevision] }),
+    index("variant_start_states_due_idx").on(table.state, table.nextRetryAt),
+    check("variant_start_states_failure_count_check", sql`${table.failureCount} >= 0`),
   ],
 );
 
@@ -413,6 +456,7 @@ export const commands = pgTable(
     payload: jsonb("payload"),
     lastError: text("last_error"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
   },
   (table) => [index("commands_pending_idx").on(table.state, table.createdAt)],
@@ -507,6 +551,7 @@ export const schema = {
   serverGroupVariants,
   gameSessions,
   serverInstances,
+  variantStartStates,
   queueEntries,
   queueEntryPlayers,
   sessionPlayers,

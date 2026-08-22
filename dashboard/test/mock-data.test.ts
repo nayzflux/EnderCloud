@@ -150,6 +150,8 @@ describe("mockCluster", () => {
     expect(states.has("RUNNING")).toBe(true);
     expect(states.has("FAILED")).toBe(true);
     expect(states.has("DRAINING")).toBe(true);
+    expect(mockCluster(now).groups.flatMap((group) => group.variants)
+      .some((variant) => variant.startup?.state === "BLOCKED")).toBe(true);
   });
 });
 

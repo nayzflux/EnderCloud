@@ -6,36 +6,44 @@ services:
       context: ./orchestrator
     command: ["bun", "src/agent/index.ts"]
     restart: unless-stopped
+    init: true
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
     environment:
       AGENT_ID: ${AGENT_ID:?Set a stable AGENT_ID}
       AGENT_VERSION: ${AGENT_VERSION:-0.1.0}
-      AGENT_PORT: 8090
-      AGENT_PUBLIC_URL: ${AGENT_PUBLIC_URL:?Set the private URL reachable by the orchestrator}
-      AGENT_GAME_ADDRESS: ${AGENT_GAME_ADDRESS:?Set the private address reachable by players}
-      AGENT_CPU: ${AGENT_CPU:?Set allocatable vCPU}
-      AGENT_MEMORY_BYTES: ${AGENT_MEMORY_BYTES:?Set allocatable memory in bytes}
-      AGENT_HEARTBEAT_INTERVAL_MS: ${AGENT_HEARTBEAT_INTERVAL_MS:-5000}
+      AGENT_LISTEN_PORT: 8090
+      AGENT_ADVERTISED_CONTROL_URL: ${AGENT_ADVERTISED_CONTROL_URL:?Set the private URL reachable by the orchestrator}
+      AGENT_ADVERTISED_GAME_ADDRESS: ${AGENT_ADVERTISED_GAME_ADDRESS:?Set the private address reachable by players}
+      AGENT_ALLOCATABLE_CPU: ${AGENT_ALLOCATABLE_CPU:?Set allocatable vCPU}
+      AGENT_ALLOCATABLE_MEMORY_BYTES: ${AGENT_ALLOCATABLE_MEMORY_BYTES:?Set allocatable memory in bytes}
+      AGENT_HEARTBEAT_INTERVAL: ${AGENT_HEARTBEAT_INTERVAL:-5s}
       AGENT_GAME_PORT_START: ${AGENT_GAME_PORT_START:-25565}
       AGENT_GAME_PORT_END: ${AGENT_GAME_PORT_END:-25664}
       ORCHESTRATOR_URL: ${ORCHESTRATOR_URL:?Set the private orchestrator URL}
-      DOCKER_SOCKET: /var/run/docker.sock
-      DOCKER_NETWORK: ${DOCKER_NETWORK:-endercloud}
-      RUNTIME_ROOT: /data/runtime
-      RUNTIME_HOST_ROOT: ${RUNTIME_HOST_ROOT:?Set the absolute runtime path seen by Docker}
-      TEMPLATE_CACHE_ROOT: /data/template-cache
+      AGENT_LOG_LEVEL: ${AGENT_LOG_LEVEL:-info}
+      AGENT_DOCKER_SOCKET: /var/run/docker.sock
+      AGENT_DOCKER_NETWORK: ${AGENT_DOCKER_NETWORK:-endercloud}
+      AGENT_RUNTIME_DIRECTORY: /data/runtime
+      AGENT_RUNTIME_HOST_DIRECTORY: ${AGENT_RUNTIME_HOST_DIRECTORY:?Set the absolute runtime path seen by Docker}
+      AGENT_TEMPLATE_CACHE_DIRECTORY: /data/template-cache
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${RUNTIME_LOCAL_PATH:-./runtime}:/data/runtime
+      - ${AGENT_RUNTIME_LOCAL_DIRECTORY:-./runtime}:/data/runtime
       - agent-template-cache:/data/template-cache
     ports:
-      - "${AGENT_BIND_ADDRESS:?Set the private bind address}:${AGENT_CONTROL_PORT:-8090}:8090"
+      - "${AGENT_PUBLISH_ADDRESS:?Set the private bind address}:${AGENT_PUBLISH_PORT:-8090}:8090"
     healthcheck:
       test:
         [
           "CMD",
           "bun",
           "-e",
-          "const r=await fetch('http://localhost:8090/health/live');process.exit(r.ok?0:1)",
+          "const r=await fetch('http://localhost:8090/health/ready');process.exit(r.ok?0:1)",
         ]
       interval: 10s
       timeout: 3s
@@ -48,4 +56,4 @@ volumes:
 
 networks:
   endercloud:
-    name: ${DOCKER_NETWORK:-endercloud}
+    name: ${AGENT_DOCKER_NETWORK:-endercloud}

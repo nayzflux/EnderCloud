@@ -145,7 +145,6 @@ function session(
     instance_acquisition_deadline:
       state === "WAITING_FOR_INSTANCE" ? "2026-07-27T12:01:00.000Z" : null,
     lobby_stale_deadline: null,
-    retry_count: 0,
     maximum_player_count: 12,
     active_player_count: 4,
     connected_player_count: state === "RUNNING" ? 4 : 0,

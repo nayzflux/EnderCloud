@@ -6,7 +6,6 @@ import {
   rankSessionCandidates,
   selectRecommendedProfile,
 } from "../../src/domain/matchmaking.ts";
-import { shouldRetryFailedSession } from "../../src/domain/session-recovery.ts";
 import {
   assertAvailabilityTransition,
   assertLifecycleTransition,
@@ -181,16 +180,5 @@ describe("variant selection", () => {
       { id: "japan", weight: 100, warmCount: 2 },
       { id: "mayas", weight: 100, warmCount: 0 },
     ]).id).toBe("mayas");
-  });
-});
-
-describe("session failure recovery", () => {
-  test("allows a bounded retry only before a game starts and before any arrival", () => {
-    expect(shouldRetryFailedSession("TRANSFERRING", 0, 0, 2)).toBeTrue();
-    expect(shouldRetryFailedSession("WAITING", 0, 1, 2)).toBeTrue();
-    expect(shouldRetryFailedSession("TRANSFERRING", 1, 0, 2)).toBeFalse();
-    expect(shouldRetryFailedSession("STARTING", 0, 0, 2)).toBeFalse();
-    expect(shouldRetryFailedSession("RUNNING", 0, 0, 2)).toBeFalse();
-    expect(shouldRetryFailedSession("TRANSFERRING", 0, 2, 2)).toBeFalse();
   });
 });
