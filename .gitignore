@@ -7,6 +7,12 @@ orchestrator/node_modules/
 orchestrator/coverage/
 orchestrator/dist/
 
+web/node_modules/
+web/.next/
+web/.source/
+web/playwright-report/
+web/test-results/
+
 plugins/.gradle/
 plugins/**/build/
 plugins/**/bin/

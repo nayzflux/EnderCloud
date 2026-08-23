@@ -31,6 +31,7 @@ Docker, local runtime files, template caching, and game-port allocation.
 | --- | --- |
 | `orchestrator/` | Bun and TypeScript control plane, host-agent entry point, migrations, and tests |
 | `dashboard/` | Next.js operations console and its browser-facing proxy routes |
+| `web/` | Public Next.js landing page and local Fumadocs documentation snapshot |
 | `plugins/core/` | Java contracts, HTTP client, and public Paper and Velocity APIs |
 | `plugins/paper/` | Paper bridge for readiness, presence, assignments, and game events |
 | `plugins/velocity/` | Dynamic server registry, player transfers, and hub fallback |
@@ -142,6 +143,13 @@ bun run lint
 bun run typecheck
 bun test
 bun run build
+
+cd ../web
+bun install --frozen-lockfile
+bun run lint
+bun run typecheck
+bun run build
+bun run test:e2e
 ```
 
 The orchestrator integration suite needs Docker:

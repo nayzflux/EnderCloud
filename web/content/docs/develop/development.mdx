@@ -1,0 +1,283 @@
+---
+title: Development
+description: Local services, migrations, watch mode, plugin builds, and repository workflows.
+---
+
+EnderCloud contains three build systems: Bun for the orchestrator and dashboard, Gradle for the
+Java plugins, and Docker Compose for an integrated deployment. Run commands from the directory
+shown in each section because several defaults use relative paths.
+
+## Prerequisites
+
+- Bun 1.3 or newer
+- JDK 25
+- Docker with Docker Compose
+- Git
+
+Docker is optional for fast TypeScript unit tests, Java tests, dashboard tests, and static checks.
+It is required for orchestrator integration tests, agent work, and full-stack runs.
+
+Confirm the local tools:
+
+```powershell
+bun --version
+java --version
+docker version
+docker compose version
+```
+
+## Install dependencies
+
+Install the two Bun workspaces separately:
+
+```powershell
+cd orchestrator
+bun install --frozen-lockfile
+
+cd ../dashboard
+bun install --frozen-lockfile
+```
+
+The Gradle wrapper downloads the configured Gradle distribution and locked dependencies on its
+first run:
+
+```powershell
+cd ../plugins
+.\gradlew.bat help
+```
+
+On Linux or macOS, use `./gradlew` in place of `.\gradlew.bat`.
+
+## Run the integrated stack
+
+Create the central environment file at the repository root:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Set a PostgreSQL password, keep `DATABASE_URL` in sync, and configure the primary agent resources,
+game address, and Docker-visible runtime path. Then run:
+
+```powershell
+docker compose up --build
+```
+
+Useful endpoints are:
+
+| Service | Default URL |
+| --- | --- |
+| Dashboard | `http://127.0.0.1:3000` |
+| Orchestrator readiness | `http://127.0.0.1:8080/health/ready` |
+| OpenAPI | `http://127.0.0.1:8080/openapi` |
+
+Stop the stack without deleting its named PostgreSQL volume:
+
+```powershell
+docker compose down
+```
+
+## Develop the orchestrator
+
+The watch command starts only the Bun process. It needs a PostgreSQL database and Redis server
+reachable from the host shell.
+
+Set the required URL and any non-default paths, then start watch mode from `orchestrator/`:
+
+```powershell
+$env:DATABASE_URL = "postgres://endercloud:change-me@localhost:5432/endercloud"
+$env:REDIS_URL = "redis://localhost:6379"
+bun run dev
+```
+
+When started from `orchestrator/`, the default configuration directories resolve to the root
+`groups/` and `templates/` directories. Startup applies migrations and synchronizes both
+directories before the API becomes ready.
+
+Other commands:
+
+```powershell
+bun run start
+bun run typecheck
+bun run test:unit
+bun run test:integration
+bun run test:coverage
+```
+
+The integration suite starts its own disposable PostgreSQL container if `TEST_DATABASE_URL` is
+unset. It does not need the development database URL.
+
+## Develop the agent
+
+The agent needs a reachable orchestrator, Docker access, and all required agent settings. For a
+direct Windows process, the Docker socket defaults to `//./pipe/docker_engine`. On Linux it
+defaults to `/var/run/docker.sock`.
+
+Set a dedicated ID and port range so a development agent cannot take ownership of production
+containers. From `orchestrator/`:
+
+```powershell
+$env:ORCHESTRATOR_URL = "http://localhost:8080"
+$env:AGENT_ID = "dev-host"
+$env:AGENT_ADVERTISED_CONTROL_URL = "http://127.0.0.1:8090"
+$env:AGENT_ADVERTISED_GAME_ADDRESS = "127.0.0.1"
+$env:AGENT_ALLOCATABLE_CPU = "4"
+$env:AGENT_ALLOCATABLE_MEMORY_BYTES = "8589934592"
+$env:AGENT_RUNTIME_DIRECTORY = "C:/EnderCloud/dev-runtime"
+$env:AGENT_RUNTIME_HOST_DIRECTORY = "/run/desktop/mnt/host/c/EnderCloud/dev-runtime"
+$env:AGENT_TEMPLATE_CACHE_DIRECTORY = "C:/EnderCloud/dev-template-cache"
+bun run agent
+```
+
+Use paths that actually exist for your Docker daemon. Docker Desktop may require a Linux VM path
+for `AGENT_RUNTIME_HOST_DIRECTORY`; see [the agent guide](/docs/configure/agent#runtime-materialization).
+
+The more representative workflow for agent changes is the Compose deployment, because it matches
+the Linux container, mounted Docker socket, and persistent cache used in production.
+
+## Develop the dashboard
+
+Create a local dashboard environment:
+
+```powershell
+cd dashboard
+Copy-Item .env.example .env.local
+bun run dev
+```
+
+The development server listens on `http://localhost:3000`. Set
+`ORCHESTRATOR_URL=http://localhost:8080` when the orchestrator runs on the host.
+
+For UI work without PostgreSQL, Redis, Docker, or the orchestrator, set:
+
+```dotenv
+DASHBOARD_MOCK_DATA=true
+```
+
+Synthetic mode returns a deterministic cluster through the same dashboard proxy routes. It is the
+fastest path for page layout, responsive behavior, filtering, and browser tests.
+
+Dashboard commands:
+
+```powershell
+bun run dev
+bun run lint
+bun run typecheck
+bun test
+bun run build
+bun run test:e2e
+```
+
+Install Playwright Chromium once before the end-to-end suite:
+
+```powershell
+npx playwright install chromium
+```
+
+See [the dashboard guide](/docs/configure/dashboard) for route and component details.
+
+## Develop the Java plugins
+
+The Gradle build has three modules:
+
+| Module | Purpose |
+| --- | --- |
+| `core` | Platform-neutral HTTP client, contracts, models, and public APIs |
+| `paper` | Paper bridge and Bukkit service implementation |
+| `velocity` | Velocity registry, transfers, initial routing, and fallback |
+
+Run tests and produce all artifacts from `plugins/`:
+
+```powershell
+.\gradlew.bat :core:build :paper:check :velocity:check :paper:shadowJar :velocity:shadowJar
+```
+
+Artifacts are written to:
+
+```text
+plugins/core/build/libs/EnderCloudCore-0.1.0.jar
+plugins/paper/build/libs/EnderCloudPaper-0.1.0.jar
+plugins/velocity/build/libs/EnderCloudVelocity-0.1.0.jar
+```
+
+Paper and Velocity produce shaded deployment JARs. Core is the compile-time API and client JAR.
+Paper API and Velocity API remain `compileOnly` and are not bundled.
+
+The module `build` tasks include project-specific local copy tasks. Use the narrower `shadowJar`
+tasks when you want deployment artifacts without those copies.
+
+## Database changes
+
+The Drizzle schema is `orchestrator/src/db/schema.ts`. SQL migrations live in
+`orchestrator/migrations/` and run in journal order.
+
+After changing the schema:
+
+```powershell
+cd orchestrator
+bun run db:generate
+```
+
+Review the generated SQL and metadata. Apply it to a development database with:
+
+```powershell
+$env:DATABASE_URL = "postgres://endercloud:change-me@localhost:5432/endercloud"
+bun run db:migrate
+```
+
+Add a test for new constraints or migration-sensitive behavior. Do not rewrite a migration that
+may already exist in another database.
+
+## Group and template changes
+
+Group and template configuration is startup-only. The normal edit cycle is:
+
+1. Change one group YAML file or one template layer.
+2. Increment every affected final variant revision when effective content changes.
+3. Restart the orchestrator.
+4. Check the `configuration.synchronized` log.
+5. Inspect the resolved layer order and runtime settings in the dashboard.
+6. Watch the first instance reach `RUNNING` before increasing traffic.
+
+Do not edit files under `runtime/instances` as source configuration. They are generated copies and
+will be replaced or deleted.
+
+See [the group reference](/docs/configure/groups) and
+[the template reference](/docs/configure/variants).
+
+## API and contract changes
+
+The Elysia application generates OpenAPI from route schemas. Update request validation and service
+behavior together, then inspect `/openapi` in a running development process.
+
+TypeScript and Java share fixture files under `contracts/fixtures/`. When a JSON shape changes:
+
+1. Update the TypeScript domain or API contract.
+2. Update the Java model and client.
+3. Update shared fixtures.
+4. Run orchestrator contract tests and `:core:build`.
+5. Run the affected Paper, Velocity, dashboard, and integration tests.
+
+Redis envelopes have `schemaVersion: 1`. A breaking event change needs an explicit compatibility
+plan because Velocity may reconnect while old and new processes overlap.
+
+## Code organization
+
+Keep pure policy in `orchestrator/src/domain/` when it can be expressed without I/O. Services own
+transactions and use cases. Executors and event buses hide remote side effects. The composition
+root constructs dependencies explicitly.
+
+Favor readable state transitions and narrow methods. Database transactions should contain the
+decision and every related durable write. Perform slow HTTP or Docker work after the transaction
+unless the existing command protocol requires otherwise.
+
+Dashboard server routes own upstream calls. Client components should call those local routes and
+should not learn the private orchestrator URL.
+
+## Validation before review
+
+For a documentation-only change, verify Markdown links and examples. For code changes, run the
+smallest relevant checks while iterating, then the full checks for every touched package.
+
+The standard full validation is documented in [Tests](/docs/develop/testing).
+
