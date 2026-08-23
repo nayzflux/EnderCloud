@@ -1,0 +1,40 @@
+---
+title: Installation
+description: Requirements, repository setup, configuration, and the first local EnderCloud stack.
+---
+
+## Requirements
+
+- Docker Engine with the Compose plugin.
+- Bun for orchestrator and dashboard development.
+- Java 21 and Gradle for the Paper and Velocity plugins.
+- Git for cloning the repository.
+
+## Clone and configure
+
+```bash
+git clone https://github.com/nayzflux/EnderCloud.git
+cd EnderCloud
+cp .env.example .env
+```
+
+Review the values in `.env` before starting services. The [environment reference](/docs/configure/environment) explains which process owns every setting and which removed names fail validation.
+
+## Start the central stack
+
+```bash
+docker compose up --build
+```
+
+The central deployment starts PostgreSQL, Redis, the orchestrator, and the repository's operational services. For additional Docker hosts, follow [multi-host deployment](/docs/configure/multi-host) and run one agent per host.
+
+## Define runnable servers
+
+Create server group configuration under `groups/` and template layers under `templates/`. A final variant becomes runnable only when a group references it.
+
+Read [server groups](/docs/configure/groups) and [template layers and variants](/docs/configure/variants) before editing production policy.
+
+## Validate the installation
+
+Use the health and readiness endpoints documented in the [orchestrator reference](/docs/configure/orchestrator). Run the relevant commands from the [test reference](/docs/develop/testing) after changing configuration or code.
+

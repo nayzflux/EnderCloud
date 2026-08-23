@@ -1,0 +1,30 @@
+---
+title: Product overview
+description: What EnderCloud owns, how a game session moves through the system, and when to use it.
+---
+
+EnderCloud coordinates an elastic Minecraft network across one or more Docker hosts. It sits between Velocity, Paper servers, and the infrastructure that runs them.
+
+## What the control plane owns
+
+- Ready capacity for each server group.
+- Party-aware matchmaking and session formation.
+- Placement across registered execution agents.
+- Immutable template material and variant revisions.
+- Instance, player, and session lifecycle state.
+- Velocity transfers, monitoring, and incident reporting.
+
+EnderCloud does not own minigame rules, team-specific kits, victory detection, or result calculation. Those remain inside the Paper plugin. It also does not replace Docker: each execution agent uses the local Docker daemon to materialize and supervise instances.
+
+## A typical session
+
+1. A server group maintains a configured number of warm instances.
+2. Players or parties join a queue through the integration API.
+3. The orchestrator selects a feasible set without splitting parties.
+4. A ready instance is reserved and a durable session is created.
+5. Velocity receives transfer commands for the selected players.
+6. The Paper plugin starts the match and later submits its result.
+7. The instance drains and is removed or replaced according to policy.
+
+Continue with [installation](/docs/getting-started/installation), then learn the [architecture](/docs/getting-started/architecture) and [core concepts](/docs/getting-started/concepts).
+

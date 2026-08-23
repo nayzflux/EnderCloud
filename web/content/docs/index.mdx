@@ -1,0 +1,25 @@
+---
+title: EnderCloud documentation
+description: Install, understand, operate, and extend the EnderCloud Minecraft control plane.
+---
+
+EnderCloud is a self-hosted control plane for elastic Minecraft networks. It keeps ready capacity available, forms game sessions without splitting parties, places servers across Docker hosts, and coordinates player transfers through Velocity.
+
+## Choose a path
+
+### Get the system running
+
+Start with the [product overview](/docs/getting-started/overview), follow the [installation guide](/docs/getting-started/installation), then read the [architecture](/docs/getting-started/architecture) before changing lifecycle behavior.
+
+### Configure and operate a cluster
+
+Define [server groups](/docs/configure/groups) and [template variants](/docs/configure/variants), then configure the [orchestrator](/docs/configure/orchestrator), each [execution agent](/docs/configure/agent), and [multi-host networking](/docs/configure/multi-host).
+
+### Integrate and develop
+
+Use the [minigame integration contract](/docs/develop/minigame-integration) for Paper and Velocity plugins. The [development guide](/docs/develop/development) and [test reference](/docs/develop/testing) cover the repository workflow.
+
+## System boundary
+
+The orchestrator is the only component that owns placement, matchmaking, sessions, and durable lifecycle state. Agents execute Docker work on their own hosts. Plugins and the dashboard interact with the control plane through explicit APIs.
+

@@ -1,0 +1,219 @@
+---
+title: Execution agent
+description: Docker execution, template caching, runtime recovery, networking, and host-local ports.
+---
+
+Run one EnderCloud agent on every Docker host that may run Minecraft instances. The agent is a
+small HTTP service with no placement or matchmaking policy. It carries out commands for its own
+stable host identifier and reports enough information for the orchestrator to reconcile state.
+
+The entry point is `orchestrator/src/agent/index.ts`. The central and standalone Compose files
+build it from the same image as the orchestrator but use a different command.
+
+## Responsibilities
+
+The agent:
+
+- sends periodic heartbeats with its control URL, game address, resources, and version;
+- exposes inventory, inspection, bounded log, create, stop, and delete endpoints;
+- downloads missing template layers from the orchestrator;
+- verifies the downloaded archive against its expected SHA-256 checksum;
+- materializes ordered layers into a disposable instance directory;
+- allocates an unused game port from its configured inclusive range;
+- pulls missing Docker images and starts resource-constrained containers;
+- labels every managed container so reconciliation can prove ownership;
+- removes managed containers and their safe runtime directories when requested.
+
+The agent does not query PostgreSQL or Redis. It does not choose a group, variant, session, host,
+or transfer target.
+
+## Start an agent
+
+The primary agent starts with the root stack:
+
+```powershell
+docker compose up --build
+```
+
+For a remote host, copy `.env.agent.example` to `.env.agent`, set the private addresses and host
+paths, then run:
+
+```powershell
+docker compose --env-file .env.agent -f compose.agent.yml up --build -d
+```
+
+To run the agent directly during development:
+
+```powershell
+cd orchestrator
+bun install --frozen-lockfile
+bun run agent
+```
+
+A direct process still needs Docker access, writable runtime and cache directories, and a reachable
+orchestrator.
+
+## Identity and heartbeat
+
+`AGENT_ID` is durable identity, not a display name. Do not change it while the host owns managed
+containers. Docker labels include this value, and the orchestrator uses it for reservations,
+recovery, and maintenance.
+
+The agent sends one heartbeat immediately after opening its HTTP listener, then repeats at
+`AGENT_HEARTBEAT_INTERVAL`. Heartbeats do not overlap. A request times out after the smaller of
+three seconds and the heartbeat interval.
+
+A successful heartbeat does not immediately make a returning host eligible for placement. The
+orchestrator first marks it `RECOVERING`, inventories its containers, resolves missing or orphaned
+runtime state, then marks it `ONLINE`.
+
+## HTTP API
+
+The agent API is private and unauthenticated.
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /health/live` | Process liveness and host ID |
+| `GET /health/ready` | Docker inventory probe. Returns 503 when Docker is unavailable |
+| `GET /api/v1/instances` | List managed containers owned by this agent ID |
+| `GET /api/v1/instances/{id}` | Inspect runtime existence and state |
+| `GET /api/v1/instances/{id}/logs` | Read a bounded Docker log tail |
+| `PUT /api/v1/instances/{id}` | Materialize templates and create or reuse an instance |
+| `POST /api/v1/instances/{id}/stop` | Stop a managed container with a bounded grace period |
+| `DELETE /api/v1/instances/{id}` | Delete an instance or one exactly matched orphan |
+
+The orchestrator passes `x-request-id` and, for durable work, `x-command-id`. The agent returns the
+request identifier and includes both values in structured logs.
+
+## Template cache
+
+The cache key is `<layer-id>/<checksum>`. A cache hit requires that exact directory. On a miss, the
+agent:
+
+1. Requests `/api/v1/template-layers/{id}/archive?checksum=<sha256>` from the orchestrator.
+2. Streams the gzip-compressed tar archive into a unique staging directory.
+3. Rejects links, unsupported entry types, absolute paths, and paths that escape staging.
+4. Recomputes the canonical layer checksum.
+5. Renames staging to the final cache path only after verification succeeds.
+
+Concurrent requests for the same layer and checksum share one download. The current agent does
+not evict valid cached layers. Monitor or rotate the cache volume on long-lived hosts after old
+revisions are no longer needed.
+
+## Runtime materialization
+
+For a new instance, the agent creates a staging directory under
+`AGENT_RUNTIME_DIRECTORY/instances`, copies each ordered layer, removes every `variant.yml`, then
+renames staging to the instance identifier. Later layers overwrite earlier files.
+
+The agent passes the host-visible form of the same directory to Docker and mounts it at `/data`.
+This is why the local and host runtime paths are separate settings:
+
+- `AGENT_RUNTIME_DIRECTORY` is the path inside the agent process.
+- `AGENT_RUNTIME_HOST_DIRECTORY` is the path the Docker daemon must bind into a child container.
+- `AGENT_RUNTIME_LOCAL_DIRECTORY` is a Compose host path mounted at
+  `AGENT_RUNTIME_DIRECTORY`. Compose reads it, not the agent process.
+
+On native Linux, the local and Docker-daemon paths are usually identical. Docker Desktop may
+expose a Windows directory to its Linux daemon under a path such as
+`/run/desktop/mnt/host/c/EnderCloud/runtime`.
+
+## Docker behavior
+
+The agent creates containers with:
+
+- name `endercloud-<variant-id>-<instance-id>`;
+- memory and CPU limits from the resolved variant;
+- `/data` bound to the materialized runtime directory;
+- container port 25565 published on the first free configured host port;
+- the configured local Docker network;
+- ownership labels for host, instance, group, variant, session, and host port;
+- `ENDERCLOUD_INSTANCE_ID` and `ENDERCLOUD_ORCHESTRATOR_URL` injected into the container.
+
+Create is safe to retry for the same instance identifier. If a correctly labelled container
+already exists, the agent starts it if needed and returns its existing endpoint. Port selection
+and container creation use a per-agent lock so concurrent creates cannot reserve the same port.
+
+Cleanup lists only containers carrying `orchestrator.managed=true` and the current agent's host
+label. Orphan deletion checks the labels again immediately before removal. Runtime deletion also
+refuses any path that is not one direct child of the configured `instances` directory.
+
+## Environment variables
+
+This table lists every variable read by the agent process. Defaults come from
+`orchestrator/src/agent/config.ts`.
+
+Durations require an integer and one of `ms`, `s`, `m`, `h`, or `d`.
+
+| Variable | Required | Default | Validation and purpose |
+| --- | :---: | --- | --- |
+| `ORCHESTRATOR_URL` | Yes | None | `http:` or `https:` base URL used for heartbeats and template downloads. Also injected into managed containers |
+| `AGENT_ID` | Yes | None | 2 to 63 lowercase letters, digits, or dashes. Stable host identity |
+| `AGENT_VERSION` | No | `0.1.0` | Version reported in heartbeats and logs |
+| `AGENT_LISTEN_PORT` | No | `8090` | Integer from 1 to 65535. Internal HTTP listen port |
+| `AGENT_ADVERTISED_CONTROL_URL` | Yes | None | `http:` or `https:` URL that the orchestrator can reach |
+| `AGENT_ADVERTISED_GAME_ADDRESS` | Yes | None | Hostname or address that Velocity can reach for published game ports |
+| `AGENT_ALLOCATABLE_CPU` | Yes | None | Positive number of vCPU available for reservations |
+| `AGENT_ALLOCATABLE_MEMORY_BYTES` | Yes | None | Positive integer number of bytes available for reservations |
+| `AGENT_HEARTBEAT_INTERVAL` | No | `5s` | Duration of at least 1 second |
+| `AGENT_DOCKER_SOCKET` | No | Platform default | Docker socket. Defaults to `/var/run/docker.sock` on Linux and `//./pipe/docker_engine` on Windows |
+| `AGENT_DOCKER_NETWORK` | No | `endercloud` | Local Docker network attached to managed Minecraft containers |
+| `AGENT_RUNTIME_DIRECTORY` | No | `/data/runtime` | Runtime directory visible to the agent process |
+| `AGENT_RUNTIME_HOST_DIRECTORY` | Yes | None | Matching absolute runtime directory as seen by the Docker daemon |
+| `AGENT_TEMPLATE_CACHE_DIRECTORY` | No | `/data/template-cache` | Persistent checksum-keyed layer cache |
+| `AGENT_GAME_PORT_START` | No | `25565` | First port in the inclusive allocation range, from 1 to 65535 |
+| `AGENT_GAME_PORT_END` | No | `25664` | Last port in the inclusive range. Must be at least the start and at most 65535 |
+| `AGENT_LOG_LEVEL` | No | `info` | One of `debug`, `info`, `warn`, or `error` |
+
+The Docker socket default depends on the operating system of the agent process. The supplied
+Compose files run the agent in a Linux container and mount `/var/run/docker.sock` explicitly.
+
+## Compose-only variables
+
+These variables configure host mounts and published ports. The agent process does not read them.
+
+| Variable | Compose file | Default | Purpose |
+| --- | --- | --- | --- |
+| `AGENT_RUNTIME_LOCAL_DIRECTORY` | Root and standalone | Required in root, `./runtime` standalone | Host directory mounted at `/data/runtime` |
+| `AGENT_PUBLISH_ADDRESS` | Standalone | Required | Private host interface for the agent control API |
+| `AGENT_PUBLISH_PORT` | Standalone | `8090` | Host port mapped to internal port 8090 |
+
+The local two-agent smoke test also consumes these scenario-only values:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SECONDARY_AGENT_GAME_ADDRESS` | Required | Address advertised by the second local agent |
+| `SECONDARY_AGENT_CPU` | `4` | Allocatable vCPU for the second agent |
+| `SECONDARY_AGENT_MEMORY_BYTES` | `8589934592` | Allocatable bytes for the second agent |
+| `SECONDARY_RUNTIME_HOST_ROOT` | Required | Second runtime path as seen by the Docker daemon |
+
+## Managed-container variables
+
+The agent injects these values into every managed Minecraft container after applying the variant
+environment:
+
+| Variable | Source | Consumer |
+| --- | --- | --- |
+| `ENDERCLOUD_INSTANCE_ID` | Durable instance ID | Paper bridge |
+| `ENDERCLOUD_ORCHESTRATOR_URL` | Agent `ORCHESTRATOR_URL` | Paper bridge and other server plugins |
+
+A template may set `ENDERCLOUD_REPORTED_ENDPOINT` to make the Paper bridge report a different
+endpoint in `SERVER_READY`. Most deployments should use the endpoint allocated by the agent and
+leave this unset.
+
+Velocity is not a managed Minecraft container. Its plugin separately reads
+`ENDERCLOUD_ORCHESTRATOR_URL` and `ENDERCLOUD_REDIS_URL`, both defaulting to localhost values when
+unset.
+
+## Security and operations
+
+Never publish the agent control API or Docker socket to an untrusted network. A caller that can
+reach the agent API can create and remove managed workloads. Bind `AGENT_PUBLISH_ADDRESS` to a
+private interface and restrict inbound traffic to the orchestrator.
+
+The game-port range is the only agent-owned port range intended for player traffic. Make it large
+enough for the host's maximum simultaneous instances and ensure it does not overlap another agent
+sharing the same Docker daemon.
+
+See [Multi-host execution](/docs/configure/multi-host) for routing, maintenance, and recovery procedures.
+
