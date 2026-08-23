@@ -1,6 +1,6 @@
 import { ImageResponse } from "next/og";
 
-export const alt = "EnderCloud — Minecraft server automation";
+export const alt = "EnderCloud - Minecraft server automation";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -26,17 +26,16 @@ export default function OpenGraphImage() {
           <div style={{ background: "#a867f4", display: "flex", height: 38, width: 38 }} />
           EnderCloud
         </div>
-        <div style={{ display: "flex", flexDirection: "column", maxWidth: 1000 }}>
-          <div style={{ color: "#a867f4", display: "flex", fontFamily: "monospace", fontSize: 18, letterSpacing: 3, marginBottom: 28 }}>
-            AUTOMATED MINECRAFT SERVER OPERATIONS
-          </div>
-          <div style={{ display: "flex", fontSize: 70, fontWeight: 700, letterSpacing: -4, lineHeight: 1.03 }}>
-            Stop running Minecraft servers by hand.
-          </div>
-        </div>
-        <div style={{ alignItems: "center", display: "flex", fontFamily: "monospace", fontSize: 18, justifyContent: "space-between" }}>
-          <span>VELOCITY → ORCHESTRATOR → AGENTS → DOCKER</span>
-          <span style={{ color: "#8be3aa" }}>● SYSTEM READY</span>
+        <div
+          style={{
+            display: "flex",
+            fontSize: 70,
+            fontWeight: 700,
+            letterSpacing: -4,
+            lineHeight: 1.03,
+          }}
+        >
+          Scale from player demand to servers ready
         </div>
       </div>
     ),
