@@ -29,7 +29,7 @@ bunx playwright install chromium
 
 ## Configuration
 
-Copy `.env.example` to `.env.local` and set `SITE_URL` to the public origin. It is used by metadata, Open Graph URLs, robots, and the sitemap.
+Copy `.env.example` to `.env.local` and set `SITE_URL` to the canonical public HTTPS origin. It is used by metadata, canonical URLs, Open Graph URLs, robots, and the sitemap. Do not deploy the public site with the local default.
 
 Documentation lives in `content/docs`. It is an edited local snapshot of the repository documentation; changes in the root `docs/` directory are not synchronized automatically.
 

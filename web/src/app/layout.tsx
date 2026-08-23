@@ -18,20 +18,35 @@ const ibmPlexMono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   metadataBase: siteUrl,
   title: {
-    default: `${site.name} — Minecraft server automation`,
-    template: `%s — ${site.name}`,
+    default: `${site.name} | Minecraft server orchestrator and autoscaler`,
+    template: `${site.name} | %s`,
   },
   description: site.description,
+  applicationName: site.name,
+  alternates: {
+    canonical: "/",
+  },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+      "max-video-preview": -1,
+    },
+  },
   openGraph: {
     type: "website",
     siteName: site.name,
-    title: `${site.name} — Minecraft server automation`,
+    title: `${site.name} | Minecraft server orchestrator and autoscaler`,
     description: site.description,
     url: "/",
   },
   twitter: {
     card: "summary_large_image",
-    title: `${site.name} — Minecraft server automation`,
+    title: `${site.name} | Minecraft server orchestrator and autoscaler`,
     description: site.description,
   },
 };

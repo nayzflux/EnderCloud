@@ -1,8 +1,9 @@
 # EnderCloud
 
-EnderCloud is a control plane for disposable Minecraft servers. It keeps warm capacity ready,
-matches parties into minigame sessions, starts Paper servers on one or more Docker hosts, and
-moves players through Velocity without making game plugins manage infrastructure.
+EnderCloud is an open-source Minecraft server orchestrator and autoscaler for on-demand game
+servers. It keeps warm capacity ready, matches parties into minigame sessions, starts Paper
+servers across Docker hosts, and moves players through Velocity without making game plugins
+manage infrastructure.
 
 The project uses a modular monolith for the central control plane. PostgreSQL stores durable
 state. Redis carries short-lived proxy events. A small agent runs on each execution host and owns

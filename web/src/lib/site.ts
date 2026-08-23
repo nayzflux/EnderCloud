@@ -1,7 +1,7 @@
 export const site = {
   name: "EnderCloud",
   description:
-    "Automate ready capacity, party-aware matchmaking, multi-host placement, and cleanup for self-hosted Minecraft networks.",
+    "Open-source Minecraft server orchestrator and autoscaler for on-demand game servers, party-aware matchmaking, and multi-host networks.",
   github: "https://github.com/nayzflux/EnderCloud",
 };
 

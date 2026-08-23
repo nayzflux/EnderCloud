@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import {
   Activity,
   ArrowRight,
@@ -16,12 +17,53 @@ import { MotionProvider } from "@/components/marketing/motion-provider";
 import { Reveal } from "@/components/marketing/reveal";
 import { SiteFooter } from "@/components/marketing/site-footer";
 import { SiteHeader } from "@/components/marketing/site-header";
-import { site } from "@/lib/site";
+import { site, siteUrl } from "@/lib/site";
 import { cn } from "@/lib/utils";
 import overviewScreenshot from "@/assets/dashboard/overview.png";
 import topologyScreenshot from "@/assets/dashboard/topology.png";
 import groupsScreenshot from "@/assets/dashboard/groups.png";
 import instancesScreenshot from "@/assets/dashboard/instances.png";
+
+export const metadata: Metadata = {
+  title: "Minecraft server orchestrator and autoscaler",
+  description:
+    "EnderCloud is an open-source Minecraft server orchestrator and autoscaler. Run game servers on demand, keep warm capacity, match parties, and place servers across Docker hosts.",
+};
+
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      name: site.name,
+      url: siteUrl.href,
+      logo: new URL("/icon.svg", siteUrl).href,
+      sameAs: [site.github],
+    },
+    {
+      "@type": "WebSite",
+      name: site.name,
+      url: siteUrl.href,
+      description: site.description,
+    },
+    {
+      "@type": "SoftwareApplication",
+      name: site.name,
+      applicationCategory: "DeveloperApplication",
+      operatingSystem: "Linux, Docker",
+      isAccessibleForFree: true,
+      codeRepository: site.github,
+      url: siteUrl.href,
+      description: site.description,
+      featureList: [
+        "Minecraft game server autoscaling",
+        "On-demand game server lifecycle management",
+        "Party-aware matchmaking",
+        "Multi-host Docker placement",
+      ],
+    },
+  ],
+};
 
 const lifecycle = [
   {
@@ -105,6 +147,12 @@ const solutions = [
 export default function Home() {
   return (
     <div id="top" className="page-grid min-h-screen">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c"),
+        }}
+      />
       <SiteHeader />
       <MotionProvider>
         <main>
@@ -113,15 +161,16 @@ export default function Home() {
               <div className="max-w-5xl">
                 <Reveal delay={0.08}>
                   <h1 className="mt-7 max-w-5xl text-5xl leading-[0.96] font-semibold tracking-[-0.055em] text-balance sm:text-7xl lg:text-[6.25rem]">
-                    Scale from player demand to servers ready
+                    Minecraft server orchestration, scaled by player demand
                   </h1>
                 </Reveal>
                 <Reveal delay={0.16}>
                   <p className="mt-8 max-w-3xl text-lg leading-8 text-muted-foreground sm:text-xl">
-                    EnderCloud orchestrates your Minecraft infrastructure.
-                    Keeping servers warm before queues fill, starting capacity
-                    as demand rises, and stopping idle instances, across
-                    multiple machines to balance load.
+                    EnderCloud is an open-source Minecraft server orchestrator
+                    and autoscaler for game networks. It keeps game servers
+                    ready before queues fill, starts servers on demand as
+                    players arrive, and stops idle instances across multiple
+                    Docker hosts.
                   </p>
                 </Reveal>
                 <Reveal delay={0.24}>
