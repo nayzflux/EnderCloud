@@ -402,6 +402,122 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       .toEqual([waitingPlayer]);
   });
 
+  test("a recovered session retains its original instance acquisition deadline", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = nanoid();
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "10.0.0.10:25565",
+    });
+    const queues = new QueueService(db);
+    await queues.enqueue({
+      groupId,
+      partyId: "recovery-party",
+      players: [crypto.randomUUID(), crypto.randomUUID()],
+    });
+    await matchmaker.tick();
+    const before = await db.select({
+      id: gameSessions.id,
+      acquisitionDeadline: gameSessions.instanceAcquisitionDeadline,
+    }).from(gameSessions);
+    expect(before[0]?.acquisitionDeadline).not.toBeNull();
+
+    await db.update(serverInstances).set({ lifecycleState: "FAILED" })
+      .where(eq(serverInstances.id, instanceId));
+    const controller = new SessionController(
+      db,
+      {} as InstanceController,
+      { cancelForInstance: async () => undefined } as unknown as TransferService,
+      {} as HubRouter,
+      mockLogger,
+    );
+    await controller.tick();
+    const recovered = await db.select({
+      state: gameSessions.state,
+      acquisitionDeadline: gameSessions.instanceAcquisitionDeadline,
+    }).from(gameSessions).where(eq(gameSessions.id, before[0]!.id));
+    expect(recovered[0]?.state).toBe("WAITING_FOR_INSTANCE");
+    expect(recovered[0]?.acquisitionDeadline?.getTime())
+      .toBe(before[0]?.acquisitionDeadline?.getTime());
+
+    const replacementId = nanoid();
+    await db.insert(serverInstances).values({
+      id: replacementId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "10.0.0.11:25565",
+    });
+    await matchmaker.tick();
+    await db.update(serverInstances).set({ lifecycleState: "FAILED" })
+      .where(eq(serverInstances.id, replacementId));
+    await controller.tick();
+    const recoveredAgain = await db.select({
+      state: gameSessions.state,
+      acquisitionDeadline: gameSessions.instanceAcquisitionDeadline,
+    }).from(gameSessions).where(eq(gameSessions.id, before[0]!.id));
+    expect(recoveredAgain[0]?.state).toBe("WAITING_FOR_INSTANCE");
+    expect(recoveredAgain[0]?.acquisitionDeadline?.getTime())
+      .toBe(before[0]?.acquisitionDeadline?.getTime());
+
+    await db.update(gameSessions).set({ instanceAcquisitionDeadline: new Date(0) })
+      .where(eq(gameSessions.id, before[0]!.id));
+    await controller.tick();
+    const expired = await db.select({ state: gameSessions.state })
+      .from(gameSessions).where(eq(gameSessions.id, before[0]!.id));
+    expect(expired[0]?.state).toBe("CANCELLED");
+  });
+
+  test("a legacy session receives a deadline when its instance fails", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = nanoid();
+    const sessionId = nanoid();
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      lifecycleState: "FAILED",
+      availabilityState: "OPEN",
+    });
+    await db.insert(gameSessions).values({
+      id: sessionId,
+      groupId,
+      instanceId,
+      state: "TRANSFERRING",
+      instanceAcquisitionDeadline: null,
+    });
+
+    const controller = new SessionController(
+      db,
+      {} as InstanceController,
+      { cancelForInstance: async () => undefined } as unknown as TransferService,
+      {} as HubRouter,
+      mockLogger,
+    );
+    const beforeRecovery = Date.now();
+    await controller.tick();
+    const recovered = await db.select({
+      state: gameSessions.state,
+      acquisitionDeadline: gameSessions.instanceAcquisitionDeadline,
+    }).from(gameSessions).where(eq(gameSessions.id, sessionId));
+    expect(recovered[0]?.state).toBe("WAITING_FOR_INSTANCE");
+    expect(recovered[0]?.acquisitionDeadline?.getTime()).toBeGreaterThan(beforeRecovery);
+  });
+
   test("placement serializes reservations without overallocating either host", async () => {
     const { groupId } = await seedGroup();
     await db.update(executionHosts).set({

@@ -246,6 +246,14 @@ export class SessionController {
               instanceId: null,
               transferStartedAt: null,
               lobbyStaleDeadline: null,
+              instanceAcquisitionDeadline: sql`COALESCE(
+                ${gameSessions.instanceAcquisitionDeadline},
+                now() + (
+                  SELECT acquisition_group.instance_acquisition_timeout_ms * interval '1 millisecond'
+                  FROM server_groups acquisition_group
+                  WHERE acquisition_group.id = ${gameSessions.groupId}
+                )
+              )`,
               updatedAt: sql`now()`
             })
             .where(eq(gameSessions.id, failure.session_id));
