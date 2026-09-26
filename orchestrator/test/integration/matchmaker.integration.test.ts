@@ -14,7 +14,11 @@ import { HubRouter } from "../../src/services/hub-router.ts";
 import { and, eq, inArray } from "drizzle-orm";
 import { nanoid } from "../../src/id.ts";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { CapacityController } from "../../src/services/capacity-controller.ts";
+import { synchronizeConfiguration } from "../../src/configuration/sync.ts";
 import { Reconciler } from "../../src/services/reconciler.ts";
 import { MonitoringService } from "../../src/services/monitoring-service.ts";
 import { HostService } from "../../src/services/host-service.ts";
@@ -516,6 +520,57 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     }).from(gameSessions).where(eq(gameSessions.id, sessionId));
     expect(recovered[0]?.state).toBe("WAITING_FOR_INSTANCE");
     expect(recovered[0]?.acquisitionDeadline?.getTime()).toBeGreaterThan(beforeRecovery);
+  });
+
+  test("a removed group is disabled, rejects queues and drains open capacity", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = nanoid();
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "10.0.0.10:25565",
+    });
+    const configurationRoot = await mkdtemp(join(tmpdir(), "removed-group-"));
+    const groupsRoot = join(configurationRoot, "groups");
+    const templatesRoot = join(configurationRoot, "templates");
+    await mkdir(groupsRoot);
+    await mkdir(templatesRoot);
+    try {
+      await synchronizeConfiguration(db, groupsRoot, templatesRoot, mockLogger);
+    } finally {
+      await rm(configurationRoot, { recursive: true, force: true });
+    }
+
+    const group = await db.select({ enabled: serverGroups.enabled })
+      .from(serverGroups).where(eq(serverGroups.id, groupId));
+    expect(group).toEqual([{ enabled: false }]);
+
+    const queue = new QueueService(db);
+    await expect(queue.enqueue({
+      groupId,
+      partyId: "new-party",
+      players: [crypto.randomUUID()],
+    })).rejects.toThrow("unavailable");
+
+    const drained: string[] = [];
+    const instances = {
+      beginDrain: async (id: string) => {
+        drained.push(id);
+      },
+    } as unknown as InstanceController;
+    const capacity = new CapacityController(
+      db,
+      instances,
+      mockLogger,
+    );
+    await capacity.tick();
+    expect(drained).toContain(instanceId);
   });
 
   test("placement serializes reservations without overallocating either host", async () => {
