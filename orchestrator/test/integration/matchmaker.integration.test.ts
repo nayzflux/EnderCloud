@@ -21,6 +21,7 @@ import { HostService } from "../../src/services/host-service.ts";
 import { AgentExecutor } from "../../src/executor/agent-executor.ts";
 import { HostMaintenanceController } from "../../src/services/host-maintenance-controller.ts";
 import { InstanceStartWorker } from "../../src/services/instance-start-worker.ts";
+import { SessionController } from "../../src/services/session-controller.ts";
 
 const TEST_HOST_ID = "integration-host";
 
@@ -236,6 +237,76 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       partyId: "reused-party",
       players: [secondPlayer],
     })).rejects.toThrow();
+  });
+
+  test("session cancellation drains the current instance despite a stale caller snapshot", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const sessionId = nanoid();
+    const instanceId = nanoid();
+    await db.insert(gameSessions).values({
+      id: sessionId,
+      groupId,
+      state: "TRANSFERRING",
+    });
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      sessionId,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      lifecycleState: "RUNNING",
+      availabilityState: "RESERVED",
+      endpoint: "10.0.0.10:25565",
+    });
+    await db.update(gameSessions).set({ instanceId }).where(eq(gameSessions.id, sessionId));
+    const beginDrain = mock(async () => true);
+    const controller = new SessionController(
+      db,
+      { beginDrain } as unknown as InstanceController,
+      {} as TransferService,
+      {} as HubRouter,
+      mockLogger,
+    );
+
+    await (controller as unknown as {
+      cancel: (sessionId: string) => Promise<void>;
+    }).cancel(sessionId);
+
+    expect(beginDrain).toHaveBeenCalledWith(instanceId, "SESSION_CANCELLED");
+  });
+
+  test("session reconciliation drains a reservation left by interrupted cancellation", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const sessionId = nanoid();
+    const instanceId = nanoid();
+    await db.insert(gameSessions).values({ id: sessionId, groupId, state: "CANCELLED" });
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      sessionId,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      lifecycleState: "RUNNING",
+      availabilityState: "RESERVED",
+      endpoint: "10.0.0.10:25565",
+    });
+    await db.update(gameSessions).set({ instanceId }).where(eq(gameSessions.id, sessionId));
+    const beginDrain = mock(async () => true);
+    const controller = new SessionController(
+      db,
+      { beginDrain } as unknown as InstanceController,
+      {} as TransferService,
+      {} as HubRouter,
+      mockLogger,
+    );
+
+    await controller.tick();
+
+    expect(beginDrain).toHaveBeenCalledWith(instanceId, "SESSION_CANCELLED");
   });
 
   test("placement serializes reservations without overallocating either host", async () => {
