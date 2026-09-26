@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll, beforeEach, afterAll, mock } from "bun:test";
-import { createDatabase, type SqlClient } from "../../src/db/client.ts";
+import { createDatabase, type Database, type SqlClient } from "../../src/db/client.ts";
 import { migrateDatabase } from "../../src/db/migrate.ts";
 import { Matchmaker } from "../../src/services/matchmaker.ts";
 import { QueueService } from "../../src/services/queue-service.ts";
@@ -169,6 +169,73 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
   afterAll(async () => {
     if (sql) await sql.end();
     if (container) await container.stop();
+  });
+
+  test("concurrent parties cannot queue the same player twice", async () => {
+    const { groupId } = await seedGroup();
+    let reads = 0;
+    let releaseSecondRead: (() => void) | undefined;
+    const secondRead = new Promise<void>((resolve) => {
+      releaseSecondRead = resolve;
+    });
+    const coordinatedDb = {
+      transaction: (work: (tx: unknown) => Promise<unknown>) => db.transaction(async (tx) => {
+        let firstExecute = true;
+        const coordinatedTx = new Proxy(tx, {
+          get(target, property) {
+            if (property === "execute") {
+              return async (...args: Parameters<typeof tx.execute>) => {
+                const result = await tx.execute(...args);
+                if (firstExecute) {
+                  firstExecute = false;
+                  reads += 1;
+                  if (reads === 2) releaseSecondRead?.();
+                  await Promise.race([secondRead, Bun.sleep(300)]);
+                }
+                return result;
+              };
+            }
+            const value = Reflect.get(target, property);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+        return work(coordinatedTx);
+      }),
+    } as unknown as Database;
+    const queues = new QueueService(coordinatedDb);
+    const playerId = crypto.randomUUID();
+    const requests = ["party-a", "party-b"].map((partyId) =>
+      queues.enqueue({ groupId, partyId, players: [playerId] })
+    );
+
+    const results = await Promise.allSettled(requests);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+
+    const active = await db.select({ id: queueEntries.id })
+      .from(queueEntries)
+      .innerJoin(queueEntryPlayers, eq(queueEntryPlayers.queueEntryId, queueEntries.id))
+      .where(and(
+        eq(queueEntries.state, "QUEUED"),
+        eq(queueEntryPlayers.playerId, playerId),
+      ));
+    expect(active).toHaveLength(1);
+  });
+
+  test("a queued party id is idempotent only for the same members", async () => {
+    const { groupId } = await seedGroup();
+    const queues = new QueueService(db);
+    const firstPlayer = crypto.randomUUID();
+    const secondPlayer = crypto.randomUUID();
+    const first = await queues.enqueue({ groupId, partyId: "reused-party", players: [firstPlayer] });
+    const retry = await queues.enqueue({ groupId, partyId: "reused-party", players: [firstPlayer] });
+
+    expect(retry.entryId).toBe(first.entryId);
+    await expect(queues.enqueue({
+      groupId,
+      partyId: "reused-party",
+      players: [secondPlayer],
+    })).rejects.toThrow();
   });
 
   test("placement serializes reservations without overallocating either host", async () => {
