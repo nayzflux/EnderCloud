@@ -4,7 +4,7 @@ import { migrateDatabase } from "../../src/db/migrate.ts";
 import { Matchmaker } from "../../src/services/matchmaker.ts";
 import { QueueService } from "../../src/services/queue-service.ts";
 import { commands as instanceCommands, executionHosts, serverGroups, serverGroupVariants, serverVariantLayers, serverVariants, templateLayers, serverInstances, queueEntries, queueEntryPlayers, gameSessions, sessionPlayers, instancePlayers, transferCommands, events, serverTpsMetrics } from "../../src/db/schema.ts";
-import type { TransferService } from "../../src/services/transfer-service.ts";
+import { TransferService } from "../../src/services/transfer-service.ts";
 import { InstanceController } from "../../src/services/instance-controller.ts";
 import type { Executor, RuntimeInstance } from "../../src/executor/executor.ts";
 import { VariantSelector } from "../../src/services/variant-selector.ts";
@@ -307,6 +307,99 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     await controller.tick();
 
     expect(beginDrain).toHaveBeenCalledWith(instanceId, "SESSION_CANCELLED");
+  });
+
+  test("a transfer retry excludes a player who arrived and then left", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = nanoid();
+    const arrivedPlayer = crypto.randomUUID();
+    const waitingPlayer = crypto.randomUUID();
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "10.0.0.10:25565",
+    });
+    const publishTransfer = mock(async (_payload: unknown) => undefined);
+    const transfers = new TransferService(
+      db,
+      { publishTransfer } as unknown as RedisEventBus,
+      mockLogger,
+    );
+    await db.transaction((tx) => transfers.enqueue(tx, {
+      instanceId,
+      endpoint: "10.0.0.10:25565",
+      players: [arrivedPlayer, waitingPlayer],
+    }));
+    await db.insert(instancePlayers).values({
+      instanceId,
+      playerId: arrivedPlayer,
+      staleDeadline: new Date(Date.now() + 30_000),
+    });
+
+    await transfers.tick();
+    await db.delete(instancePlayers).where(and(
+      eq(instancePlayers.instanceId, instanceId),
+      eq(instancePlayers.playerId, arrivedPlayer),
+    ));
+    await db.update(transferCommands).set({ nextAttemptAt: new Date(0) });
+    await transfers.tick();
+
+    expect(publishTransfer).toHaveBeenCalledTimes(2);
+    for (const call of publishTransfer.mock.calls) {
+      expect((call[0] as { players: string[] }).players).toEqual([waitingPlayer]);
+    }
+  });
+
+  test("Paper arrival is remembered even when the player leaves before the next transfer tick", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = nanoid();
+    const arrivedPlayer = crypto.randomUUID();
+    const waitingPlayer = crypto.randomUUID();
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "10.0.0.10:25565",
+    });
+    const publishTransfer = mock(async (_payload: unknown) => undefined);
+    const bus = {
+      publishTransfer,
+      publishRegistry: async () => undefined,
+    } as unknown as RedisEventBus;
+    const transfers = new TransferService(db, bus, mockLogger);
+    await db.transaction((tx) => transfers.enqueue(tx, {
+      instanceId,
+      endpoint: "10.0.0.10:25565",
+      players: [arrivedPlayer, waitingPlayer],
+    }));
+    const instances = new InstanceController(
+      db,
+      {} as Executor,
+      {} as VariantSelector,
+      bus,
+      transfers,
+      {} as HubRouter,
+      mockLogger,
+    );
+
+    await instances.handlePaperEvent(instanceId, { type: "PLAYER_JOINED", playerId: arrivedPlayer });
+    await instances.handlePaperEvent(instanceId, { type: "PLAYER_LEFT", playerId: arrivedPlayer });
+    await transfers.tick();
+
+    expect(publishTransfer).toHaveBeenCalledTimes(1);
+    expect((publishTransfer.mock.calls[0]?.[0] as { players: string[] }).players)
+      .toEqual([waitingPlayer]);
   });
 
   test("placement serializes reservations without overallocating either host", async () => {

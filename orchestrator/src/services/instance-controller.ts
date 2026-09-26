@@ -11,6 +11,7 @@ import {
   instancePlayers,
   events,
   transferCommands,
+  transferCommandPlayers,
 } from "../db/schema.ts";
 import { asc, eq, and, sql, desc, inArray, isNotNull, notInArray } from "drizzle-orm";
 import type postgres from "postgres";
@@ -902,6 +903,7 @@ export class InstanceController {
             )`,
           },
         });
+      await this.recordTransferArrival(tx, instanceId, playerId);
       await tx
         .update(serverInstances)
         .set({
@@ -1057,6 +1059,7 @@ export class InstanceController {
               )`,
             },
           });
+        await this.recordTransferArrival(tx, instanceId, playerId);
         if (effectiveSessionId) {
           const changed = await tx
             .update(sessionPlayers)
@@ -1091,6 +1094,23 @@ export class InstanceController {
         await this.bumpAssignmentRevision(tx, effectiveSessionId);
       }
     });
+  }
+
+  private async recordTransferArrival(
+    tx: any,
+    instanceId: string,
+    playerId: string,
+  ): Promise<void> {
+    await tx.update(transferCommandPlayers)
+      .set({ state: "ARRIVED", observedAt: sql`now()` })
+      .from(transferCommands)
+      .where(and(
+        eq(transferCommandPlayers.commandId, transferCommands.id),
+        eq(transferCommands.instanceId, instanceId),
+        eq(transferCommands.state, "PENDING"),
+        eq(transferCommandPlayers.playerId, playerId),
+        eq(transferCommandPlayers.state, "PENDING"),
+      ));
   }
 
   // Apply only valid, idempotent game-driven session state transitions.

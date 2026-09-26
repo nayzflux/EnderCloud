@@ -445,6 +445,26 @@ export const transferCommands = pgTable(
   ],
 );
 
+export const transferCommandPlayers = pgTable(
+  "transfer_command_players",
+  {
+    commandId: text("command_id")
+      .notNull()
+      .references(() => transferCommands.id, { onDelete: "cascade" }),
+    playerId: uuid("player_id").notNull(),
+    state: text("state").notNull().default("PENDING"),
+    observedAt: timestamp("observed_at", { withTimezone: true }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.commandId, table.playerId] }),
+    index("transfer_command_players_pending_idx").on(table.state, table.playerId),
+    check(
+      "transfer_command_players_state_check",
+      sql`${table.state} IN ('PENDING', 'ARRIVED', 'LEFT')`,
+    ),
+  ],
+);
+
 export const commands = pgTable(
   "commands",
   {
@@ -557,6 +577,7 @@ export const schema = {
   sessionPlayers,
   instancePlayers,
   transferCommands,
+  transferCommandPlayers,
   commands,
   nodes,
   events,
