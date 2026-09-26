@@ -70,8 +70,22 @@ export interface ApiDependencies {
   readonly isReady: () => boolean;
 }
 
+interface RequestContext {
+  readonly requestId: string;
+  readonly startedAt: number;
+  requestError?: unknown;
+}
+
 // Build the HTTP API and bind each route to the orchestrator services.
 export function createApp(dependencies: ApiDependencies) {
+  const requestContexts = new WeakMap<Request, RequestContext>();
+  const contextFor = (request: Request): RequestContext => {
+    const context = requestContexts.get(request);
+    if (!context) {
+      throw new Error("Request context was not initialized");
+    }
+    return context;
+  };
   return new Elysia({ name: "endercloud-api" })
     .use(
       openapi({
@@ -84,22 +98,23 @@ export function createApp(dependencies: ApiDependencies) {
         },
       }),
     )
-    .onRequest(({ request, store }) => {
-      const context = store as { requestId?: string; startedAt?: number };
-      context.requestId = request.headers.get("x-request-id") ?? nanoid();
-      context.startedAt = performance.now();
+    .onRequest(({ request }) => {
+      const context = {
+        requestId: request.headers.get("x-request-id") ?? nanoid(),
+        startedAt: performance.now(),
+      };
+      requestContexts.set(request, context);
       dependencies.logger.enterContext({ requestId: context.requestId });
     })
-    .onAfterHandle(({ set, store }) => {
-      const context = store as { requestId?: string; startedAt?: number };
-      set.headers["x-request-id"] = context.requestId ?? "";
+    .onAfterHandle(({ request, set }) => {
+      set.headers["x-request-id"] = contextFor(request).requestId;
     })
-    .onError(({ error, code, set, store }) => {
-      const requestStore = store as { requestId?: string; requestError?: unknown };
-      const requestId = requestStore.requestId;
-      requestStore.requestError = error;
+    .onError(({ request, error, code, set }) => {
+      const context = contextFor(request);
+      const requestId = context.requestId;
+      context.requestError = error;
       const message = error instanceof Error ? error.message : String(error);
-      set.headers["x-request-id"] = requestId ?? "";
+      set.headers["x-request-id"] = requestId;
       if (code === "VALIDATION") {
         set.status = 400;
         return { error: "VALIDATION_ERROR", message, requestId };
@@ -111,15 +126,15 @@ export function createApp(dependencies: ApiDependencies) {
       set.status = 500;
       return { error: "INTERNAL_ERROR", message: "Internal server error", requestId };
     })
-    .onAfterResponse(({ request, route, set, store }) => {
-      const context = store as { requestId?: string; startedAt?: number; requestError?: unknown };
+    .onAfterResponse(({ request, route, set }) => {
+      const context = contextFor(request);
       const status = typeof set.status === "number" ? set.status : 200;
       const fields = {
         requestId: context.requestId,
         method: request.method,
         route,
         status,
-        durationMs: Math.round(performance.now() - (context.startedAt ?? performance.now())),
+        durationMs: Math.round(performance.now() - context.startedAt),
         outcome: status >= 500 ? "failure" : "success",
       };
       if (status >= 500) {
@@ -259,7 +274,7 @@ export function createApp(dependencies: ApiDependencies) {
         )
         .get(
           "/dashboard/groups/:groupId/monitoring",
-          async ({ params, query, set, store }) => {
+          async ({ params, query, set, request }) => {
             const detail = await dependencies.monitoring.getGroupSeries(
               params.groupId,
               query.range,
@@ -269,7 +284,7 @@ export function createApp(dependencies: ApiDependencies) {
             return {
               error: "NOT_FOUND",
               message: `Server group ${params.groupId} was not found`,
-              requestId: (store as { requestId?: string }).requestId,
+              requestId: contextFor(request).requestId,
             };
           },
           {
@@ -290,14 +305,14 @@ export function createApp(dependencies: ApiDependencies) {
         )
         .get(
           "/dashboard/groups/:groupId/variants",
-          async ({ params, set, store }) => {
+          async ({ params, set, request }) => {
             const detail = await dependencies.dashboard.getVariants(params.groupId);
             if (detail) return detail;
             set.status = 404;
             return {
               error: "NOT_FOUND",
               message: `Server group ${params.groupId} was not found`,
-              requestId: (store as { requestId?: string }).requestId,
+              requestId: contextFor(request).requestId,
             };
           },
           {
@@ -310,7 +325,7 @@ export function createApp(dependencies: ApiDependencies) {
         )
         .get(
           "/dashboard/groups/:groupId/queue",
-          async ({ params, query, set, store }) => {
+          async ({ params, query, set, request }) => {
             const detail = await dependencies.dashboard.getQueue(
               params.groupId,
               query.limit,
@@ -320,7 +335,7 @@ export function createApp(dependencies: ApiDependencies) {
             return {
               error: "NOT_FOUND",
               message: `Server group ${params.groupId} was not found`,
-              requestId: (store as { requestId?: string }).requestId,
+              requestId: contextFor(request).requestId,
             };
           },
           {
@@ -336,14 +351,14 @@ export function createApp(dependencies: ApiDependencies) {
         )
         .get(
           "/dashboard/instances/:instanceId",
-          async ({ params, set, store }) => {
+          async ({ params, set, request }) => {
             const detail = await dependencies.dashboard.getInstance(params.instanceId);
             if (detail) return detail;
             set.status = 404;
             return {
               error: "NOT_FOUND",
               message: `Instance ${params.instanceId} was not found`,
-              requestId: (store as { requestId?: string }).requestId,
+              requestId: contextFor(request).requestId,
             };
           },
           {
@@ -356,14 +371,14 @@ export function createApp(dependencies: ApiDependencies) {
         )
         .get(
           "/dashboard/sessions/:sessionId",
-          async ({ params, set, store }) => {
+          async ({ params, set, request }) => {
             const detail = await dependencies.dashboard.getSession(params.sessionId);
             if (detail) return detail;
             set.status = 404;
             return {
               error: "NOT_FOUND",
               message: `Session ${params.sessionId} was not found`,
-              requestId: (store as { requestId?: string }).requestId,
+              requestId: contextFor(request).requestId,
             };
           },
           {
@@ -376,7 +391,7 @@ export function createApp(dependencies: ApiDependencies) {
         )
         .post(
           "/groups/:groupId/variants/:variantId/revisions/:revision/startup-retry",
-          async ({ params, set, store }) => {
+          async ({ params, set, request }) => {
             if (!dependencies.startup) {
               set.status = 503;
               return { error: "UNAVAILABLE", message: "Startup retry controller is unavailable" };
@@ -391,7 +406,7 @@ export function createApp(dependencies: ApiDependencies) {
               return {
                 error: "NOT_FOUND",
                 message: "Variant revision was not found",
-                requestId: (store as { requestId?: string }).requestId,
+                requestId: contextFor(request).requestId,
               };
             }
             if (result.status === "CONFLICT") {
@@ -400,7 +415,7 @@ export function createApp(dependencies: ApiDependencies) {
                 error: "CONFLICT",
                 message: "Variant revision is not blocked",
                 startup: result.startup,
-                requestId: (store as { requestId?: string }).requestId,
+                requestId: contextFor(request).requestId,
               };
             }
             set.status = 202;

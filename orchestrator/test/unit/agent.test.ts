@@ -8,6 +8,55 @@ import { Logger } from "../../src/logger.ts";
 const instanceId = "agentinstance001";
 const checksum = "a".repeat(64);
 
+test("agent keeps request ids, errors and durations isolated across concurrent requests", async () => {
+  const records: Record<string, unknown>[] = [];
+  const logger = new Logger("debug", {
+    sink: (_level, record) => records.push(JSON.parse(record)),
+  });
+  let releaseSlow: (() => void) | undefined;
+  const slowGate = new Promise<void>((resolve) => {
+    releaseSlow = resolve;
+  });
+  const executor = {
+    listManagedInstances: async () => {
+      await slowGate;
+      throw new Error("docker unavailable");
+    },
+  } as unknown as LocalDockerExecutor;
+  const app = createAgentApp(
+    { hostId: "host-paris-01" } as AgentConfig,
+    executor,
+    {} as TemplateCache,
+    logger,
+  );
+
+  const slowResponse = app.handle(new Request("http://agent/api/v1/instances", {
+    headers: { "x-request-id": "slow-agent", "x-command-id": "command-123" },
+  }));
+  await Bun.sleep(0);
+  const fast = await app.handle(new Request("http://agent/health/live", {
+    headers: { "x-request-id": "fast-agent" },
+  }));
+  await Bun.sleep(30);
+  releaseSlow?.();
+  const slow = await slowResponse;
+  await Bun.sleep(0);
+
+  expect(fast.headers.get("x-request-id")).toBe("fast-agent");
+  expect(slow.headers.get("x-request-id")).toBe("slow-agent");
+  expect((await slow.json() as { requestId: string }).requestId).toBe("slow-agent");
+  const completed = records.filter((record) => record.event === "agent.request.completed");
+  const fastLog = completed.find((record) => record.requestId === "fast-agent");
+  const slowLog = completed.find((record) => record.requestId === "slow-agent");
+  expect(fastLog).toBeDefined();
+  expect(slowLog).toBeDefined();
+  expect(slowLog?.durationMs).toBeGreaterThan(fastLog?.durationMs as number);
+  expect(records.some((record) =>
+    record.event === "agent.request.server_error" &&
+    record.requestId === "slow-agent"
+  )).toBe(true);
+});
+
 test("agent API delegates idempotent instance operations to the local executor", async () => {
   const records: Record<string, unknown>[] = [];
   const logger = new Logger("debug", {
