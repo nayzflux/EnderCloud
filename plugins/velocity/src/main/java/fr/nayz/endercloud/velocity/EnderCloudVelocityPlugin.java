@@ -12,6 +12,7 @@ import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.server.ServerInfo;
+import com.velocitypowered.api.scheduler.ScheduledTask;
 
 import fr.nayz.endercloud.core.api.EnderCloudVelocityApi;
 import fr.nayz.endercloud.core.json.JsonCodec;
@@ -26,14 +27,18 @@ import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
 import org.slf4j.Logger;
 
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.net.URI;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Plugin(
@@ -52,10 +57,13 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
     private final Map<String, ServerSnapshot> snapshots = new ConcurrentHashMap<>();
     private final Set<String> transfersInFlight = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean ready = new AtomicBoolean();
+    private final AtomicBoolean synchronizationInProgress = new AtomicBoolean();
 
     private EnderCloudClient orchestrator;
     private RedisClient redis;
     private StatefulRedisPubSubConnection<String, String> subscription;
+    private ScheduledTask refreshTask;
+    private volatile boolean shuttingDown;
 
     @Inject
     public EnderCloudVelocityPlugin(ProxyServer proxy, Logger logger) {
@@ -91,11 +99,17 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
             }
         });
         synchronizeRegistry();
+        refreshTask = proxy.getScheduler().buildTask(this, this::refreshRegistry)
+                .delay(30, TimeUnit.SECONDS)
+                .repeat(30, TimeUnit.SECONDS)
+                .schedule();
     }
 
     @Subscribe
     public void onShutdown(ProxyShutdownEvent ignored) {
+        shuttingDown = true;
         ready.set(false);
+        if (refreshTask != null) refreshTask.cancel();
         if (subscription != null) subscription.close();
         if (redis != null) redis.shutdown();
         if (orchestrator != null) orchestrator.close();
@@ -143,11 +157,14 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
     }
 
     private void synchronizeRegistry() {
-        if (subscription == null || !subscription.isOpen()) return;
+        if (shuttingDown || subscription == null || !subscription.isOpen()) return;
+        if (!synchronizationInProgress.compareAndSet(false, true)) return;
         subscription.async()
                 .subscribe(REGISTRY_CHANNEL, TRANSFER_CHANNEL)
                 .thenCompose(ignored -> reloadSnapshot())
                 .whenComplete((ignored, error) -> {
+                    synchronizationInProgress.set(false);
+                    if (shuttingDown) return;
                     if (error != null) {
                         ready.set(false);
                         logger.error("Unable to synchronize the EnderCloud registry", error);
@@ -158,17 +175,46 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
                 });
     }
 
+    private void refreshRegistry() {
+        if (shuttingDown) return;
+        if (!ready.get()) {
+            synchronizeRegistry();
+            return;
+        }
+        if (!synchronizationInProgress.compareAndSet(false, true)) return;
+        reloadSnapshot().whenComplete((ignored, error) -> {
+            synchronizationInProgress.set(false);
+            if (shuttingDown) return;
+            if (error != null) {
+                ready.set(false);
+                logger.error("Unable to refresh the EnderCloud registry", error);
+            }
+        });
+    }
+
     private CompletableFuture<Void> reloadSnapshot() {
         return orchestrator.getServers().thenAccept(servers -> {
+            Map<String, SocketAddress> registeredAddresses = new HashMap<>();
+            for (RegisteredServer registered : proxy.getAllServers()) {
+                ServerInfo info = registered.getServerInfo();
+                registeredAddresses.put(info.getName(), info.getAddress());
+            }
+            RegistryReconciliation.Changes changes = RegistryReconciliation.plan(
+                    servers,
+                    registeredAddresses
+            );
+            for (String name : changes.unregister()) {
+                proxy.getServer(name)
+                        .ifPresent(server -> proxy.unregisterServer(server.getServerInfo()));
+            }
+            for (ServerSnapshot server : changes.register()) {
+                proxy.registerServer(new ServerInfo(
+                        serverName(server),
+                        parseEndpoint(server.endpoint())
+                ));
+            }
             snapshots.clear();
             servers.forEach(server -> snapshots.put(server.instanceId(), server));
-            for (RegisteredServer registered : proxy.getAllServers()) {
-                String name = registered.getServerInfo().getName();
-                if (name.startsWith("ec-") || name.startsWith("endercloud-")) {
-                    proxy.unregisterServer(registered.getServerInfo());
-                }
-            }
-            servers.forEach(this::register);
         });
     }
 
@@ -191,8 +237,7 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
                             envelope.payload(),
                             ServerSnapshot.class
                     );
-                    snapshots.put(snapshot.instanceId(), snapshot);
-                    register(snapshot);
+                    update(snapshot);
                 }
                 case "SERVER_UPDATED" -> {
                     ServerSnapshot snapshot = JsonCodec.mapper().treeToValue(
@@ -220,11 +265,20 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
     }
 
     private void register(ServerSnapshot snapshot) {
-        if (snapshot.endpoint() == null || snapshot.endpoint().isBlank()) return;
         String name = serverName(snapshot);
-        proxy.getServer(name)
-                .ifPresent(server -> proxy.unregisterServer(server.getServerInfo()));
-        proxy.registerServer(new ServerInfo(name, parseEndpoint(snapshot.endpoint())));
+        Optional<RegisteredServer> existing = proxy.getServer(name);
+        if (snapshot.endpoint() == null || snapshot.endpoint().isBlank()) {
+            existing.ifPresent(server -> proxy.unregisterServer(server.getServerInfo()));
+            return;
+        }
+        InetSocketAddress endpoint = parseEndpoint(snapshot.endpoint());
+        if (existing.isPresent() && Objects.equals(
+                existing.get().getServerInfo().getAddress(), endpoint
+        )) {
+            return;
+        }
+        existing.ifPresent(server -> proxy.unregisterServer(server.getServerInfo()));
+        proxy.registerServer(new ServerInfo(name, endpoint));
     }
 
     private void unregister(String instanceId) {
@@ -236,12 +290,11 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
 
     private void update(ServerSnapshot snapshot) {
         ServerSnapshot previous = snapshots.put(snapshot.instanceId(), snapshot);
-        Optional<RegisteredServer> registered = proxy.getServer(serverName(snapshot));
-        if (registered.isEmpty()
-                || previous == null
-                || !previous.endpoint().equals(snapshot.endpoint())) {
-            register(snapshot);
+        if (previous != null && !serverName(previous).equals(serverName(snapshot))) {
+            proxy.getServer(serverName(previous))
+                    .ifPresent(server -> proxy.unregisterServer(server.getServerInfo()));
         }
+        register(snapshot);
     }
 
     private void transferPlayers(JsonNode payload, boolean reloadAllowed) {
@@ -334,7 +387,7 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
     }
 
     private static String serverName(ServerSnapshot snapshot) {
-        return "ec-" + snapshot.variantId() + "-" + snapshot.instanceId();
+        return RegistryReconciliation.serverName(snapshot);
     }
 
     private static String environment(String name, String fallback) {
