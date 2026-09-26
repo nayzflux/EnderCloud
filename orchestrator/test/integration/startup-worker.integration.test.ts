@@ -188,6 +188,43 @@ describe("durable instance startup", () => {
     expect(maximumActive).toBe(2);
   });
 
+  test("concurrent ticks never claim more CREATE commands than available slots", async () => {
+    await seedCreates(2);
+    const started: string[] = [];
+    let active = 0;
+    let maximumActive = 0;
+    let releaseFirst: (() => void) | undefined;
+    const instances = {
+      executeCreate: async (_instanceId: string, commandId: string) => {
+        started.push(commandId);
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        if (started.length === 1) {
+          await new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          });
+        }
+        active -= 1;
+        await db.update(commands).set({ state: "SUCCEEDED", completedAt: new Date() })
+          .where(eq(commands.id, commandId));
+      },
+    } as unknown as InstanceController;
+    const worker = new InstanceStartWorker(db, instances, {} as Executor, logger, 1);
+
+    await Promise.all([worker.tick(), worker.tick()]);
+    const startedBeforeRelease = started.length;
+    releaseFirst?.();
+    await waitFor(async () => {
+      const rows = await db.select({ state: commands.state }).from(commands)
+        .where(eq(commands.operation, "CREATE"));
+      return rows.every((row) => row.state === "SUCCEEDED");
+    });
+    await worker.stop();
+
+    expect(startedBeforeRelease).toBe(1);
+    expect(maximumActive).toBe(1);
+  });
+
   test("a queued CREATE keeps its reserved runtime and layers after a variant update", async () => {
     const received: InstanceSpec[] = [];
     const executor = {

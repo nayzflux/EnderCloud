@@ -14,6 +14,7 @@ interface ClaimedCreate {
 export class InstanceStartWorker {
   private readonly active = new Map<string, Promise<void>>();
   private accepting = true;
+  private claiming = false;
   private stopping = false;
 
   public constructor(
@@ -42,18 +43,29 @@ export class InstanceStartWorker {
   }
 
   public async tick(): Promise<void> {
-    if (!this.accepting) return;
-    const available = this.concurrency - this.active.size;
-    if (available <= 0) return;
-    const claimed = await this.claim(available);
-    if (claimed.length > 0) {
-      this.logger.debug("instance.worker.claimed", "Instance startup commands claimed", {
-        commandCount: claimed.length,
-        activeCount: this.active.size,
-        concurrency: this.concurrency,
-      });
+    if (!this.accepting || this.claiming) {
+      return;
     }
-    for (const command of claimed) this.launch(command);
+    this.claiming = true;
+    try {
+      const available = this.concurrency - this.active.size;
+      if (available <= 0) {
+        return;
+      }
+      const claimed = await this.claim(available);
+      if (claimed.length > 0) {
+        this.logger.debug("instance.worker.claimed", "Instance startup commands claimed", {
+          commandCount: claimed.length,
+          activeCount: this.active.size,
+          concurrency: this.concurrency,
+        });
+      }
+      for (const command of claimed) {
+        this.launch(command);
+      }
+    } finally {
+      this.claiming = false;
+    }
   }
 
   public async stop(graceMs = 10_000): Promise<void> {
