@@ -25,6 +25,7 @@ interface HostRow {
 
 export class Reconciler {
   private running = false;
+  private readonly startedAt = Date.now();
 
   public constructor(
     private readonly db: Database,
@@ -33,6 +34,7 @@ export class Reconciler {
     private readonly hosts: HostService,
     private readonly logger: Logger,
     private readonly offlineAfterMs: number,
+    private readonly startupGraceMs = 0,
   ) {}
 
   public async tick(): Promise<void> {
@@ -71,9 +73,12 @@ export class Reconciler {
       }
 
       const now = Date.now();
-      const probeable = hostRows.filter((host) =>
-        now - host.last_heartbeat_at.getTime() < this.offlineAfterMs
-      );
+      const recoveringFromRestart = now - this.startedAt < this.startupGraceMs;
+      const probeable = hostRows.filter((host) => {
+        const contact = host.last_control_contact_at ?? host.created_at;
+        return recoveringFromRestart ||
+          now - Math.max(host.last_heartbeat_at.getTime(), contact.getTime()) < this.offlineAfterMs;
+      });
       const probes = await Promise.allSettled(
         probeable.map(async (host) => ({
           host,
@@ -93,7 +98,7 @@ export class Reconciler {
           const contact = host.last_control_contact_at ?? host.created_at;
           const heartbeatExpired = now - host.last_heartbeat_at.getTime() >= this.offlineAfterMs;
           const controlExpired = now - contact.getTime() >= this.offlineAfterMs;
-          if (!heartbeatExpired && !controlExpired) continue;
+          if (recoveringFromRestart || !heartbeatExpired || !controlExpired) continue;
           const reason = heartbeatExpired
             ? "Agent heartbeat expired"
             : "Agent control API remained unreachable";

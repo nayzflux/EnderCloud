@@ -372,6 +372,57 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     expect(state[0]?.health).toBe("ONLINE");
   });
 
+  test("startup grace probes stale hosts before failing their running instances", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = "recoveringStartup1";
+    const stale = new Date(Date.now() - 60_000);
+    await db.update(executionHosts).set({
+      healthState: "ONLINE",
+      lastHeartbeatAt: stale,
+      lastControlContactAt: stale,
+    }).where(eq(executionHosts.id, TEST_HOST_ID));
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      groupId,
+      variantId,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "10.0.0.10:25565",
+    });
+
+    const failInstance = mock(async () => true);
+    const listManagedInstances = mock(async () => [{
+      hostId: TEST_HOST_ID,
+      instanceId,
+      containerId: "recovering-container",
+      groupId,
+      variantId,
+      running: true,
+      status: "Up",
+    }]);
+    const reconciler = new Reconciler(
+      db,
+      { listManagedInstances } as unknown as Executor,
+      { failInstance } as unknown as InstanceController,
+      new HostService(db),
+      mockLogger,
+      30_000,
+      30_000,
+    );
+
+    await reconciler.tick();
+
+    expect(listManagedInstances).toHaveBeenCalledTimes(1);
+    expect(failInstance).not.toHaveBeenCalled();
+    const host = await db.select({ health: executionHosts.healthState })
+      .from(executionHosts)
+      .where(eq(executionHosts.id, TEST_HOST_ID));
+    expect(host[0]?.health).toBe("ONLINE");
+  });
+
   test("maintenance limits surge to one replacement and waits without capacity", async () => {
     const { groupId, variantId } = await seedGroup();
     await db.update(serverGroups).set({ maximumInstances: 2 })

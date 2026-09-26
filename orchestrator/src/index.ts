@@ -112,6 +112,7 @@ const reconciler = new Reconciler(
   hosts,
   logger.child({ component: "reconciler" }),
   config.hostOfflineAfterMs,
+  config.hostOfflineAfterMs,
 );
 const maintenance = new HostMaintenanceController(db, hosts, instances, logger.child({ component: "host-maintenance" }));
 const startWorker = new InstanceStartWorker(
@@ -121,15 +122,6 @@ const startWorker = new InstanceStartWorker(
   logger.child({ component: "instance-start-worker" }),
   config.instanceStartConcurrency,
 );
-
-// Converge database and runtime state once before readiness probes can succeed.
-await startWorker.recoverInterrupted();
-await startup.reconcile();
-await reconciler.tick();
-await capacity.tick();
-await transfers.tick();
-await incidents.tick();
-ready = true;
 
 const app = createApp({
   queues,
@@ -147,6 +139,23 @@ const app = createApp({
 app.listen({ port: config.port, hostname: "0.0.0.0" });
 const server = app.server;
 if (!server) throw new Error("Elysia failed to start its HTTP server");
+
+// Agents can report fresh heartbeats while the initial inventory is being reconciled.
+// Readiness remains negative until the control plane has converged.
+try {
+  await startWorker.recoverInterrupted();
+  await startup.reconcile();
+  await reconciler.tick();
+  await capacity.tick();
+  await transfers.tick();
+  await incidents.tick();
+  ready = true;
+} catch (error) {
+  await app.stop();
+  await bus.close();
+  await sql.end({ timeout: 10 });
+  throw error;
+}
 
 // Each periodic control loop is independent and protects itself from overlapping ticks.
 const scheduler = new Scheduler(logger.child({ component: "scheduler" }), incidents);
