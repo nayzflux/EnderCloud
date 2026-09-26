@@ -4,6 +4,7 @@ import {
   commands,
   serverVariantLayers,
   serverVariants,
+  serverGroupVariants,
   templateLayers,
   serverGroups,
   gameSessions,
@@ -45,6 +46,35 @@ interface CreateRow {
   variant_id: string;
   session_id: string | null;
   runtime_spec: VariantRuntimeSpec;
+  variant_revision: number;
+  current_revision: number;
+  reserved_cpu: number | null;
+  reserved_memory_bytes: number | null;
+  command_payload: unknown;
+}
+
+interface CreateCommandPayload {
+  readonly version: 1;
+  readonly variantRevision: number;
+  readonly variantChecksum: string;
+  readonly runtime: VariantRuntimeSpec;
+  readonly templateLayers: readonly { readonly id: string; readonly checksum: string }[];
+}
+
+function isCreateCommandPayload(value: unknown): value is CreateCommandPayload {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<CreateCommandPayload>;
+  return candidate.version === 1 &&
+    Number.isInteger(candidate.variantRevision) &&
+    typeof candidate.variantChecksum === "string" &&
+    typeof candidate.runtime?.image === "string" &&
+    typeof candidate.runtime?.cpu === "number" &&
+    typeof candidate.runtime?.memoryBytes === "number" &&
+    Array.isArray(candidate.templateLayers) &&
+    candidate.templateLayers.length > 0 &&
+    candidate.templateLayers.every((layer) =>
+      typeof layer.id === "string" && typeof layer.checksum === "string"
+    );
 }
 
 interface StopRow {
@@ -153,6 +183,43 @@ export class InstanceController {
       const group = groups[0];
       if (!group?.enabled) return false;
 
+      const currentVariants = await tx.select({
+        revision: serverVariants.revision,
+        checksum: serverVariants.checksum,
+        runtime: serverVariants.runtimeSpec,
+      })
+        .from(serverVariants)
+        .innerJoin(serverGroupVariants, eq(serverGroupVariants.variantId, serverVariants.id))
+        .where(and(
+          eq(serverVariants.id, variant.id),
+          eq(serverGroupVariants.groupId, groupId),
+          eq(serverGroupVariants.enabled, true),
+        ));
+      const currentVariant = currentVariants[0];
+      if (
+        !currentVariant ||
+        currentVariant.revision !== variant.revision ||
+        currentVariant.checksum !== variant.checksum
+      ) return false;
+      const selectedLayers = await tx.select({
+        id: templateLayers.id,
+        checksum: templateLayers.checksum,
+      })
+        .from(serverVariantLayers)
+        .innerJoin(templateLayers, eq(templateLayers.id, serverVariantLayers.layerId))
+        .where(eq(serverVariantLayers.variantId, variant.id))
+        .orderBy(asc(serverVariantLayers.ordinal));
+      if (selectedLayers.length === 0) {
+        throw new Error(`Variant ${variant.id} has no materialization layers`);
+      }
+      const createPayload: CreateCommandPayload = {
+        version: 1,
+        variantRevision: currentVariant.revision,
+        variantChecksum: currentVariant.checksum,
+        runtime: currentVariant.runtime,
+        templateLayers: selectedLayers,
+      };
+
       const capacityLimit = group.maximum_instances +
         (replacesInstanceId && replacementReason === "HOST_MAINTENANCE" ? 1 : 0);
 
@@ -203,7 +270,7 @@ export class InstanceController {
       if (!this.hosts) throw new Error("Host service is required for instance placement");
       const placement = await this.hosts.selectForPlacement(
         tx,
-        variant.runtime_spec,
+        createPayload.runtime,
         replacementReason === "HOST_MAINTENANCE" ? sourceHostId : undefined,
         { groupId, maximumInstances: capacityLimit },
       );
@@ -216,8 +283,8 @@ export class InstanceController {
         variantId: variant.id,
         variantRevision: variant.revision,
         hostId,
-        reservedCpu: variant.runtime_spec.cpu,
-        reservedMemoryBytes: variant.runtime_spec.memoryBytes,
+        reservedCpu: createPayload.runtime.cpu,
+        reservedMemoryBytes: createPayload.runtime.memoryBytes,
         lifecycleState: "CREATING",
         availabilityState: "OPEN",
         replacesInstanceId: replacesInstanceId ?? null,
@@ -235,6 +302,7 @@ export class InstanceController {
         instanceId: instanceId,
         operation: "CREATE",
         state: "PENDING",
+        payload: createPayload,
       });
       return true;
     });
@@ -282,13 +350,20 @@ export class InstanceController {
         group_id: serverInstances.groupId,
         variant_id: serverInstances.variantId,
         session_id: serverInstances.sessionId,
+        variant_revision: serverInstances.variantRevision,
+        current_revision: serverVariants.revision,
+        reserved_cpu: serverInstances.reservedCpu,
+        reserved_memory_bytes: serverInstances.reservedMemoryBytes,
+        command_payload: commands.payload,
         runtime_spec: serverVariants.runtimeSpec,
       })
       .from(serverInstances)
       .innerJoin(serverVariants, eq(serverVariants.id, serverInstances.variantId))
+      .innerJoin(commands, eq(commands.instanceId, serverInstances.id))
       .where(
         and(
           eq(serverInstances.id, instanceId),
+          eq(commands.id, commandId),
           inArray(serverInstances.lifecycleState, ["CREATING", "STARTING"])
         )
       );
@@ -301,8 +376,52 @@ export class InstanceController {
       }).where(eq(commands.id, commandId));
       return;
     }
+    const frozen = isCreateCommandPayload(row.command_payload)
+      ? row.command_payload
+      : null;
+    const availableLayers = frozen ? await this.db.select({
+      id: templateLayers.id,
+      checksum: templateLayers.checksum,
+    })
+      .from(templateLayers)
+      .where(inArray(templateLayers.id, frozen.templateLayers.map((layer) => layer.id))) : [];
+    const layerChecksums = new Map(availableLayers.map((layer) => [layer.id, layer.checksum]));
+    if (
+      (row.command_payload !== null && !frozen) ||
+      (frozen && (
+        frozen.variantRevision !== row.variant_revision ||
+        frozen.runtime.cpu !== row.reserved_cpu ||
+        frozen.runtime.memoryBytes !== row.reserved_memory_bytes
+      )) ||
+      (frozen && frozen.templateLayers.some((layer) =>
+        layerChecksums.get(layer.id) !== layer.checksum
+      )) ||
+      (!frozen && (
+        row.variant_revision !== row.current_revision ||
+        row.runtime_spec.cpu !== row.reserved_cpu ||
+        row.runtime_spec.memoryBytes !== row.reserved_memory_bytes
+      ))
+    ) {
+      await this.db.transaction(async (tx) => {
+        await tx.update(commands).set({
+          state: "CANCELLED",
+          completedAt: sql`now()`,
+          lastError: "Stored CREATE specification is incompatible with the reserved instance",
+        }).where(eq(commands.id, commandId));
+        await tx.update(serverInstances).set({
+          lifecycleState: "FAILED",
+          failedAt: sql`now()`,
+          failureReason: "OBSOLETE_CREATE",
+          updatedAt: sql`now()`,
+        }).where(and(
+          eq(serverInstances.id, instanceId),
+          inArray(serverInstances.lifecycleState, ["CREATING", "STARTING"]),
+        ));
+      });
+      return;
+    }
     try {
-      const templateLayersForVariant = await this.db
+      const templateLayersForVariant = frozen?.templateLayers ?? await this.db
         .select({
           id: templateLayers.id,
           checksum: templateLayers.checksum,
@@ -323,7 +442,7 @@ export class InstanceController {
         variantId: row.variant_id,
         ...(row.session_id ? { sessionId: row.session_id } : {}),
         templateLayers: templateLayersForVariant,
-        runtime: row.runtime_spec,
+        runtime: frozen?.runtime ?? row.runtime_spec,
         environment: {},
       });
       await this.db.transaction(async (tx) => {
