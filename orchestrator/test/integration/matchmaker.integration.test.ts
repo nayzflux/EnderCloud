@@ -1,10 +1,10 @@
 import { describe, expect, test, beforeAll, beforeEach, afterAll, mock } from "bun:test";
-import { createDatabase, type SqlClient } from "../../src/db/client.ts";
+import { createDatabase, type Database, type SqlClient } from "../../src/db/client.ts";
 import { migrateDatabase } from "../../src/db/migrate.ts";
 import { Matchmaker } from "../../src/services/matchmaker.ts";
 import { QueueService } from "../../src/services/queue-service.ts";
 import { commands as instanceCommands, executionHosts, serverGroups, serverGroupVariants, serverVariantLayers, serverVariants, templateLayers, serverInstances, queueEntries, queueEntryPlayers, gameSessions, sessionPlayers, instancePlayers, transferCommands, events, serverTpsMetrics } from "../../src/db/schema.ts";
-import type { TransferService } from "../../src/services/transfer-service.ts";
+import { TransferService } from "../../src/services/transfer-service.ts";
 import { InstanceController } from "../../src/services/instance-controller.ts";
 import type { Executor, RuntimeInstance } from "../../src/executor/executor.ts";
 import { VariantSelector } from "../../src/services/variant-selector.ts";
@@ -14,13 +14,18 @@ import { HubRouter } from "../../src/services/hub-router.ts";
 import { and, eq, inArray } from "drizzle-orm";
 import { nanoid } from "../../src/id.ts";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { CapacityController } from "../../src/services/capacity-controller.ts";
+import { synchronizeConfiguration } from "../../src/configuration/sync.ts";
 import { Reconciler } from "../../src/services/reconciler.ts";
 import { MonitoringService } from "../../src/services/monitoring-service.ts";
 import { HostService } from "../../src/services/host-service.ts";
 import { AgentExecutor } from "../../src/executor/agent-executor.ts";
 import { HostMaintenanceController } from "../../src/services/host-maintenance-controller.ts";
 import { InstanceStartWorker } from "../../src/services/instance-start-worker.ts";
+import { SessionController } from "../../src/services/session-controller.ts";
 
 const TEST_HOST_ID = "integration-host";
 
@@ -169,6 +174,403 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
   afterAll(async () => {
     if (sql) await sql.end();
     if (container) await container.stop();
+  });
+
+  test("concurrent parties cannot queue the same player twice", async () => {
+    const { groupId } = await seedGroup();
+    let reads = 0;
+    let releaseSecondRead: (() => void) | undefined;
+    const secondRead = new Promise<void>((resolve) => {
+      releaseSecondRead = resolve;
+    });
+    const coordinatedDb = {
+      transaction: (work: (tx: unknown) => Promise<unknown>) => db.transaction(async (tx) => {
+        let firstExecute = true;
+        const coordinatedTx = new Proxy(tx, {
+          get(target, property) {
+            if (property === "execute") {
+              return async (...args: Parameters<typeof tx.execute>) => {
+                const result = await tx.execute(...args);
+                if (firstExecute) {
+                  firstExecute = false;
+                  reads += 1;
+                  if (reads === 2) releaseSecondRead?.();
+                  await Promise.race([secondRead, Bun.sleep(300)]);
+                }
+                return result;
+              };
+            }
+            const value = Reflect.get(target, property);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+        return work(coordinatedTx);
+      }),
+    } as unknown as Database;
+    const queues = new QueueService(coordinatedDb);
+    const playerId = crypto.randomUUID();
+    const requests = ["party-a", "party-b"].map((partyId) =>
+      queues.enqueue({ groupId, partyId, players: [playerId] })
+    );
+
+    const results = await Promise.allSettled(requests);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+
+    const active = await db.select({ id: queueEntries.id })
+      .from(queueEntries)
+      .innerJoin(queueEntryPlayers, eq(queueEntryPlayers.queueEntryId, queueEntries.id))
+      .where(and(
+        eq(queueEntries.state, "QUEUED"),
+        eq(queueEntryPlayers.playerId, playerId),
+      ));
+    expect(active).toHaveLength(1);
+  });
+
+  test("a queued party id is idempotent only for the same members", async () => {
+    const { groupId } = await seedGroup();
+    const queues = new QueueService(db);
+    const firstPlayer = crypto.randomUUID();
+    const secondPlayer = crypto.randomUUID();
+    const first = await queues.enqueue({ groupId, partyId: "reused-party", players: [firstPlayer] });
+    const retry = await queues.enqueue({ groupId, partyId: "reused-party", players: [firstPlayer] });
+
+    expect(retry.entryId).toBe(first.entryId);
+    await expect(queues.enqueue({
+      groupId,
+      partyId: "reused-party",
+      players: [secondPlayer],
+    })).rejects.toThrow();
+  });
+
+  test("session cancellation drains the current instance despite a stale caller snapshot", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const sessionId = nanoid();
+    const instanceId = nanoid();
+    await db.insert(gameSessions).values({
+      id: sessionId,
+      groupId,
+      state: "TRANSFERRING",
+    });
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      sessionId,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      lifecycleState: "RUNNING",
+      availabilityState: "RESERVED",
+      endpoint: "10.0.0.10:25565",
+    });
+    await db.update(gameSessions).set({ instanceId }).where(eq(gameSessions.id, sessionId));
+    const beginDrain = mock(async () => true);
+    const controller = new SessionController(
+      db,
+      { beginDrain } as unknown as InstanceController,
+      {} as TransferService,
+      {} as HubRouter,
+      mockLogger,
+    );
+
+    await (controller as unknown as {
+      cancel: (sessionId: string) => Promise<void>;
+    }).cancel(sessionId);
+
+    expect(beginDrain).toHaveBeenCalledWith(instanceId, "SESSION_CANCELLED");
+  });
+
+  test("session reconciliation drains a reservation left by interrupted cancellation", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const sessionId = nanoid();
+    const instanceId = nanoid();
+    await db.insert(gameSessions).values({ id: sessionId, groupId, state: "CANCELLED" });
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      sessionId,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      lifecycleState: "RUNNING",
+      availabilityState: "RESERVED",
+      endpoint: "10.0.0.10:25565",
+    });
+    await db.update(gameSessions).set({ instanceId }).where(eq(gameSessions.id, sessionId));
+    const beginDrain = mock(async () => true);
+    const controller = new SessionController(
+      db,
+      { beginDrain } as unknown as InstanceController,
+      {} as TransferService,
+      {} as HubRouter,
+      mockLogger,
+    );
+
+    await controller.tick();
+
+    expect(beginDrain).toHaveBeenCalledWith(instanceId, "SESSION_CANCELLED");
+  });
+
+  test("a transfer retry excludes a player who arrived and then left", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = nanoid();
+    const arrivedPlayer = crypto.randomUUID();
+    const waitingPlayer = crypto.randomUUID();
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "10.0.0.10:25565",
+    });
+    const publishTransfer = mock(async (_payload: unknown) => undefined);
+    const transfers = new TransferService(
+      db,
+      { publishTransfer } as unknown as RedisEventBus,
+      mockLogger,
+    );
+    await db.transaction((tx) => transfers.enqueue(tx, {
+      instanceId,
+      endpoint: "10.0.0.10:25565",
+      players: [arrivedPlayer, waitingPlayer],
+    }));
+    await db.insert(instancePlayers).values({
+      instanceId,
+      playerId: arrivedPlayer,
+      staleDeadline: new Date(Date.now() + 30_000),
+    });
+
+    await transfers.tick();
+    await db.delete(instancePlayers).where(and(
+      eq(instancePlayers.instanceId, instanceId),
+      eq(instancePlayers.playerId, arrivedPlayer),
+    ));
+    await db.update(transferCommands).set({ nextAttemptAt: new Date(0) });
+    await transfers.tick();
+
+    expect(publishTransfer).toHaveBeenCalledTimes(2);
+    for (const call of publishTransfer.mock.calls) {
+      expect((call[0] as { players: string[] }).players).toEqual([waitingPlayer]);
+    }
+  });
+
+  test("Paper arrival is remembered even when the player leaves before the next transfer tick", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = nanoid();
+    const arrivedPlayer = crypto.randomUUID();
+    const waitingPlayer = crypto.randomUUID();
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "10.0.0.10:25565",
+    });
+    const publishTransfer = mock(async (_payload: unknown) => undefined);
+    const bus = {
+      publishTransfer,
+      publishRegistry: async () => undefined,
+    } as unknown as RedisEventBus;
+    const transfers = new TransferService(db, bus, mockLogger);
+    await db.transaction((tx) => transfers.enqueue(tx, {
+      instanceId,
+      endpoint: "10.0.0.10:25565",
+      players: [arrivedPlayer, waitingPlayer],
+    }));
+    const instances = new InstanceController(
+      db,
+      {} as Executor,
+      {} as VariantSelector,
+      bus,
+      transfers,
+      {} as HubRouter,
+      mockLogger,
+    );
+
+    await instances.handlePaperEvent(instanceId, { type: "PLAYER_JOINED", playerId: arrivedPlayer });
+    await instances.handlePaperEvent(instanceId, { type: "PLAYER_LEFT", playerId: arrivedPlayer });
+    await transfers.tick();
+
+    expect(publishTransfer).toHaveBeenCalledTimes(1);
+    expect((publishTransfer.mock.calls[0]?.[0] as { players: string[] }).players)
+      .toEqual([waitingPlayer]);
+  });
+
+  test("a recovered session retains its original instance acquisition deadline", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = nanoid();
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "10.0.0.10:25565",
+    });
+    const queues = new QueueService(db);
+    await queues.enqueue({
+      groupId,
+      partyId: "recovery-party",
+      players: [crypto.randomUUID(), crypto.randomUUID()],
+    });
+    await matchmaker.tick();
+    const before = await db.select({
+      id: gameSessions.id,
+      acquisitionDeadline: gameSessions.instanceAcquisitionDeadline,
+    }).from(gameSessions);
+    expect(before[0]?.acquisitionDeadline).not.toBeNull();
+
+    await db.update(serverInstances).set({ lifecycleState: "FAILED" })
+      .where(eq(serverInstances.id, instanceId));
+    const controller = new SessionController(
+      db,
+      {} as InstanceController,
+      { cancelForInstance: async () => undefined } as unknown as TransferService,
+      {} as HubRouter,
+      mockLogger,
+    );
+    await controller.tick();
+    const recovered = await db.select({
+      state: gameSessions.state,
+      acquisitionDeadline: gameSessions.instanceAcquisitionDeadline,
+    }).from(gameSessions).where(eq(gameSessions.id, before[0]!.id));
+    expect(recovered[0]?.state).toBe("WAITING_FOR_INSTANCE");
+    expect(recovered[0]?.acquisitionDeadline?.getTime())
+      .toBe(before[0]?.acquisitionDeadline?.getTime());
+
+    const replacementId = nanoid();
+    await db.insert(serverInstances).values({
+      id: replacementId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "10.0.0.11:25565",
+    });
+    await matchmaker.tick();
+    await db.update(serverInstances).set({ lifecycleState: "FAILED" })
+      .where(eq(serverInstances.id, replacementId));
+    await controller.tick();
+    const recoveredAgain = await db.select({
+      state: gameSessions.state,
+      acquisitionDeadline: gameSessions.instanceAcquisitionDeadline,
+    }).from(gameSessions).where(eq(gameSessions.id, before[0]!.id));
+    expect(recoveredAgain[0]?.state).toBe("WAITING_FOR_INSTANCE");
+    expect(recoveredAgain[0]?.acquisitionDeadline?.getTime())
+      .toBe(before[0]?.acquisitionDeadline?.getTime());
+
+    await db.update(gameSessions).set({ instanceAcquisitionDeadline: new Date(0) })
+      .where(eq(gameSessions.id, before[0]!.id));
+    await controller.tick();
+    const expired = await db.select({ state: gameSessions.state })
+      .from(gameSessions).where(eq(gameSessions.id, before[0]!.id));
+    expect(expired[0]?.state).toBe("CANCELLED");
+  });
+
+  test("a legacy session receives a deadline when its instance fails", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = nanoid();
+    const sessionId = nanoid();
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      lifecycleState: "FAILED",
+      availabilityState: "OPEN",
+    });
+    await db.insert(gameSessions).values({
+      id: sessionId,
+      groupId,
+      instanceId,
+      state: "TRANSFERRING",
+      instanceAcquisitionDeadline: null,
+    });
+
+    const controller = new SessionController(
+      db,
+      {} as InstanceController,
+      { cancelForInstance: async () => undefined } as unknown as TransferService,
+      {} as HubRouter,
+      mockLogger,
+    );
+    const beforeRecovery = Date.now();
+    await controller.tick();
+    const recovered = await db.select({
+      state: gameSessions.state,
+      acquisitionDeadline: gameSessions.instanceAcquisitionDeadline,
+    }).from(gameSessions).where(eq(gameSessions.id, sessionId));
+    expect(recovered[0]?.state).toBe("WAITING_FOR_INSTANCE");
+    expect(recovered[0]?.acquisitionDeadline?.getTime()).toBeGreaterThan(beforeRecovery);
+  });
+
+  test("a removed group is disabled, rejects queues and drains open capacity", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = nanoid();
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "10.0.0.10:25565",
+    });
+    const configurationRoot = await mkdtemp(join(tmpdir(), "removed-group-"));
+    const groupsRoot = join(configurationRoot, "groups");
+    const templatesRoot = join(configurationRoot, "templates");
+    await mkdir(groupsRoot);
+    await mkdir(templatesRoot);
+    try {
+      await synchronizeConfiguration(db, groupsRoot, templatesRoot, mockLogger);
+    } finally {
+      await rm(configurationRoot, { recursive: true, force: true });
+    }
+
+    const group = await db.select({ enabled: serverGroups.enabled })
+      .from(serverGroups).where(eq(serverGroups.id, groupId));
+    expect(group).toEqual([{ enabled: false }]);
+
+    const queue = new QueueService(db);
+    await expect(queue.enqueue({
+      groupId,
+      partyId: "new-party",
+      players: [crypto.randomUUID()],
+    })).rejects.toThrow("unavailable");
+
+    const drained: string[] = [];
+    const instances = {
+      beginDrain: async (id: string) => {
+        drained.push(id);
+      },
+    } as unknown as InstanceController;
+    const capacity = new CapacityController(
+      db,
+      instances,
+      mockLogger,
+    );
+    await capacity.tick();
+    expect(drained).toContain(instanceId);
   });
 
   test("placement serializes reservations without overallocating either host", async () => {
@@ -370,6 +772,57 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       .from(executionHosts)
       .where(eq(executionHosts.id, TEST_HOST_ID));
     expect(state[0]?.health).toBe("ONLINE");
+  });
+
+  test("startup grace probes stale hosts before failing their running instances", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = "recoveringStartup1";
+    const stale = new Date(Date.now() - 60_000);
+    await db.update(executionHosts).set({
+      healthState: "ONLINE",
+      lastHeartbeatAt: stale,
+      lastControlContactAt: stale,
+    }).where(eq(executionHosts.id, TEST_HOST_ID));
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      groupId,
+      variantId,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "10.0.0.10:25565",
+    });
+
+    const failInstance = mock(async () => true);
+    const listManagedInstances = mock(async () => [{
+      hostId: TEST_HOST_ID,
+      instanceId,
+      containerId: "recovering-container",
+      groupId,
+      variantId,
+      running: true,
+      status: "Up",
+    }]);
+    const reconciler = new Reconciler(
+      db,
+      { listManagedInstances } as unknown as Executor,
+      { failInstance } as unknown as InstanceController,
+      new HostService(db),
+      mockLogger,
+      30_000,
+      30_000,
+    );
+
+    await reconciler.tick();
+
+    expect(listManagedInstances).toHaveBeenCalledTimes(1);
+    expect(failInstance).not.toHaveBeenCalled();
+    const host = await db.select({ health: executionHosts.healthState })
+      .from(executionHosts)
+      .where(eq(executionHosts.id, TEST_HOST_ID));
+    expect(host[0]?.health).toBe("ONLINE");
   });
 
   test("maintenance limits surge to one replacement and waits without capacity", async () => {

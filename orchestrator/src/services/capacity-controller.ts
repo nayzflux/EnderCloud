@@ -196,7 +196,18 @@ export class CapacityController {
             JOIN server_instances target_instance
               ON target_instance.id = pending.instance_id
             CROSS JOIN LATERAL
-              jsonb_array_elements_text(pending.payload->'players') expected(player_id)
+              unnest(CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM transfer_command_players receipt
+                  WHERE receipt.command_id = pending.id
+                ) THEN ARRAY(
+                  SELECT receipt.player_id::text FROM transfer_command_players receipt
+                  WHERE receipt.command_id = pending.id AND receipt.state = 'PENDING'
+                )
+                ELSE ARRAY(
+                  SELECT jsonb_array_elements_text(pending.payload->'players')
+                )
+              END) expected(player_id)
             WHERE target_instance.group_id = ${groupId}
               AND pending.state = 'PENDING'
               AND pending.expires_at > now()

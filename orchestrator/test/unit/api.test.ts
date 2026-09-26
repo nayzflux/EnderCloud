@@ -31,6 +31,7 @@ function testApp(
     }),
   } as unknown as IncidentController,
   startup?: VariantStartController,
+  logger: Logger = new Logger("error", { sink: () => {} }),
 ) {
   const dashboard = {
     getCluster: async () => ({
@@ -67,10 +68,63 @@ function testApp(
     templates,
     incidents,
     ...(startup ? { startup } : {}),
-    logger: new Logger("error", { sink: () => {} }),
+    logger,
     isReady: () => true,
   });
 }
+
+test("orchestrator keeps request ids, errors and durations isolated across concurrent requests", async () => {
+  const records: Record<string, unknown>[] = [];
+  const logger = new Logger("debug", {
+    sink: (_level, record) => records.push(JSON.parse(record)),
+  });
+  let releaseSlow: (() => void) | undefined;
+  const slowGate = new Promise<void>((resolve) => {
+    releaseSlow = resolve;
+  });
+  const instances = {
+    listProxyServers: async () => {
+      await slowGate;
+      throw new Error("database failed");
+    },
+  } as unknown as InstanceController;
+  const app = testApp(
+    undefined,
+    instances,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    logger,
+  );
+
+  const slowResponse = app.handle(new Request("http://endercloud/api/v1/proxy/servers", {
+    headers: { "x-request-id": "slow-request" },
+  }));
+  await Bun.sleep(0);
+  const fast = await app.handle(new Request("http://endercloud/health/live", {
+    headers: { "x-request-id": "fast-request" },
+  }));
+  await Bun.sleep(30);
+  releaseSlow?.();
+  const slow = await slowResponse;
+  await Bun.sleep(0);
+
+  expect(fast.headers.get("x-request-id")).toBe("fast-request");
+  expect(slow.headers.get("x-request-id")).toBe("slow-request");
+  expect((await slow.json() as { requestId: string }).requestId).toBe("slow-request");
+  const completed = records.filter((record) => record.event === "orchestrator.request.completed");
+  const fastLog = completed.find((record) => record.requestId === "fast-request");
+  const slowLog = completed.find((record) => record.requestId === "slow-request");
+  expect(fastLog).toBeDefined();
+  expect(slowLog).toBeDefined();
+  expect(slowLog?.durationMs).toBeGreaterThan(fastLog?.durationMs as number);
+  expect(records.some((record) =>
+    record.event === "orchestrator.request.server_error" &&
+    record.requestId === "slow-request"
+  )).toBe(true);
+});
 
 test("blocked variant startup retry returns the durable resetting state", async () => {
   const resetting = {

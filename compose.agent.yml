@@ -33,7 +33,7 @@ services:
       AGENT_TEMPLATE_CACHE_DIRECTORY: /data/template-cache
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${AGENT_RUNTIME_LOCAL_DIRECTORY:-./runtime}:/data/runtime
+      - ${AGENT_RUNTIME_HOST_DIRECTORY:?Set the runtime path seen by Docker}:/data/runtime
       - agent-template-cache:/data/template-cache
     ports:
       - "${AGENT_PUBLISH_ADDRESS:?Set the private bind address}:${AGENT_PUBLISH_PORT:-8090}:8090"

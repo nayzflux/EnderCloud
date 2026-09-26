@@ -100,7 +100,7 @@ services:
       AGENT_TEMPLATE_CACHE_DIRECTORY: /data/template-cache
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${AGENT_RUNTIME_LOCAL_DIRECTORY:?Set the local runtime directory}:/data/runtime
+      - ${AGENT_RUNTIME_HOST_DIRECTORY:?Set the runtime path seen by Docker}:/data/runtime
       - agent-template-cache:/data/template-cache
     depends_on:
       orchestrator:

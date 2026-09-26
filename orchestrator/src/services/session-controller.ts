@@ -47,6 +47,7 @@ export class SessionController {
         ["expire-player-presence", () => this.expirePlayerPresence()],
         ["advance-waiting", () => this.advanceWaitingSessions()],
         ["recover-failed", () => this.recoverFailedInstances()],
+        ["release-terminal-reservations", () => this.releaseTerminalReservations()],
         ["finish-draining", () => this.finishDrainingInstances()],
       ] as const;
       // Isolate stages so a failure in recovery does not block timeout or drain processing.
@@ -116,7 +117,7 @@ export class SessionController {
           this.logger.info("session.instance_wait.expired", "Session timed out while waiting for an instance", {
             sessionId: session.id,
           });
-          await this.cancel(session.id, null);
+          await this.cancel(session.id);
         }
         continue;
       }
@@ -127,7 +128,7 @@ export class SessionController {
           sessionId: session.id,
           connectedPlayers: session.connected_players,
         });
-        await this.cancel(session.id, session.instance_id);
+        await this.cancel(session.id);
       } else if (
         // Once every still-active selection arrived, the lobby is waiting on game start rather than transfers.
         session.state === "TRANSFERRING" &&
@@ -245,6 +246,14 @@ export class SessionController {
               instanceId: null,
               transferStartedAt: null,
               lobbyStaleDeadline: null,
+              instanceAcquisitionDeadline: sql`COALESCE(
+                ${gameSessions.instanceAcquisitionDeadline},
+                now() + (
+                  SELECT acquisition_group.instance_acquisition_timeout_ms * interval '1 millisecond'
+                  FROM server_groups acquisition_group
+                  WHERE acquisition_group.id = ${gameSessions.groupId}
+                )
+              )`,
               updatedAt: sql`now()`
             })
             .where(eq(gameSessions.id, failure.session_id));
@@ -267,6 +276,27 @@ export class SessionController {
           .where(eq(gameSessions.id, failure.session_id));
         await this.transfers.cancelForInstance(failure.instance_id);
       }
+    }
+  }
+
+  // Resume a drain when a crash occurred after the session became terminal.
+  private async releaseTerminalReservations(): Promise<void> {
+    const reserved = await this.db.select({
+      instanceId: serverInstances.id,
+      sessionState: gameSessions.state,
+    })
+      .from(serverInstances)
+      .innerJoin(gameSessions, eq(gameSessions.id, serverInstances.sessionId))
+      .where(and(
+        eq(serverInstances.lifecycleState, "RUNNING"),
+        eq(serverInstances.availabilityState, "RESERVED"),
+        inArray(gameSessions.state, ["FINISHED", "CANCELLED", "FAILED"]),
+      ));
+    for (const instance of reserved) {
+      await this.instances.beginDrain(
+        instance.instanceId,
+        instance.sessionState === "CANCELLED" ? "SESSION_CANCELLED" : "NORMAL",
+      );
     }
   }
 
@@ -315,10 +345,7 @@ export class SessionController {
   }
 
   // Cancel a pre-start session, its transfers, and release its reserved instance.
-  private async cancel(
-    sessionId: string,
-    instanceId: string | null,
-  ): Promise<void> {
+  private async cancel(sessionId: string): Promise<void> {
     const cancelled = await this.db.transaction(async (tx: any) => {
       const rows = await tx.update(gameSessions)
         .set({
@@ -330,18 +357,18 @@ export class SessionController {
           eq(gameSessions.id, sessionId),
           inArray(gameSessions.state, ["FORMING", "WAITING_FOR_INSTANCE", "TRANSFERRING", "WAITING"])
         ))
-        .returning({ id: gameSessions.id });
-      if (rows.length === 0) return false;
+        .returning({ instanceId: gameSessions.instanceId });
+      if (rows.length === 0) return null;
       await tx.update(transferCommands)
         .set({ state: "CANCELLED", completedAt: sql`now()` })
         .where(and(
           eq(transferCommands.sessionId, sessionId),
           eq(transferCommands.state, "PENDING")
         ));
-      return true;
+      return rows[0];
     });
-    if (cancelled && instanceId) {
-      await this.instances.beginDrain(instanceId, "SESSION_CANCELLED");
+    if (cancelled?.instanceId) {
+      await this.instances.beginDrain(cancelled.instanceId, "SESSION_CANCELLED");
     }
   }
 }

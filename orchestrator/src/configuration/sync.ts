@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { parse } from "yaml";
-import { inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import {
   serverGroups,
@@ -524,6 +524,14 @@ export async function synchronizeConfiguration(
   const configuration = await loadConfiguration(groupsRoot, templatesRoot);
   // Groups and variants are committed together so readers never observe a partial config refresh.
   await db.transaction(async (tx) => {
+    const groupIds = configuration.groups.map((group) => group.id);
+    await tx.update(serverGroups)
+      .set({ enabled: false, updatedAt: sql`now()` })
+      .where(and(
+        eq(serverGroups.enabled, true),
+        groupIds.length > 0 ? notInArray(serverGroups.id, groupIds) : undefined,
+      ));
+
     // Upsert preserves runtime rows that reference stable group identifiers.
     for (const group of configuration.groups) {
       const matchmaking = group.matchmaking;
@@ -639,7 +647,6 @@ export async function synchronizeConfiguration(
       );
     }
 
-    const groupIds = configuration.groups.map((group) => group.id);
     if (groupIds.length > 0) {
       await tx.delete(serverGroupVariants).where(inArray(serverGroupVariants.groupId, groupIds));
     }

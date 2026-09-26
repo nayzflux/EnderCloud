@@ -40,6 +40,17 @@ export class QueueService {
       if (!groupRecord.team_size || request.players.length > groupRecord.team_size) {
         throw new Error("The party is larger than a team");
       }
+
+      // The conflict query alone cannot exclude a concurrent insertion that has
+      // not committed yet. Lock the party and all players before reading it.
+      const lockKeys = [
+        `party:${request.groupId}:${request.partyId}`,
+        ...request.players.map((playerId) => `player:${playerId}`),
+      ].sort();
+      for (const key of lockKeys) {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
+      }
+
       const existing = await tx
         .select({
           id: queueEntries.id,
@@ -67,10 +78,19 @@ export class QueueService {
         )
         .limit(1);
       const existingEntry = existing[0];
-      // A queued ticket is always an idempotent retry. A selected ticket is
-      // idempotent only while the exact requested membership is still active.
+      // Both queued and selected retries must refer to the same members.
       if (existingEntry?.state === "QUEUED") {
-        return { entryId: existingEntry.id, state: existingEntry.state };
+        const members = await tx.select({ playerId: queueEntryPlayers.playerId })
+          .from(queueEntryPlayers)
+          .where(eq(queueEntryPlayers.queueEntryId, existingEntry.id));
+        const existingPlayers = new Set(members.map((member) => member.playerId));
+        if (
+          existingPlayers.size === request.players.length &&
+          request.players.every((playerId) => existingPlayers.has(playerId))
+        ) {
+          return { entryId: existingEntry.id, state: existingEntry.state };
+        }
+        throw new Error(`Party ${request.partyId} is already queued with different members`);
       }
       if (existingEntry?.state === "SELECTED" && existingEntry.sessionId) {
         const activeMembers = await tx.select({ playerId: sessionPlayers.playerId })

@@ -1,6 +1,6 @@
 import type postgres from "postgres";
 import type { Database } from "../db/client.ts";
-import { sql, eq, and, lte, gt, asc } from "drizzle-orm";
+import { sql, eq, and, lte, gt, asc, inArray } from "drizzle-orm";
 import type { RedisEventBus } from "../events/redis-bus.ts";
 import { nanoid } from "../id.ts";
 import type { Logger } from "../logger.ts";
@@ -67,6 +67,11 @@ export class TransferService {
       },
       expiresAt: sql`now() + (${target[0].timeoutMs} * interval '1 millisecond')`
     });
+    if (payload.players.length > 0) {
+      await tx.insert(schema.transferCommandPlayers).values(
+        [...new Set(payload.players)].map((playerId) => ({ commandId, playerId })),
+      );
+    }
     return commandId;
   }
 
@@ -108,9 +113,27 @@ export class TransferService {
         // Preserve command order so older player moves are retried first.
         .orderBy(asc(schema.transferCommands.createdAt))
         .limit(100)) as unknown as TransferCommandRow[];
+      const receipts = commands.length === 0 ? [] : await this.db
+        .select({
+          commandId: schema.transferCommandPlayers.commandId,
+          playerId: schema.transferCommandPlayers.playerId,
+          state: schema.transferCommandPlayers.state,
+        })
+        .from(schema.transferCommandPlayers)
+        .where(inArray(schema.transferCommandPlayers.commandId, commands.map((command) => command.id)));
+      const byCommand = new Map<string, typeof receipts>();
+      for (const receipt of receipts) {
+        const current = byCommand.get(receipt.commandId) ?? [];
+        current.push(receipt);
+        byCommand.set(receipt.commandId, current);
+      }
       // Publish sequentially to avoid flooding Redis and to preserve deterministic retry updates.
       for (const command of commands) {
-        await this.publish(command);
+        const commandReceipts = byCommand.get(command.id);
+        const players = commandReceipts
+          ? commandReceipts.filter((receipt) => receipt.state === "PENDING").map((receipt) => receipt.playerId)
+          : command.payload.players;
+        if (players.length > 0) await this.publish(command, players);
       }
     } finally {
       this.running = false;
@@ -119,33 +142,73 @@ export class TransferService {
 
   // Complete commands once every expected player arrived or definitively left.
   private async completeObservedTransfers(): Promise<void> {
+    await this.db.update(schema.transferCommandPlayers)
+      .set({ state: "ARRIVED", observedAt: sql`now()` })
+      .where(and(
+        eq(schema.transferCommandPlayers.state, "PENDING"),
+        sql`EXISTS (
+          SELECT 1 FROM transfer_commands command
+          JOIN instance_players present ON present.instance_id = command.instance_id
+          WHERE command.id = ${schema.transferCommandPlayers.commandId}
+            AND command.state = 'PENDING'
+            AND present.player_id = ${schema.transferCommandPlayers.playerId}
+        )`,
+      ));
+    await this.db.update(schema.transferCommandPlayers)
+      .set({ state: "LEFT", observedAt: sql`now()` })
+      .where(and(
+        eq(schema.transferCommandPlayers.state, "PENDING"),
+        sql`EXISTS (
+          SELECT 1 FROM transfer_commands command
+          JOIN session_players member ON member.session_id = command.session_id
+          WHERE command.id = ${schema.transferCommandPlayers.commandId}
+            AND command.state = 'PENDING'
+            AND member.player_id = ${schema.transferCommandPlayers.playerId}
+            AND member.state = 'LEFT'
+        )`,
+      ));
     await this.db
       .update(schema.transferCommands)
       .set({ state: "COMPLETED", completedAt: sql`now()` })
       .where(
         and(
           eq(schema.transferCommands.state, "PENDING"),
-          // Complete only when no expected player remains unaccounted for.
-          sql`NOT EXISTS (
-            SELECT 1
-            FROM jsonb_array_elements_text(${schema.transferCommands.payload}->'players') AS expected(player_id)
-            WHERE NOT EXISTS (
-              SELECT 1
-              FROM instance_players ip
-              WHERE ip.instance_id = ${schema.transferCommands.instanceId}
-                AND ip.player_id = expected.player_id::uuid
+          // New commands use durable per-player receipts. Older manually inserted
+          // commands without receipts retain the previous observation rule.
+          sql`((
+            EXISTS (
+              SELECT 1 FROM transfer_command_players receipt
+              WHERE receipt.command_id = ${schema.transferCommands.id}
+            ) AND NOT EXISTS (
+              SELECT 1 FROM transfer_command_players receipt
+              WHERE receipt.command_id = ${schema.transferCommands.id}
+                AND receipt.state = 'PENDING'
             )
-            AND NOT (
-              ${schema.transferCommands.sessionId} IS NOT NULL
-              AND EXISTS (
+          ) OR (
+            NOT EXISTS (
+              SELECT 1 FROM transfer_command_players receipt
+              WHERE receipt.command_id = ${schema.transferCommands.id}
+            ) AND NOT EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements_text(${schema.transferCommands.payload}->'players') AS expected(player_id)
+              WHERE NOT EXISTS (
                 SELECT 1
-                FROM session_players sp
-                WHERE sp.session_id = ${schema.transferCommands.sessionId}
-                  AND sp.player_id = expected.player_id::uuid
-                  AND sp.state = 'LEFT'
+                FROM instance_players ip
+                WHERE ip.instance_id = ${schema.transferCommands.instanceId}
+                  AND ip.player_id = expected.player_id::uuid
+              )
+              AND NOT (
+                ${schema.transferCommands.sessionId} IS NOT NULL
+                AND EXISTS (
+                  SELECT 1
+                  FROM session_players sp
+                  WHERE sp.session_id = ${schema.transferCommands.sessionId}
+                    AND sp.player_id = expected.player_id::uuid
+                    AND sp.state = 'LEFT'
+                )
               )
             )
-          )`
+          ))`
         )
       );
   }
@@ -175,10 +238,11 @@ export class TransferService {
   }
 
   // Publish one command and schedule bounded retries with exponential backoff.
-  private async publish(command: TransferCommandRow): Promise<void> {
+  private async publish(command: TransferCommandRow, players: readonly string[]): Promise<void> {
     try {
       await this.bus.publishTransfer({
         ...command.payload,
+        players,
         commandId: command.id,
       });
       await this.db

@@ -325,10 +325,18 @@ export class Matchmaker {
   }
 
   private acceptsTicketsBeforeStaleDeadline(session: SessionCandidate): boolean {
-    return (
-      !session.lobbyStaleDeadline ||
-      session.lobbyStaleDeadline.getTime() > Date.now()
-    );
+    const now = Date.now();
+    if (session.lobbyStaleDeadline && session.lobbyStaleDeadline.getTime() <= now) {
+      return false;
+    }
+    if (
+      session.state === "WAITING_FOR_INSTANCE" &&
+      session.instanceAcquisitionDeadline &&
+      session.instanceAcquisitionDeadline.getTime() <= now
+    ) {
+      return false;
+    }
+    return true;
   }
 
   private chooseSession(
@@ -521,7 +529,9 @@ export class Matchmaker {
         instanceId: reservation.id,
         state: "TRANSFERRING",
         transferStartedAt: sql`now()`,
-        instanceAcquisitionDeadline: null,
+        instanceAcquisitionDeadline:
+          sql`COALESCE(${gameSessions.instanceAcquisitionDeadline},
+            now() + (${group.instanceAcquisitionTimeoutMs} * interval '1 millisecond'))`,
         lobbyStaleDeadline:
           sql`now() + (${group.lobbyStaleTimeoutMs} * interval '1 millisecond')`,
         updatedAt: sql`now()`,

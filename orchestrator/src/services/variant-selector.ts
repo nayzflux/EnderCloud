@@ -13,6 +13,7 @@ interface VariantRow {
   id: string;
   group_id: string;
   revision: number;
+  checksum: string;
   selection_weight: number;
   runtime_spec: VariantRuntimeSpec;
   warm_count: number;
@@ -28,6 +29,7 @@ export class VariantSelector {
         id: serverVariants.id,
         group_id: serverGroupVariants.groupId,
         revision: serverVariants.revision,
+        checksum: serverVariants.checksum,
         selection_weight: serverGroupVariants.selectionWeight,
         runtime_spec: serverVariants.runtimeSpec,
         warm_count: sql<number>`count(${serverInstances.id}) FILTER (

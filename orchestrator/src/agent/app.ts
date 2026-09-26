@@ -27,45 +27,61 @@ const instanceSchema = t.Object({
   environment: t.Record(t.String(), t.String()),
 });
 
+interface RequestContext {
+  readonly requestId: string;
+  readonly commandId: string | undefined;
+  readonly startedAt: number;
+  requestError?: unknown;
+}
+
 export function createAgentApp(
   config: AgentConfig,
   executor: LocalDockerExecutor,
   templates: TemplateCache,
   logger?: Logger,
 ) {
+  const requestContexts = new WeakMap<Request, RequestContext>();
+  const contextFor = (request: Request): RequestContext => {
+    const context = requestContexts.get(request);
+    if (!context) {
+      throw new Error("Request context was not initialized");
+    }
+    return context;
+  };
   return new Elysia({ name: "endercloud-agent" })
-    .onRequest(({ request, store }) => {
-      const context = store as { requestId?: string; commandId: string | undefined; startedAt?: number };
-      context.requestId = request.headers.get("x-request-id") ?? nanoid();
-      context.commandId = request.headers.get("x-command-id") ?? undefined;
-      context.startedAt = performance.now();
+    .onRequest(({ request }) => {
+      const context = {
+        requestId: request.headers.get("x-request-id") ?? nanoid(),
+        commandId: request.headers.get("x-command-id") ?? undefined,
+        startedAt: performance.now(),
+      };
+      requestContexts.set(request, context);
       logger?.enterContext({
         requestId: context.requestId,
         commandId: context.commandId,
       });
     })
-    .onAfterHandle(({ set, store }) => {
-      const context = store as { requestId?: string; startedAt?: number };
-      set.headers["x-request-id"] = context.requestId ?? "";
+    .onAfterHandle(({ request, set }) => {
+      set.headers["x-request-id"] = contextFor(request).requestId;
     })
-    .onError(({ error, code, set, store }) => {
+    .onError(({ request, error, code, set }) => {
       const message = error instanceof Error ? error.message : String(error);
       set.status = code === "VALIDATION" ? 400 : 500;
-      const requestStore = store as { requestId?: string; requestError?: unknown };
-      const requestId = requestStore.requestId;
-      requestStore.requestError = error;
-      set.headers["x-request-id"] = requestId ?? "";
+      const context = contextFor(request);
+      const requestId = context.requestId;
+      context.requestError = error;
+      set.headers["x-request-id"] = requestId;
       return { error: code === "VALIDATION" ? "VALIDATION_ERROR" : "AGENT_ERROR", message, requestId };
     })
-    .onAfterResponse(({ request, route, set, store }) => {
-      const context = store as { requestId?: string; startedAt?: number; requestError?: unknown };
+    .onAfterResponse(({ request, route, set }) => {
+      const context = contextFor(request);
       const status = typeof set.status === "number" ? set.status : 200;
       const fields = {
         requestId: context.requestId,
         method: request.method,
         route,
         status,
-        durationMs: Math.round(performance.now() - (context.startedAt ?? performance.now())),
+        durationMs: Math.round(performance.now() - context.startedAt),
         outcome: status >= 500 ? "failure" : "success",
       };
       if (status >= 500) {

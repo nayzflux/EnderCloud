@@ -11,7 +11,7 @@ test("landing presents the product without a dashboard action", async ({ page },
   await expect(
     page.getByRole("heading", {
       level: 1,
-      name: "Scale from player demand to servers ready",
+      name: "Minecraft server orchestration, scaled by player demand",
     }),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "Read the docs" })).toHaveAttribute("href", "/docs");

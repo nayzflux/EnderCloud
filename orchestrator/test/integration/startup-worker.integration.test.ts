@@ -15,11 +15,17 @@ import {
   variantStartStates,
 } from "../../src/db/schema.ts";
 import type { Executor } from "../../src/executor/executor.ts";
+import type { InstanceSpec } from "../../src/executor/executor.ts";
 import { Logger } from "../../src/logger.ts";
 import type { InstanceController } from "../../src/services/instance-controller.ts";
 import { InstanceStartWorker } from "../../src/services/instance-start-worker.ts";
 import { VariantStartController } from "../../src/services/variant-start-controller.ts";
 import { VariantSelector } from "../../src/services/variant-selector.ts";
+import { HostService } from "../../src/services/host-service.ts";
+import { InstanceController as RealInstanceController } from "../../src/services/instance-controller.ts";
+import type { RedisEventBus } from "../../src/events/redis-bus.ts";
+import type { TransferService } from "../../src/services/transfer-service.ts";
+import type { HubRouter } from "../../src/services/hub-router.ts";
 
 let container: StartedPostgreSqlContainer | undefined;
 let sqlClient: ReturnType<typeof createDatabase>["sql"];
@@ -180,6 +186,155 @@ describe("durable instance startup", () => {
       "startup-command-4",
     ]);
     expect(maximumActive).toBe(2);
+  });
+
+  test("concurrent ticks never claim more CREATE commands than available slots", async () => {
+    await seedCreates(2);
+    const started: string[] = [];
+    let active = 0;
+    let maximumActive = 0;
+    let releaseFirst: (() => void) | undefined;
+    const instances = {
+      executeCreate: async (_instanceId: string, commandId: string) => {
+        started.push(commandId);
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        if (started.length === 1) {
+          await new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          });
+        }
+        active -= 1;
+        await db.update(commands).set({ state: "SUCCEEDED", completedAt: new Date() })
+          .where(eq(commands.id, commandId));
+      },
+    } as unknown as InstanceController;
+    const worker = new InstanceStartWorker(db, instances, {} as Executor, logger, 1);
+
+    await Promise.all([worker.tick(), worker.tick()]);
+    const startedBeforeRelease = started.length;
+    releaseFirst?.();
+    await waitFor(async () => {
+      const rows = await db.select({ state: commands.state }).from(commands)
+        .where(eq(commands.operation, "CREATE"));
+      return rows.every((row) => row.state === "SUCCEEDED");
+    });
+    await worker.stop();
+
+    expect(startedBeforeRelease).toBe(1);
+    expect(maximumActive).toBe(1);
+  });
+
+  test("a queued CREATE keeps its reserved runtime and layers after a variant update", async () => {
+    const received: InstanceSpec[] = [];
+    const executor = {
+      createInstance: async (spec: InstanceSpec) => {
+        received.push(spec);
+        return {
+          containerId: "frozen-container",
+          runtimePath: "/runtime/frozen",
+          endpoint: "10.0.0.10:25565",
+        };
+      },
+    } as unknown as Executor;
+    const controller = new RealInstanceController(
+      db,
+      executor,
+      new VariantSelector(db),
+      {} as RedisEventBus,
+      {} as TransferService,
+      {} as HubRouter,
+      logger,
+      undefined,
+      new HostService(db),
+    );
+    const instanceId = await controller.createWarm(groupId);
+    expect(instanceId).not.toBeNull();
+    const command = await db.select({ id: commands.id })
+      .from(commands)
+      .where(eq(commands.instanceId, instanceId!));
+    await db.update(serverVariants).set({
+      revision: 2,
+      runtimeSpec: {
+        image: "itzg/minecraft-server:java25",
+        cpu: 2,
+        memoryBytes: 4 * 1024 ** 3,
+        environment: {},
+      },
+    }).where(eq(serverVariants.id, variantId));
+    await controller.executeCreate(instanceId!, command[0]!.id);
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.runtime.memoryBytes).toBe(1024 ** 3);
+    expect(received[0]?.runtime.cpu).toBe(1);
+    expect(received[0]?.templateLayers[0]?.checksum).toBe("checksum");
+  });
+
+  test("a frozen CREATE fails safely when its template content is no longer available", async () => {
+    let createCalls = 0;
+    const executor = {
+      createInstance: async () => {
+        createCalls += 1;
+        throw new Error("Unavailable template must not reach the agent");
+      },
+    } as unknown as Executor;
+    const controller = new RealInstanceController(
+      db,
+      executor,
+      new VariantSelector(db),
+      {} as RedisEventBus,
+      {} as TransferService,
+      {} as HubRouter,
+      logger,
+      undefined,
+      new HostService(db),
+    );
+    const instanceId = await controller.createWarm(groupId);
+    const command = await db.select({ id: commands.id })
+      .from(commands)
+      .where(eq(commands.instanceId, instanceId!));
+    await db.update(templateLayers).set({ checksum: "changed-layer" })
+      .where(eq(templateLayers.id, variantId));
+
+    await controller.executeCreate(instanceId!, command[0]!.id);
+
+    expect(createCalls).toBe(0);
+    const commandState = await db.select({ state: commands.state }).from(commands)
+      .where(eq(commands.id, command[0]!.id));
+    expect(commandState[0]?.state).toBe("CANCELLED");
+  });
+
+  test("a legacy CREATE without a snapshot is cancelled when its revision changed", async () => {
+    await seedCreates(1);
+    await db.update(serverVariants).set({ revision: 2 })
+      .where(eq(serverVariants.id, variantId));
+    const received: InstanceSpec[] = [];
+    const executor = {
+      createInstance: async (spec: InstanceSpec) => {
+        received.push(spec);
+        throw new Error("Legacy command must not reach the agent");
+      },
+    } as unknown as Executor;
+    const controller = new RealInstanceController(
+      db,
+      executor,
+      new VariantSelector(db),
+      {} as RedisEventBus,
+      {} as TransferService,
+      {} as HubRouter,
+      logger,
+    );
+
+    await controller.executeCreate("startup-instance-0", "startup-command-0");
+
+    expect(received).toHaveLength(0);
+    const command = await db.select({ state: commands.state }).from(commands)
+      .where(eq(commands.id, "startup-command-0"));
+    const instance = await db.select({ lifecycle: serverInstances.lifecycleState })
+      .from(serverInstances)
+      .where(eq(serverInstances.id, "startup-instance-0"));
+    expect(command[0]?.state).toBe("CANCELLED");
+    expect(instance[0]?.lifecycle).toBe("FAILED");
   });
 
   test("recovers RUNNING work and returns interrupted shutdown work to PENDING", async () => {

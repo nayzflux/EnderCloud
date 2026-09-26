@@ -22,10 +22,6 @@ interface HubTarget {
   readonly effectiveLoad: number;
 }
 
-interface PendingTransferPayload {
-  readonly players?: readonly string[];
-}
-
 export class HubRouter {
   public constructor(
     private readonly db: Database,
@@ -107,7 +103,20 @@ export class HubRouter {
       // A repeated request for a player who already has a durable hub transfer
       // is successful without creating a competing command.
       const pendingHubTransfers = await tx
-        .select({ payload: transferCommands.payload })
+        .select({
+          players: sql<string[]>`CASE
+            WHEN EXISTS (
+              SELECT 1 FROM transfer_command_players receipt
+              WHERE receipt.command_id = ${transferCommands.id}
+            ) THEN ARRAY(
+              SELECT receipt.player_id::text FROM transfer_command_players receipt
+              WHERE receipt.command_id = ${transferCommands.id} AND receipt.state = 'PENDING'
+            )
+            ELSE ARRAY(
+              SELECT jsonb_array_elements_text(${transferCommands.payload}->'players')
+            )
+          END`,
+        })
         .from(transferCommands)
         .innerJoin(
           serverInstances,
@@ -126,9 +135,9 @@ export class HubRouter {
             eq(executionHosts.healthState, "ONLINE"),
             eq(executionHosts.adminState, "ACTIVE"),
           ),
-        ) as { payload: PendingTransferPayload }[];
+        ) as { players: string[] }[];
       for (const pending of pendingHubTransfers) {
-        for (const playerId of pending.payload.players ?? []) {
+        for (const playerId of pending.players) {
           if (connectedIds.has(playerId)) acceptedIds.add(playerId);
         }
       }
@@ -140,7 +149,16 @@ export class HubRouter {
           playerCount: serverInstances.playerCount,
           maximumPlayers: serverGroups.maximumPlayersPerInstance,
           pendingPlayers: sql<number>`COALESCE((
-            SELECT sum(jsonb_array_length(pending.payload->'players'))::int
+            SELECT sum(CASE
+              WHEN EXISTS (
+                SELECT 1 FROM transfer_command_players receipt
+                WHERE receipt.command_id = pending.id
+              ) THEN (
+                SELECT count(*)::int FROM transfer_command_players receipt
+                WHERE receipt.command_id = pending.id AND receipt.state = 'PENDING'
+              )
+              ELSE jsonb_array_length(pending.payload->'players')
+            END)::int
             FROM transfer_commands pending
             WHERE pending.instance_id = ${serverInstances.id}
               AND pending.state = 'PENDING'
