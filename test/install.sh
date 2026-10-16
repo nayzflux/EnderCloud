@@ -70,14 +70,14 @@ if [[ "$(uname -s)" == "Linux" ]]; then
   [[ "$(stat -c '%a' "$master_directory/deployment/master.env")" == "600" ]] || fail 'master.env doit être privé'
 fi
 
-worker_directory="$(run_case worker $'2\ngame-paris-02\n10.20.0.12\n8090\n\n10.20.0.12\nhttp://10.20.0.10:8080\n8\n16\n25565\n25664\n\nn\n')"
+worker_directory="$(run_case worker $'2\ngame-paris-02\n10.20.0.12\n8090\n\n10.20.0.12\nhttp://10.20.0.10:8080\n8\n16\n25565\n25664\nn\n\nn\n')"
 assert_file "$worker_directory/deployment/compose.worker.yml"
 assert_file "$worker_directory/deployment/worker.env"
 assert_not_file "$worker_directory/deployment/compose.master.yml"
 assert_contains "$worker_directory/deployment/worker.env" 'AGENT_ALLOCATABLE_MEMORY_BYTES=17179869184'
 assert_contains "$worker_directory/deployment/worker.env" 'ORCHESTRATOR_URL=http://10.20.0.10:8080'
 
-both_directory="$(run_case both $'3\n10.20.0.10\n8080\n3000\nendercloud\nendercloud\nprimary-host\n10.20.0.10\n8090\n\n10.20.0.10\n\n4\n8\n25565\n25664\n\nn\n')"
+both_directory="$(run_case both $'3\n10.20.0.10\n8080\n3000\nendercloud\nendercloud\nprimary-host\n10.20.0.10\n8090\n\n10.20.0.10\n\n4\n8\n25565\n25664\nn\n\nn\n')"
 assert_file "$both_directory/deployment/compose.master.yml"
 assert_file "$both_directory/deployment/compose.worker.yml"
 assert_contains "$both_directory/deployment/worker.env" 'ORCHESTRATOR_URL=http://10.20.0.10:8080'
@@ -85,5 +85,10 @@ assert_contains "$both_directory/deployment/worker.env" 'ORCHESTRATOR_URL=http:/
 if PATH="$TEMPORARY_ROOT/bin-master:$PATH" /usr/bin/env bash "$master_directory/install.sh" </dev/null >/dev/null 2>&1; then
   fail 'une installation existante doit être refusée'
 fi
+
+proxy_directory="$(run_case proxy $'2\nproxy-paris-01\n10.20.0.12\n8090\n\n10.20.0.12\nhttp://10.20.0.10:8080\n8\n16\n25565\n25664\no\n10.20.0.12\n25700\n25709\n\nn\n')"
+assert_contains "$proxy_directory/deployment/worker.env" 'AGENT_PROXY_PORT_START=25700'
+assert_contains "$proxy_directory/deployment/worker.env" 'AGENT_PROXY_PORT_END=25709'
+assert_contains "$proxy_directory/deployment/worker.env" 'AGENT_ADVERTISED_PROXY_ADDRESS=10.20.0.12'
 
 printf 'Les tests de l installateur sont passes.\n'

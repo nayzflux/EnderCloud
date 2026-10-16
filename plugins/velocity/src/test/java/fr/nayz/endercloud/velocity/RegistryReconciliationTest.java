@@ -14,6 +14,28 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class RegistryReconciliationTest {
 
     @Test
+    void excludesManagedProxiesFromTheBackendRegistry() {
+        ServerSnapshot proxy = new ServerSnapshot(
+                "edge",
+                "velocity",
+                "proxies",
+                "proxy",
+                "edge:25700",
+                LifecycleState.RUNNING,
+                AvailabilityState.OPEN,
+                5,
+                0
+        );
+
+        RegistryReconciliation.Changes changes = RegistryReconciliation.plan(
+                List.of(proxy),
+                Map.of()
+        );
+
+        assertEquals(List.of(), changes.register());
+    }
+
+    @Test
     void removesAStaleServerAfterItsUnregistrationEventWasLost() {
         ServerSnapshot retained = server("retained", "host-one:25565");
         Map<String, SocketAddress> registered = Map.of(

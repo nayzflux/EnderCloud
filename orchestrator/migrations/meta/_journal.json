@@ -99,6 +99,13 @@
       "when": 1790380800000,
       "tag": "0013_transfer_command_players",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791072000000,
+      "tag": "0014_managed_proxies",
+      "breakpoints": true
     }
   ]
 }

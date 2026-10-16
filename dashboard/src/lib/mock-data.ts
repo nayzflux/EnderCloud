@@ -391,6 +391,28 @@ const blueprints: readonly GroupBlueprint[] = [
     instances: [],
     queueParties: 0,
   },
+  {
+    id: "edge-proxies",
+    type: "proxy",
+    enabled: true,
+    maximumPlayers: 500,
+    capacity: {
+      minimumInstances: 2,
+      maximumInstances: 2,
+      minimumWarmInstances: 2,
+      maximumWarmInstances: 2,
+    },
+    matchmaking: null,
+    routing: null,
+    variants: [
+      { id: "velocity-main", weight: 100, image: "itzg/mc-proxy:java25", memoryGiB: 1, cpu: 1 },
+    ],
+    instances: [
+      { lifecycleState: "RUNNING", availabilityState: "OPEN", load: 0.4, ageSeconds: 3_600 },
+      { lifecycleState: "DRAINING", availabilityState: "OPEN", load: 0.2, ageSeconds: 2_400 },
+    ],
+    queueParties: 0,
+  },
 ];
 
 interface MockPlayer {
@@ -478,11 +500,13 @@ function buildWorld(now: number): MockWorld {
         weight: variant.weight,
         runtime: {
           image: variant.image,
+          dataDirectory: blueprint.type === "proxy" ? "/server" : "/data",
           memoryBytes: variant.memoryGiB * 1024 ** 3,
           cpu: variant.cpu,
           environment: {
-            EULA: "TRUE",
-            TYPE: "PAPER",
+            ...(blueprint.type === "proxy" ? {
+              TYPE: "CUSTOM", CUSTOM_FAMILY: "velocity", BUNGEE_JAR_FILE: "/server/velocity.jar",
+            } : { EULA: "TRUE", TYPE: "PAPER" }),
             MEMORY: `${variant.memoryGiB}G`,
             EC_GROUP: blueprint.id,
             EC_VARIANT: variant.id,
@@ -580,6 +604,9 @@ function buildWorld(now: number): MockWorld {
         shutdownDeadline:
           spec.lifecycleState === "STOPPING" ? ago(now, -8) : null,
         updatedAt: ago(now, between(random, 1, 12)),
+        ...(blueprint.type === "proxy" ? {
+          proxy: { lastHeartbeatAt: ago(now, 4), ready: running, acceptingConnections: spec.lifecycleState === "RUNNING" },
+        } : {}),
       };
 
       groupInstances.push(instance);
@@ -701,7 +728,7 @@ function buildWorld(now: number): MockWorld {
       (total, group) => total + group.capacity.reservedInstances,
       0,
     ),
-    playersOnline: groups.reduce(
+    playersOnline: groups.filter((group) => group.type !== "proxy").reduce(
       (total, group) =>
         total +
         group.instances.reduce(
@@ -805,7 +832,7 @@ function buildInstanceRecord(
   session: DashboardSession | null,
 ): MockInstanceRecord {
   const players: MockPlayer[] = Array.from(
-    { length: instance.playerCount },
+    { length: blueprint.type === "proxy" ? 0 : instance.playerCount },
     () => {
       const connectedSeconds = between(random, 20, 1_500);
       return {

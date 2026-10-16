@@ -9,6 +9,7 @@ import { AgentExecutor } from "./executor/agent-executor.ts";
 import { Logger } from "./logger.ts";
 import { Scheduler } from "./scheduler.ts";
 import { CapacityController } from "./services/capacity-controller.ts";
+import { ProxyService } from "./services/proxy-service.ts";
 import { DashboardService } from "./services/dashboard-service.ts";
 import { InstanceController } from "./services/instance-controller.ts";
 import { Matchmaker } from "./services/matchmaker.ts";
@@ -124,6 +125,7 @@ const startWorker = new InstanceStartWorker(
 );
 
 const app = createApp({
+  proxies: new ProxyService(db, instances),
   queues,
   instances,
   hubs,

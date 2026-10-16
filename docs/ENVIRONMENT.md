@@ -104,6 +104,9 @@ AGENT_RUNTIME_HOST_DIRECTORY
 AGENT_TEMPLATE_CACHE_DIRECTORY
 AGENT_GAME_PORT_START
 AGENT_GAME_PORT_END
+AGENT_PROXY_PORT_START
+AGENT_PROXY_PORT_END
+AGENT_ADVERTISED_PROXY_ADDRESS
 AGENT_LOG_LEVEL
 ```
 
@@ -170,7 +173,7 @@ The Paper bridge also reads:
 | --- | :---: | --- | --- |
 | `ENDERCLOUD_REPORTED_ENDPOINT` | No | Agent-allocated endpoint | Override the endpoint sent with `SERVER_READY` |
 
-Velocity is normally deployed outside managed Paper containers. Its plugin reads:
+Velocity can be deployed externally or as managed proxy instances. Its plugin reads:
 
 | Variable | Required | Default | Purpose |
 | --- | :---: | --- | --- |

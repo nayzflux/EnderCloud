@@ -36,7 +36,7 @@ callers.
 | Host agent | Template cache, runtime materialization, port allocation, Docker lifecycle, inventory, inspection, and logs | Host-local cache and generated runtime files |
 | PostgreSQL | Transactions, locks, reservations, state machines, commands, deadlines, metrics, and incidents | Authoritative state |
 | Redis | Proxy registry notifications and transfer notifications | Ephemeral events only |
-| Velocity plugin | Dynamic Minecraft server registry, transfer execution, initial hub selection, and kicked-server fallback | In-memory registry rebuilt from the orchestrator snapshot |
+| Velocity plugin | Dynamic backend registry, transfers, hub selection, fallback, and managed proxy readiness and admissions | In-memory registry and admission control lease |
 | Paper plugin | Readiness, player presence, TPS heartbeat, assignment cache, and game lifecycle events | In-memory assignment cache |
 | Dashboard | Operational reads and confirmed maintenance or startup-retry actions | Browser state only |
 
@@ -81,6 +81,11 @@ Redis is deliberately non-authoritative. It publishes two schema-versioned event
 Velocity subscribes before loading `GET /api/v1/proxy/servers`. It reloads that snapshot after a
 Redis reconnect or an invalid event. Losing an event can delay an update, but it does not erase
 the durable decision.
+
+Managed Velocity instances use fixed `proxy` groups and dedicated agent ports. Their heartbeats
+update proxy health and counts independently of Paper player presence. `GET /api/v1/proxies`
+exposes eligible endpoints for an external load balancer. A draining proxy keeps receiving backend
+updates and transfers while rejecting new logins. See [managed proxies](PROXIES.md).
 
 ## Configuration flow
 

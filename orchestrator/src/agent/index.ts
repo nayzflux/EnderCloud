@@ -56,6 +56,7 @@ async function heartbeat(): Promise<void> {
         body: JSON.stringify({
           controlUrl: config.controlUrl,
           gameAddress: config.gameAddress,
+          ...(config.proxy ? { proxy: config.proxy } : {}),
           allocatableCpu: config.allocatableCpu,
           allocatableMemoryBytes: config.allocatableMemoryBytes,
           agentVersion: config.agentVersion,

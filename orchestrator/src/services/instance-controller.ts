@@ -20,6 +20,7 @@ import type {
   PaperEvent,
   ServerSnapshot,
   VariantRuntimeSpec,
+  InstanceType,
 } from "../domain/types.ts";
 import type { RedisEventBus } from "../events/redis-bus.ts";
 import type { Executor } from "../executor/executor.ts";
@@ -54,6 +55,7 @@ interface CreateRow {
 }
 
 interface CreateCommandPayload {
+  readonly instanceType?: InstanceType;
   readonly version: 1;
   readonly variantRevision: number;
   readonly variantChecksum: string;
@@ -65,6 +67,7 @@ function isCreateCommandPayload(value: unknown): value is CreateCommandPayload {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Partial<CreateCommandPayload>;
   return candidate.version === 1 &&
+    (candidate.instanceType === undefined || candidate.instanceType === "paper" || candidate.instanceType === "proxy") &&
     Number.isInteger(candidate.variantRevision) &&
     typeof candidate.variantChecksum === "string" &&
     typeof candidate.runtime?.image === "string" &&
@@ -133,7 +136,7 @@ export class InstanceController {
       return rows[0]!;
     });
     if (!changed) return false;
-    await this.bus.publishRegistry("SERVER_UNREGISTERED", { instanceId });
+    await this.unregisterBackend(instanceId);
     const startupFailure = countsAsStartupFailure(reason, changed.runningAt !== null);
     if (startupFailure && this.startPolicy) {
       const state = await this.startPolicy.recordFailure(instanceId, reason);
@@ -213,6 +216,7 @@ export class InstanceController {
         throw new Error(`Variant ${variant.id} has no materialization layers`);
       }
       const createPayload: CreateCommandPayload = {
+        instanceType: group.type === "proxy" ? "proxy" : "paper",
         version: 1,
         variantRevision: currentVariant.revision,
         variantChecksum: currentVariant.checksum,
@@ -273,6 +277,7 @@ export class InstanceController {
         createPayload.runtime,
         replacementReason === "HOST_MAINTENANCE" ? sourceHostId : undefined,
         { groupId, maximumInstances: capacityLimit },
+        createPayload.instanceType,
       );
       if (placement.status === "BLOCKED") return false;
       const hostId = placement.hostId;
@@ -436,6 +441,7 @@ export class InstanceController {
       // Executor creation is idempotent: an existing managed container is reused
       // when reconciliation resumes a partially completed CREATE command.
       const created = await this.executor.createInstance({
+        instanceType: frozen?.instanceType ?? "paper",
         hostId: row.host_id,
         instanceId: row.id,
         groupId: row.group_id,
@@ -523,6 +529,13 @@ export class InstanceController {
 
   // Apply an event emitted by the Paper plugin and persist it for auditing.
   public async handlePaperEvent(instanceId: string, event: PaperEvent): Promise<void> {
+    const [instance] = await this.db.select({ type: serverGroups.type })
+      .from(serverInstances)
+      .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
+      .where(eq(serverInstances.id, instanceId));
+    if (!instance || instance.type === "proxy") {
+      throw new Error(`Paper instance ${instanceId} is unavailable`);
+    }
     // Dispatch by protocol event so every event type has one state mutation path.
     switch (event.type) {
       case "SERVER_READY":
@@ -600,7 +613,9 @@ export class InstanceController {
     if (rows[0]) {
       await this.startPolicy?.markReady(instanceId);
       // Publish registration only for the transaction that actually performed STARTING -> RUNNING.
-      await this.bus.publishRegistry("SERVER_REGISTERED", rows[0]);
+      if (rows[0].groupType !== "proxy") {
+        await this.bus.publishRegistry("SERVER_REGISTERED", rows[0]);
+      }
       this.logger.info("instance.lifecycle.ready", "Instance reported server readiness", {
         instanceId,
         groupId: rows[0].groupId,
@@ -676,7 +691,9 @@ export class InstanceController {
     if (!sources[0]) return false;
 
     // Re-registration is idempotent and closes the crash window between registration and drain.
-    await this.bus.publishRegistry("SERVER_REGISTERED", replacement);
+    if (replacement.groupType !== "proxy") {
+      await this.bus.publishRegistry("SERVER_REGISTERED", replacement);
+    }
     return this.beginDrain(
       replacement.replacesInstanceId,
       replacement.replacementReason === "HOST_MAINTENANCE"
@@ -720,7 +737,7 @@ export class InstanceController {
       .returning({ id: serverInstances.id });
     if (rows.length > 0) {
       // Remove routing before waiting for players to leave, preventing new joins during drain.
-      await this.bus.publishRegistry("SERVER_UNREGISTERED", { instanceId });
+      await this.unregisterBackend(instanceId);
       await this.evacuateCancelledMinigame(instanceId);
       return true;
     }
@@ -810,7 +827,7 @@ export class InstanceController {
           .set({ state: "SUCCEEDED", completedAt: sql`now()` })
           .where(eq(commands.id, commandId));
       });
-      await this.bus.publishRegistry("SERVER_UNREGISTERED", { instanceId });
+      await this.unregisterBackend(instanceId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.db
@@ -844,6 +861,7 @@ export class InstanceController {
       .where(
         and(
           eq(serverInstances.lifecycleState, "RUNNING"),
+          inArray(serverGroups.type, ["hub", "minigame"]),
           isNotNull(serverInstances.endpoint)
         )
       )
@@ -868,6 +886,7 @@ export class InstanceController {
       .where(
         and(
           eq(serverInstances.id, instanceId),
+          inArray(serverGroups.type, ["hub", "minigame"]),
           eq(serverInstances.lifecycleState, "RUNNING"),
           isNotNull(serverInstances.endpoint),
         ),
@@ -1455,6 +1474,17 @@ export class InstanceController {
     }
     await this.recordEvent("session", sessionId, "GAME_RESULTS", results ?? {});
     if (rows[0]?.instance_id) await this.beginDrain(rows[0].instance_id);
+  }
+
+  // Proxy instances never enter the backend registry, including during cleanup.
+  private async unregisterBackend(instanceId: string): Promise<void> {
+    const [instance] = await this.db.select({ type: serverGroups.type })
+      .from(serverInstances)
+      .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
+      .where(eq(serverInstances.id, instanceId));
+    if (instance && instance.type !== "proxy") {
+      await this.bus.publishRegistry("SERVER_UNREGISTERED", { instanceId });
+    }
   }
 
   // Reject stale plugin events that refer to a different instance assignment.

@@ -1,12 +1,13 @@
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { events, executionHosts, serverInstances } from "../db/schema.ts";
 import { selectExecutionHost } from "../domain/host-placement.ts";
-import type { VariantRuntimeSpec } from "../domain/types.ts";
+import type { InstanceType, VariantRuntimeSpec } from "../domain/types.ts";
 import { nanoid } from "../id.ts";
 import type { Logger } from "../logger.ts";
 
 export interface HostHeartbeat {
+  readonly proxy?: { readonly address: string; readonly portStart: number; readonly portEnd: number };
   readonly controlUrl: string;
   readonly gameAddress: string;
   readonly allocatableCpu: number;
@@ -70,7 +71,16 @@ export class HostService {
   ) {}
 
   public async heartbeat(hostId: string, heartbeat: HostHeartbeat): Promise<void> {
+    if (heartbeat.proxy && heartbeat.proxy.portEnd < heartbeat.proxy.portStart) {
+      throw new Error("Proxy port range is unavailable: portEnd must be >= portStart");
+    }
+    const proxy = {
+      proxyAddress: heartbeat.proxy?.address ?? null,
+      proxyPortStart: heartbeat.proxy?.portStart ?? null,
+      proxyPortEnd: heartbeat.proxy?.portEnd ?? null,
+    };
     await this.db.insert(executionHosts).values({
+      ...proxy,
       id: hostId,
       controlUrl: heartbeat.controlUrl,
       gameAddress: heartbeat.gameAddress,
@@ -81,6 +91,7 @@ export class HostService {
     }).onConflictDoUpdate({
       target: executionHosts.id,
       set: {
+        ...proxy,
         controlUrl: heartbeat.controlUrl,
         gameAddress: heartbeat.gameAddress,
         allocatableCpu: heartbeat.allocatableCpu,
@@ -233,6 +244,7 @@ export class HostService {
     runtime: VariantRuntimeSpec,
     excludedHostId?: string,
     groupCapacity?: { readonly groupId: string; readonly maximumInstances: number },
+    instanceType: InstanceType = "paper",
   ): Promise<HostPlacementResult> {
     if (groupCapacity) {
       const rows = await tx.select({
@@ -254,6 +266,9 @@ export class HostService {
       eq(executionHosts.healthState, "ONLINE"),
       eq(executionHosts.adminState, "ACTIVE"),
     ];
+    if (instanceType === "proxy") {
+      filters.push(isNotNull(executionHosts.proxyAddress));
+    }
     if (excludedHostId) filters.push(ne(executionHosts.id, excludedHostId));
     const hosts = await tx.select({
       id: executionHosts.id,

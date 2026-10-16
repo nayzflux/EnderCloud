@@ -44,6 +44,18 @@ export function loadAgentConfig(environment: Environment = process.env): AgentCo
   rejectDeprecatedEnvironment(environment, deprecated);
   const portStart = integer(environment, "AGENT_GAME_PORT_START", 25_565, 1, 65_535);
   const portEnd = integer(environment, "AGENT_GAME_PORT_END", 25_664, portStart, 65_535);
+  const proxyKeys = ["AGENT_PROXY_PORT_START", "AGENT_PROXY_PORT_END", "AGENT_ADVERTISED_PROXY_ADDRESS"];
+  const proxyConfigured = proxyKeys.some((key) => Boolean(environment[key]?.trim()));
+  let proxy: AgentConfig["proxy"];
+  if (proxyConfigured) {
+    for (const key of proxyKeys) requiredString(environment, key);
+    const start = integer(environment, "AGENT_PROXY_PORT_START", undefined, 1, 65_535);
+    const end = integer(environment, "AGENT_PROXY_PORT_END", undefined, start, 65_535);
+    if (start <= portEnd && end >= portStart) {
+      throw new Error("Agent proxy and game port ranges must not overlap");
+    }
+    proxy = { address: requiredString(environment, "AGENT_ADVERTISED_PROXY_ADDRESS"), portStart: start, portEnd: end };
+  }
   const runtimeRoot = resolve(optionalString(environment, "AGENT_RUNTIME_DIRECTORY", "/data/runtime"));
   const orchestratorUrl = url(environment, "ORCHESTRATOR_URL", undefined, ["http:", "https:"]);
   const hostId = requiredString(environment, "AGENT_ID");
@@ -51,6 +63,7 @@ export function loadAgentConfig(environment: Environment = process.env): AgentCo
     throw new Error("AGENT_ID must be a lowercase id containing only letters, digits and dashes");
   }
   return {
+    ...(proxy ? { proxy } : {}),
     hostId,
     port: integer(environment, "AGENT_LISTEN_PORT", 8_090, 1, 65_535),
     controlUrl: url(environment, "AGENT_ADVERTISED_CONTROL_URL", undefined, ["http:", "https:"]),

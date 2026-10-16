@@ -16,6 +16,7 @@ import {
   type ReactNode,
 } from "react";
 import { CopyableId } from "@/components/copyable-id";
+import { ProxyStatus } from "@/components/proxy-status";
 import { Countdown, Elapsed, RelativeTime } from "@/components/live-time";
 import { KeyValue, KeyValueGrid, SectionTitle } from "@/components/page-header";
 import { Timeline, type TimelineStep } from "@/components/timeline";
@@ -295,7 +296,7 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
         id={instance.id}
       >
         <LifecycleBadge state={instance.lifecycleState} />
-        <AvailabilityBadge state={instance.availabilityState} />
+        {instance.proxy ? <ProxyStatus instance={instance} /> : <AvailabilityBadge state={instance.availabilityState} />}
         <Badge variant="outline" className="font-mono text-[0.65rem]">
           {instance.groupId}
         </Badge>
@@ -307,12 +308,12 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
           className="mx-4 mt-3 w-[calc(100%-2rem)] shrink-0 justify-start overflow-x-auto"
         >
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="players">
+          {!instance.proxy ? <TabsTrigger value="players">
             Players
             <span className="text-muted-foreground tabular">
               {detail.players.length}
             </span>
-          </TabsTrigger>
+          </TabsTrigger> : null}
           <TabsTrigger value="commands">
             Commands
             <span className="text-muted-foreground tabular">
@@ -336,17 +337,17 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
                   Player occupancy
                 </span>
                 <span className="font-mono text-sm tabular">
-                  {instance.playerCount}/{instance.maximumPlayers}
+                  {instance.playerCount}{instance.proxy ? "" : `/${instance.maximumPlayers}`}
                 </span>
               </div>
-              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+              {!instance.proxy ? <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
                 <div
                   className="h-full rounded-full bg-foreground/70"
                   style={{
                     width: `${ratio(instance.playerCount, instance.maximumPlayers)}%`,
                   }}
                 />
-              </div>
+              </div> : null}
             </div>
 
             {instance.failureReason ? (

@@ -160,6 +160,9 @@ Durations require an integer and one of `ms`, `s`, `m`, `h`, or `d`.
 | `AGENT_TEMPLATE_CACHE_DIRECTORY` | No | `/data/template-cache` | Persistent checksum-keyed layer cache |
 | `AGENT_GAME_PORT_START` | No | `25565` | First port in the inclusive allocation range, from 1 to 65535 |
 | `AGENT_GAME_PORT_END` | No | `25664` | Last port in the inclusive range. Must be at least the start and at most 65535 |
+| `AGENT_PROXY_PORT_START` | Proxy-enabled hosts | None | First dedicated proxy port; requires both other proxy variables |
+| `AGENT_PROXY_PORT_END` | Proxy-enabled hosts | None | Last dedicated proxy port; cannot overlap the Paper range |
+| `AGENT_ADVERTISED_PROXY_ADDRESS` | Proxy-enabled hosts | None | Address reachable by the external load balancer |
 | `AGENT_LOG_LEVEL` | No | `info` | One of `debug`, `info`, `warn`, or `error` |
 
 The Docker socket default depends on the operating system of the agent process. The supplied
@@ -198,9 +201,12 @@ A template may set `ENDERCLOUD_REPORTED_ENDPOINT` to make the Paper bridge repor
 endpoint in `SERVER_READY`. Most deployments should use the endpoint allocated by the agent and
 leave this unset.
 
-Velocity is not a managed Minecraft container. Its plugin separately reads
+Velocity may be managed through a `proxy` group or deployed externally. Its plugin separately reads
 `ENDERCLOUD_ORCHESTRATOR_URL` and `ENDERCLOUD_REDIS_URL`, both defaulting to localhost values when
 unset.
+
+Managed proxies also receive `ENDERCLOUD_INSTANCE_ID` and report readiness and admission state.
+See [managed proxies](PROXIES.md) for templates, discovery, and drain behavior.
 
 ## Security and operations
 

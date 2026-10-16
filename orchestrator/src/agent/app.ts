@@ -12,6 +12,7 @@ const layerSchema = t.Object({
   checksum: t.String({ pattern: "^[a-f0-9]{64}$" }),
 });
 const instanceSchema = t.Object({
+  instanceType: t.Optional(t.Union([t.Literal("paper"), t.Literal("proxy")])),
   hostId: groupId,
   instanceId: internalId,
   groupId,
@@ -19,6 +20,7 @@ const instanceSchema = t.Object({
   sessionId: t.Optional(internalId),
   templateLayers: t.Array(layerSchema, { minItems: 1 }),
   runtime: t.Object({
+    dataDirectory: t.Optional(t.String({ pattern: "^/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+$" })),
     image: t.String({ minLength: 1 }),
     memoryBytes: t.Number({ minimum: 1 }),
     cpu: t.Number({ exclusiveMinimum: 0 }),

@@ -49,6 +49,17 @@ describe("environment configuration", () => {
       portStart: 25_565,
       portEnd: 25_664,
     });
+    expect(loadAgentConfig(environment).proxy).toBeUndefined();
+    const proxyEnvironment = {
+      ...environment,
+      AGENT_ADVERTISED_PROXY_ADDRESS: "10.0.0.20",
+      AGENT_PROXY_PORT_START: "25700",
+      AGENT_PROXY_PORT_END: "25709",
+    };
+    expect(loadAgentConfig(proxyEnvironment).proxy).toEqual({ address: "10.0.0.20", portStart: 25700, portEnd: 25709 });
+    expect(() => loadAgentConfig({ ...environment, AGENT_PROXY_PORT_START: "25700" })).toThrow("required");
+    expect(() => loadAgentConfig({ ...proxyEnvironment, AGENT_PROXY_PORT_START: "25565" })).toThrow("overlap");
+    expect(() => loadAgentConfig({ ...proxyEnvironment, AGENT_PROXY_PORT_END: "25699" })).toThrow("between");
     expect(() => loadAgentConfig({ ...environment, AGENT_GAME_PORT_START: "70000" }))
       .toThrow("between 1 and 65535");
     expect(() => loadAgentConfig({ ...environment, ORCHESTRATOR_URL: "redis://redis:6379" }))

@@ -13,6 +13,7 @@ import type {
 } from "./executor.ts";
 
 export interface LocalDockerConfig {
+  readonly proxy?: { readonly address: string; readonly portStart: number; readonly portEnd: number };
   readonly dockerSocket: string;
   readonly dockerNetwork: string;
   readonly runtimeRoot: string;
@@ -101,6 +102,9 @@ export class LocalDockerExecutor implements Executor {
   public async createInstance(spec: InstanceSpec): Promise<CreatedInstance> {
     const startedAt = performance.now();
     this.assertHost(spec.hostId);
+    const isProxy = spec.instanceType === "proxy";
+    if (isProxy && !this.config.proxy) throw new Error("Agent does not support proxy instances");
+    const address = isProxy ? this.config.proxy!.address : this.config.gameAddress;
     const existing = await this.findByInstanceId(spec.instanceId);
     const runtimePath = join(this.config.runtimeRoot, "instances", spec.instanceId);
     const hostRuntimePath = join(this.config.runtimeHostRoot, "instances", spec.instanceId);
@@ -115,7 +119,7 @@ export class LocalDockerExecutor implements Executor {
       return {
         containerId: existing.Id,
         runtimePath,
-        endpoint: `${this.config.gameAddress}:${this.portFromContainer(existing)}`,
+        endpoint: `${address}:${this.portFromContainer(existing)}`,
       };
     }
 
@@ -143,13 +147,14 @@ export class LocalDockerExecutor implements Executor {
     const prepared = await this.withCreationLock(async () => {
       const concurrentExisting = await this.findByInstanceId(spec.instanceId);
       if (concurrentExisting) return { existing: concurrentExisting } as const;
-      const hostPort = await this.allocatePort();
+      const hostPort = await this.allocatePort(isProxy);
       this.logger.debug("docker.port.allocated", "Game port allocated", {
         instanceId: spec.instanceId,
         hostPort,
       });
       const labels: Record<string, string> = {
         "orchestrator.managed": "true",
+        "orchestrator.instance-type": spec.instanceType ?? "paper",
         "orchestrator.instance-id": spec.instanceId,
         "orchestrator.group-id": spec.groupId,
         "orchestrator.variant-id": spec.variantId,
@@ -171,7 +176,7 @@ export class LocalDockerExecutor implements Executor {
         ExposedPorts: { "25565/tcp": {} },
         HostConfig: {
           AutoRemove: false,
-          Binds: [`${hostRuntimePath}:/data`],
+          Binds: [`${hostRuntimePath}:${spec.runtime.dataDirectory ?? "/data"}`],
           Memory: spec.runtime.memoryBytes,
           NanoCpus: Math.round(spec.runtime.cpu * 1_000_000_000),
           NetworkMode: this.config.dockerNetwork,
@@ -189,7 +194,7 @@ export class LocalDockerExecutor implements Executor {
       return {
         containerId: prepared.existing.Id,
         runtimePath,
-        endpoint: `${this.config.gameAddress}:${this.portFromContainer(prepared.existing)}`,
+        endpoint: `${address}:${this.portFromContainer(prepared.existing)}`,
       };
     }
     const { container, hostPort } = prepared;
@@ -210,7 +215,7 @@ export class LocalDockerExecutor implements Executor {
     return {
       containerId: container.id,
       runtimePath,
-      endpoint: `${this.config.gameAddress}:${hostPort}`,
+      endpoint: `${address}:${hostPort}`,
     };
   }
 
@@ -373,7 +378,7 @@ export class LocalDockerExecutor implements Executor {
     return port;
   }
 
-  private async allocatePort(): Promise<number> {
+  private async allocatePort(isProxy = false): Promise<number> {
     const containers = await this.docker.listContainers({ all: true });
     const used = new Set<number>();
     for (const container of containers) {
@@ -383,10 +388,11 @@ export class LocalDockerExecutor implements Executor {
       const labeled = container.Labels["orchestrator.host-port"];
       if (labeled) used.add(Number.parseInt(labeled, 10));
     }
-    const port = firstAvailablePort(this.config.portStart, this.config.portEnd, used);
+    const range = isProxy ? this.config.proxy! : this.config;
+    const port = firstAvailablePort(range.portStart, range.portEnd, used);
     if (port !== null) return port;
     throw new Error(
-      `No game port is available in ${this.config.portStart}-${this.config.portEnd}`,
+      `No ${isProxy ? "proxy" : "game"} port is available in ${range.portStart}-${range.portEnd}`,
     );
   }
 

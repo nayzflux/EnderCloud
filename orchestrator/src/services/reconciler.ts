@@ -165,7 +165,15 @@ export class Reconciler {
           } else {
             const rows = await this.db.select({
               due: sql<boolean>`(
-                ${serverInstances.playerCount} = 0
+                (${serverInstances.playerCount} = 0 AND (
+                  NOT EXISTS (SELECT 1 FROM server_groups g WHERE g.id = "server_instances".group_id AND g.type = 'proxy')
+                  OR EXISTS (
+                    SELECT 1 FROM proxy_heartbeats p JOIN server_groups g ON g.id = "server_instances".group_id
+                    WHERE p.proxy_id = "server_instances".id AND NOT p.accepting_connections
+                      AND p.last_seen_at >= "server_instances".draining_at
+                      AND p.last_seen_at > now() - (g.player_stale_timeout_ms * interval '1 millisecond')
+                  )
+                ))
                 OR ${serverInstances.drainDeadline} <= now()
               )`.as("due"),
             }).from(serverInstances).where(eq(serverInstances.id, database.id));

@@ -157,6 +157,27 @@ function session(
 }
 
 describe("dashboard snapshot", () => {
+  test("proxy players remain visible without doubling the global player total", () => {
+    const data = rows();
+    const group = data.groups[0]!;
+    const proxyGroup = { ...group, id: "edge-proxies", type: "proxy" as const };
+    const proxy = {
+      ...instance("proxyinstance0001", "RUNNING", "OPEN", null),
+      group_id: proxyGroup.id,
+      group_type: "proxy" as const,
+      player_count: 4,
+      proxy_last_seen_at: now,
+      proxy_ready: true,
+      proxy_accepting_connections: true,
+    };
+    const snapshot = assembleClusterSnapshot({
+      ...data, groups: [...data.groups, proxyGroup], instances: [...data.instances, proxy],
+    }, now);
+    expect(snapshot.summary.playersOnline).toBe(4);
+    expect(snapshot.groups.find((candidate) => candidate.id === proxyGroup.id)?.instances[0])
+      .toMatchObject({ playerCount: 4, proxy: { ready: true, acceptingConnections: true } });
+  });
+
   test("groups instances, both pool states and attached sessions", () => {
     const snapshot = assembleClusterSnapshot(rows(), now);
     const group = snapshot.groups.find((candidate) => candidate.id === "skywars-solo");

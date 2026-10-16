@@ -24,6 +24,25 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class JsonContractTest {
     @Test
+    void managedProxyContractsUseTheSharedFixtures() throws IOException {
+        Path fixtures = Path.of(System.getProperty("endercloud.contracts.dir"), "fixtures");
+        var heartbeat = JsonCodec.mapper().readValue(
+                Files.readString(fixtures.resolve("proxy-heartbeat.json")),
+                fr.nayz.endercloud.core.model.ProxyHeartbeat.class
+        );
+        assertEquals(12, heartbeat.playerCount());
+        assertEquals(true, heartbeat.ready());
+        assertEquals(false, heartbeat.acceptingConnections());
+        var control = JsonCodec.mapper().readValue(
+                Files.readString(fixtures.resolve("proxy-control.json")),
+                fr.nayz.endercloud.core.model.ProxyControl.class
+        );
+        assertEquals(LifecycleState.DRAINING, control.lifecycleState());
+        assertEquals(false, control.acceptingConnections());
+        assertEquals(30_000, control.controlLeaseMs());
+    }
+
+    @Test
     void paperEventUsesTheVersionedWireNames() {
         UUID playerId = UUID.fromString("02a1c31e-4748-4106-932d-a780413d7b9a");
         String json = JsonCodec.write(PaperEvent.playerJoined(playerId, "session"));

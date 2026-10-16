@@ -51,6 +51,17 @@ import {
 
 type DatabaseTimestamp = Date | string;
 
+// Keep proxy observations separate from Paper's instance_players and session presence.
+const proxyProjection = {
+  proxy_last_seen_at: sql<Date | null>`(SELECT p.last_seen_at FROM proxy_heartbeats p WHERE p.proxy_id = ${serverInstances.id})`,
+  proxy_ready: sql<boolean>`COALESCE((SELECT p.ready FROM proxy_heartbeats p WHERE p.proxy_id = ${serverInstances.id}), false)`,
+  proxy_accepting_connections: sql<boolean>`COALESCE((
+    SELECT ${serverInstances.lifecycleState} = 'RUNNING' AND p.ready AND p.accepting_connections
+      AND p.last_seen_at > now() - (${serverGroups.playerStaleTimeoutMs} * interval '1 millisecond')
+    FROM proxy_heartbeats p WHERE p.proxy_id = ${serverInstances.id}
+  ), false)`,
+};
+
 export interface GroupRow {
   id: string;
   type: GroupType;
@@ -96,6 +107,10 @@ export interface VariantRow {
 }
 
 export interface InstanceRow {
+  group_type?: GroupType;
+  proxy_last_seen_at?: DatabaseTimestamp | null;
+  proxy_ready?: boolean;
+  proxy_accepting_connections?: boolean;
   id: string;
   host_id?: string | null;
   group_id: string;
@@ -212,6 +227,11 @@ function toVariant(row: VariantRow): DashboardVariant {
 
 function toInstance(row: InstanceRow): DashboardInstance {
   return {
+    ...(row.group_type === "proxy" ? { proxy: {
+      lastHeartbeatAt: iso(row.proxy_last_seen_at ?? null),
+      ready: row.proxy_ready ?? false,
+      acceptingConnections: row.proxy_accepting_connections ?? false,
+    } } : {}),
     id: row.id,
     hostId: row.host_id ?? null,
     variantId: row.variant_id,
@@ -476,7 +496,7 @@ export function assembleClusterSnapshot(
         (total, group) => total + group.capacity.reservedInstances,
         0,
       ),
-      playersOnline: allInstances.reduce(
+      playersOnline: groups.filter((group) => group.type !== "proxy").flatMap((group) => group.instances).reduce(
         (total, instance) => total + instance.playerCount,
         0,
       ),
@@ -704,6 +724,7 @@ export class DashboardService {
         updated_at: serverInstances.updatedAt,
         
         group_type: serverGroups.type,
+        ...proxyProjection,
         container_id: serverInstances.containerId,
         runtime_path: serverInstances.runtimePath,
         stopped_at: serverInstances.stoppedAt,
@@ -1038,6 +1059,8 @@ export class DashboardService {
     .orderBy(asc(serverGroupVariants.groupId), asc(serverVariants.id));
 
     const instances = await tx.select({
+      ...proxyProjection,
+      group_type: serverGroups.type,
       id: serverInstances.id,
       host_id: serverInstances.hostId,
       group_id: serverInstances.groupId,

@@ -116,10 +116,10 @@ export function WorkStateBadge({ state }: { readonly state: string }) {
   return <StatusBadge tone={workTone(state)} label={humanizeState(state)} />;
 }
 
-export function GroupTypeBadge({ type }: { readonly type: "hub" | "minigame" }) {
+export function GroupTypeBadge({ type }: { readonly type: "hub" | "minigame" | "proxy" }) {
   return (
     <Badge variant="outline" className="font-mono text-[0.65rem] uppercase">
-      {type === "hub" ? "hub" : "minigame"}
+      {type}
     </Badge>
   );
 }

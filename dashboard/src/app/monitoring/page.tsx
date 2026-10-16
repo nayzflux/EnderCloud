@@ -194,6 +194,7 @@ export default function MonitoringPage() {
   const [startupMetric, setStartupMetric] = useState<StartupMetric>("totalAverageMs");
   const [tpsMetric, setTpsMetric] = useState<TpsMetric>("fiveMinutes");
   const groupId = selectedGroupId || defaultGroupId;
+  const isProxyGroup = snapshot?.groups.find((group) => group.id === groupId)?.type === "proxy";
 
   const query = useQuery({
     queryKey: ["monitoring", groupId, range],
@@ -332,7 +333,7 @@ export default function MonitoringPage() {
             )}
           </MetricCard>
 
-          <MetricCard
+          {!isProxyGroup ? <MetricCard
             title="Server TPS"
             description="Paper rolling averages combined across active heartbeat samples."
             action={
@@ -401,7 +402,7 @@ export default function MonitoringPage() {
                 </LineChart>
               </ChartContainer>
             )}
-          </MetricCard>
+          </MetricCard> : null}
         </div>
       ) : null}
 

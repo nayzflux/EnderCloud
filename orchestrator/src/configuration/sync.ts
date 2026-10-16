@@ -103,8 +103,8 @@ export function parseGroup(
   }
   const id = validateId(root.id, `${source}.id`);
   const type = root.type;
-  if (type !== "hub" && type !== "minigame") {
-    throw new Error(`${source}.type must be hub or minigame`);
+  if (type !== "hub" && type !== "minigame" && type !== "proxy") {
+    throw new Error(`${source}.type must be hub, minigame or proxy`);
   }
   if (!Array.isArray(root.variants)) {
     throw new Error(`${source}.variants must be an array`);
@@ -142,11 +142,11 @@ export function parseGroup(
         1,
       ),
       minimumWarmInstances: integer(
-        capacity.minimum_warm_instances,
+        type === "proxy" ? capacity.minimum_instances : capacity.minimum_warm_instances,
         `${source}.capacity.minimum_warm_instances`,
       ),
       maximumWarmInstances: integer(
-        capacity.maximum_warm_instances,
+        type === "proxy" ? capacity.maximum_instances : capacity.maximum_warm_instances,
         `${source}.capacity.maximum_warm_instances`,
       ),
     },
@@ -158,13 +158,13 @@ export function parseGroup(
         timeouts, "drain", source,
       ),
       cancelledDrainMs: timeoutValue(
-        timeouts, "cancelled_drain", source,
+        timeouts, "cancelled_drain", source, type === "proxy" ? 10_000 : undefined,
       ),
       shutdownMs: timeoutValue(
         timeouts, "shutdown", source,
       ),
       transferMs: timeoutValue(
-        timeouts, "transfer", source,
+        timeouts, "transfer", source, type === "proxy" ? 20_000 : undefined,
       ),
       playerStaleMs: timeoutValue(
         timeouts, "player_stale", source,
@@ -177,6 +177,16 @@ export function parseGroup(
     parsed.capacity.maximumWarmInstances > parsed.capacity.maximumInstances
   ) {
     throw new Error(`${source} has inconsistent capacity limits`);
+  }
+
+  if (type === "proxy") {
+    if (parsed.capacity.minimumInstances !== parsed.capacity.maximumInstances) {
+      throw new Error(`${source} proxy minimum_instances must equal maximum_instances`);
+    }
+    if (root.routing !== undefined || root.matchmaking !== undefined || timeouts.instance_lifetime !== undefined) {
+      throw new Error(`${source} proxy groups cannot configure routing, matchmaking or instance_lifetime`);
+    }
+    return parsed;
   }
 
   if (type === "minigame") {
@@ -311,6 +321,13 @@ export function parseVariant(document: unknown, source: string): ServerVariantCo
     }
   }
   const docker = object(root.docker ?? {}, `${source}.docker`);
+  let dataDirectory: string | undefined;
+  if (docker.data_directory !== undefined) {
+    dataDirectory = string(docker.data_directory, `${source}.docker.data_directory`);
+    if (!/^\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+$/.test(dataDirectory)) {
+      throw new Error(`${source}.docker.data_directory must be an absolute container directory`);
+    }
+  }
   let image: string | undefined;
   if (docker.image !== undefined) {
     image = string(docker.image, `${source}.docker.image`);
@@ -329,6 +346,7 @@ export function parseVariant(document: unknown, source: string): ServerVariantCo
     environment[key] = String(value);
   }
   const runtime: VariantRuntimePatch = {
+    ...(dataDirectory ? { dataDirectory } : {}),
     ...(image ? { image } : {}),
     ...(docker.memory !== undefined
       ? { memoryBytes: parseMemory(docker.memory, `${source}.docker.memory`) }
@@ -405,11 +423,13 @@ export async function inspectTemplateDirectory(root: string): Promise<InspectedT
 }
 
 function mergeRuntime(layers: readonly TemplateLayerSpec[], context: string): VariantRuntimeSpec {
+  let dataDirectory = "/data";
   let image: string | undefined;
   let memoryBytes: number | undefined;
   let cpu: number | undefined;
   const environment: Record<string, string> = {};
   for (const layer of layers) {
+    dataDirectory = layer.runtime.dataDirectory ?? dataDirectory;
     image = layer.runtime.image ?? image;
     memoryBytes = layer.runtime.memoryBytes ?? memoryBytes;
     cpu = layer.runtime.cpu ?? cpu;
@@ -418,7 +438,7 @@ function mergeRuntime(layers: readonly TemplateLayerSpec[], context: string): Va
   if (!image || memoryBytes === undefined || cpu === undefined) {
     throw new Error(`${context} does not resolve a complete docker image, memory and cpu runtime`);
   }
-  return { image, memoryBytes, cpu, environment };
+  return { image, memoryBytes, cpu, environment, dataDirectory };
 }
 
 function effectiveChecksum(layers: readonly TemplateLayerSpec[]): string {

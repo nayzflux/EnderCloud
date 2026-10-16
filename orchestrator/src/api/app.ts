@@ -11,6 +11,7 @@ import type { HostService } from "../services/host-service.ts";
 import type { TemplateArchiveService } from "../services/template-archive-service.ts";
 import type { IncidentController } from "../services/incident-controller.ts";
 import type { VariantStartController } from "../services/variant-start-controller.ts";
+import type { ProxyService } from "../services/proxy-service.ts";
 
 const playerUuid = t.String({ format: "uuid" });
 const internalId = t.String({ pattern: "^[A-Za-z0-9]{16}$" });
@@ -57,6 +58,7 @@ const paperEventSchema = t.Union([
 ]);
 
 export interface ApiDependencies {
+  readonly proxies: ProxyService;
   readonly queues: QueueService;
   readonly instances: InstanceController;
   readonly hubs: HubRouter;
@@ -163,6 +165,17 @@ export function createApp(dependencies: ApiDependencies) {
         .get("/proxy/servers", () => dependencies.instances.listProxyServers(), {
           detail: { tags: ["Proxy"] },
         })
+        .get("/proxies", () => dependencies.proxies.list(), { detail: { tags: ["Proxy"] } })
+        .put("/proxies/:instanceId/heartbeat", ({ params, body }) =>
+          dependencies.proxies.heartbeat(params.instanceId, body), {
+          params: t.Object({ instanceId: internalId }),
+          body: t.Object({
+            ready: t.Boolean(),
+            playerCount: t.Integer({ minimum: 0 }),
+            acceptingConnections: t.Boolean(),
+          }),
+          detail: { tags: ["Proxy"] },
+        })
         .put(
           "/hosts/:hostId/heartbeat",
           async ({ params, body, set }) => {
@@ -174,6 +187,11 @@ export function createApp(dependencies: ApiDependencies) {
             body: t.Object({
               controlUrl: t.String({ format: "uri" }),
               gameAddress: t.String({ minLength: 1, maxLength: 255 }),
+              proxy: t.Optional(t.Object({
+                address: t.String({ minLength: 1, maxLength: 255 }),
+                portStart: t.Integer({ minimum: 1, maximum: 65535 }),
+                portEnd: t.Integer({ minimum: 1, maximum: 65535 }),
+              })),
               allocatableCpu: t.Number({ exclusiveMinimum: 0 }),
               allocatableMemoryBytes: t.Number({ minimum: 1 }),
               agentVersion: t.String({ minLength: 1, maxLength: 64 }),

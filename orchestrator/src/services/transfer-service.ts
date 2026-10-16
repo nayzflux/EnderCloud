@@ -49,7 +49,10 @@ export class TransferService {
         schema.serverGroups,
         eq(schema.serverGroups.id, schema.serverInstances.groupId),
       )
-      .where(eq(schema.serverInstances.id, payload.instanceId))
+      .where(and(
+        eq(schema.serverInstances.id, payload.instanceId),
+        inArray(schema.serverGroups.type, ["hub", "minigame"]),
+      ))
       .limit(1);
     if (!target[0]) throw new Error(`Transfer target ${payload.instanceId} is unavailable`);
     // Store transfer intent in the caller's transaction. Publishing happens later,

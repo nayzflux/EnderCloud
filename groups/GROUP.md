@@ -3,10 +3,11 @@
 A server group defines traffic policy for one class of Minecraft server. Each `.yml` or `.yaml`
 file in this directory is parsed at orchestrator startup and synchronized to PostgreSQL.
 
-There are two schemas:
+There are three schemas:
 
 - `hub` groups run shared lobby servers and route players by current load.
 - `minigame` groups match queued parties into isolated sessions.
+- `proxy` groups run a fixed pool of managed Velocity entry points. See [proxy configuration](../docs/PROXIES.md).
 
 Invalid configuration stops orchestrator startup. The loader does not watch this directory, so
 restart the orchestrator after every change.
@@ -32,7 +33,7 @@ variants:
 | Field | Required | Default | Rules |
 | --- | :---: | --- | --- |
 | `id` | Yes | None | Unique identifier with 2 to 63 lowercase letters, digits, or dashes |
-| `type` | Yes | None | `hub` or `minigame` |
+| `type` | Yes | None | `hub`, `minigame`, or `proxy` |
 | `enabled` | No | `true` | Disabled groups receive no new traffic |
 | `variants` | Yes | None | Array of final variant references. IDs cannot repeat inside a group |
 | `variants[].id` | Yes | None | Existing final layer ID from `templates/` |
@@ -48,7 +49,11 @@ variants. Equal weights give equal preference over time.
 
 ## Capacity
 
-All groups require the complete capacity block:
+Hub and minigame groups require the complete capacity block:
+
+Proxy groups require only `minimum_instances` and `maximum_instances`, with equal values. Their
+warm limits are normalized to this fixed count. Only `startup`, `drain`, `shutdown`, and
+`player_stale` are required in their timeout block.
 
 ```yaml
 capacity:
@@ -82,7 +87,7 @@ replacement is ready.
 
 ## Common timeouts
 
-Every group requires these six durations:
+Hub and minigame groups require these six durations:
 
 ```yaml
 timeouts:

@@ -10,6 +10,7 @@ import type { HostService } from "../../src/services/host-service.ts";
 import type { TemplateArchiveService } from "../../src/services/template-archive-service.ts";
 import type { IncidentController } from "../../src/services/incident-controller.ts";
 import type { VariantStartController } from "../../src/services/variant-start-controller.ts";
+import type { ProxyService } from "../../src/services/proxy-service.ts";
 
 function testApp(
   hubs: HubRouter = {} as HubRouter,
@@ -32,6 +33,7 @@ function testApp(
   } as unknown as IncidentController,
   startup?: VariantStartController,
   logger: Logger = new Logger("error", { sink: () => {} }),
+  proxies: ProxyService = {} as ProxyService,
 ) {
   const dashboard = {
     getCluster: async () => ({
@@ -59,6 +61,7 @@ function testApp(
     getSession: async () => null,
   } as unknown as DashboardService;
   return createApp({
+    proxies,
     dashboard,
     monitoring,
     queues: {} as unknown as QueueService,
@@ -72,6 +75,23 @@ function testApp(
     isReady: () => true,
   });
 }
+
+test("managed proxy discovery and heartbeats validate the public contract", async () => {
+  const heartbeat = mock(async () => ({ lifecycleState: "DRAINING", acceptingConnections: false, controlLeaseMs: 30_000 }));
+  const proxies = { list: async () => [], heartbeat } as unknown as ProxyService;
+  const app = testApp(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, proxies);
+  expect((await app.handle(new Request("http://orchestrator/api/v1/proxies"))).status).toBe(200);
+  const request = (playerCount: number) => new Request("http://orchestrator/api/v1/proxies/proxyinstance001/heartbeat", {
+    method: "PUT", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ready: true, playerCount, acceptingConnections: false }),
+  });
+  const response = await app.handle(request(4));
+  expect(await response.json()).toMatchObject({ lifecycleState: "DRAINING", acceptingConnections: false });
+  expect(heartbeat).toHaveBeenCalledWith("proxyinstance001", { ready: true, playerCount: 4, acceptingConnections: false });
+  expect((await app.handle(request(-1))).status).toBe(400);
+  expect((await app.handle(request(1.5))).status).toBe(400);
+  expect(heartbeat).toHaveBeenCalledTimes(1);
+});
 
 test("orchestrator keeps request ids, errors and durations isolated across concurrent requests", async () => {
   const records: Record<string, unknown>[] = [];

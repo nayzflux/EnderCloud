@@ -316,6 +316,18 @@ prompt_worker() {
   agent_game_port_end="$(ask_port "Dernier port Minecraft" "25664")"
   (( agent_game_port_end >= agent_game_port_start )) || error "Le dernier port Minecraft doit être supérieur ou égal au premier."
 
+  agent_proxy_address=""
+  agent_proxy_port_start=""
+  agent_proxy_port_end=""
+  if ask_yes_no "Activer les proxys Velocity gérés sur ce worker ?"; then
+    agent_proxy_address="$(ask_non_empty "Adresse proxy annoncée au load balancer" "$agent_game_address")"
+    is_game_address "$agent_proxy_address" || error "L'adresse proxy contient des caractères non pris en charge."
+    agent_proxy_port_start="$(ask_port "Premier port proxy" "25700")"
+    agent_proxy_port_end="$(ask_port "Dernier port proxy" "25709")"
+    (( agent_proxy_port_end >= agent_proxy_port_start )) || error "La plage de ports proxy est invalide."
+    (( agent_proxy_port_end < agent_game_port_start || agent_proxy_port_start > agent_game_port_end )) || error "Les plages proxy et Minecraft ne doivent pas se chevaucher."
+  fi
+
   agent_runtime_directory="$(ask_non_empty "Répertoire absolu du runtime" "$DEPLOYMENT_DIRECTORY/worker-runtime")"
   [[ "$agent_runtime_directory" == /* ]] || error "Le répertoire du runtime doit être absolu."
 }
@@ -427,6 +439,9 @@ services:
       AGENT_ALLOCATABLE_MEMORY_BYTES: ${AGENT_ALLOCATABLE_MEMORY_BYTES:?Set AGENT_ALLOCATABLE_MEMORY_BYTES}
       AGENT_GAME_PORT_START: ${AGENT_GAME_PORT_START:?Set AGENT_GAME_PORT_START}
       AGENT_GAME_PORT_END: ${AGENT_GAME_PORT_END:?Set AGENT_GAME_PORT_END}
+      AGENT_PROXY_PORT_START: ${AGENT_PROXY_PORT_START:-}
+      AGENT_PROXY_PORT_END: ${AGENT_PROXY_PORT_END:-}
+      AGENT_ADVERTISED_PROXY_ADDRESS: ${AGENT_ADVERTISED_PROXY_ADDRESS:-}
       ORCHESTRATOR_URL: ${ORCHESTRATOR_URL:?Set ORCHESTRATOR_URL}
       AGENT_DOCKER_SOCKET: /var/run/docker.sock
       AGENT_DOCKER_NETWORK: ${AGENT_DOCKER_NETWORK:-endercloud}
@@ -480,6 +495,9 @@ write_worker_environment() {
     printf 'AGENT_ALLOCATABLE_MEMORY_BYTES=%s\n' "$agent_memory_bytes"
     printf 'AGENT_GAME_PORT_START=%s\n' "$agent_game_port_start"
     printf 'AGENT_GAME_PORT_END=%s\n' "$agent_game_port_end"
+    printf 'AGENT_PROXY_PORT_START=%s\n' "$agent_proxy_port_start"
+    printf 'AGENT_PROXY_PORT_END=%s\n' "$agent_proxy_port_end"
+    printf 'AGENT_ADVERTISED_PROXY_ADDRESS=%s\n' "$agent_proxy_address"
     printf 'ORCHESTRATOR_URL=%s\n' "$orchestrator_url"
     printf 'AGENT_RUNTIME_LOCAL_DIRECTORY=%s\n' "$agent_runtime_directory"
     printf 'AGENT_RUNTIME_HOST_DIRECTORY=%s\n' "$agent_runtime_directory"

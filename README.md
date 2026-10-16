@@ -14,6 +14,7 @@ Docker, local runtime files, template caching, and game-port allocation.
 ## What EnderCloud does
 
 - Maintains minimum and maximum instance counts for hub and minigame groups.
+- Deploys fixed pools of managed Velocity proxies on explicitly enabled execution hosts.
 - Keeps a configurable warm pool so matchmaking does not wait for every server to boot.
 - Enqueues whole parties and builds team-compatible sessions without splitting a party.
 - Selects weighted server variants and resolves their ordered template layers.
@@ -176,6 +177,7 @@ Restart the orchestrator after a configuration change.
 
 - [Group configuration reference](groups/GROUP.md)
 - [Template and variant reference](templates/VARIANT.md)
+- [Managed Velocity proxies](docs/PROXIES.md)
 - [Timeout and deadline reference](docs/TIMEOUTS.md)
 - [Minigame plugin integration](docs/MINIGAME_PLUGIN_INTEGRATION.md)
 

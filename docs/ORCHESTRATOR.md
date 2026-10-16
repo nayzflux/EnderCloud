@@ -95,6 +95,7 @@ schema reference. The route groups are:
 | `/api/v1/hosts/*` | Agents and dashboard | Heartbeats, drain, and activation |
 | `/api/v1/template-layers/*` | Agents | Checksum-bound template archive download |
 | `/api/v1/proxy/*` | Velocity | Registry snapshot and disconnect reporting |
+| `/api/v1/proxies` and `/api/v1/proxies/:instanceId/heartbeat` | Managed Velocity and external load balancers | Proxy discovery, readiness, presence counts, and admission control |
 | `/api/v1/queue/*` | Paper integrations | Enqueue and remove atomic parties |
 | `/api/v1/instances/*` | Paper integrations | Events, hub transfers, assignments, and acknowledgements |
 | `/api/v1/dashboard/*` | Dashboard server routes | Cluster, group, queue, instance, session, monitoring, and incident reads |

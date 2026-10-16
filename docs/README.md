@@ -14,6 +14,8 @@ Use this page as the documentation index for EnderCloud.
 - [Template layers and variants](../templates/VARIANT.md)
 - [Orchestrator](ORCHESTRATOR.md)
 - [Execution agent](AGENT.md)
+- [Managed Velocity proxies](PROXIES.md)
+- [Tester les proxys sur le cluster local](LOCAL_PROXY_TEST.md)
 - [Environment configuration](ENVIRONMENT.md)
 - [Timeouts and deadlines](TIMEOUTS.md)
 - [Multi-host execution](MULTI_HOST.md)

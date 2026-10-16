@@ -3,6 +3,11 @@ package fr.nayz.endercloud.velocity;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.inject.Inject;
 import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.ResultedEvent;
+import com.velocitypowered.api.event.connection.LoginEvent;
+import com.velocitypowered.api.event.connection.PreLoginEvent;
+import com.velocitypowered.api.event.proxy.ListenerBoundEvent;
+import com.velocitypowered.api.event.proxy.ListenerCloseEvent;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.player.KickedFromServerEvent;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
@@ -10,6 +15,7 @@ import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.proxy.ProxyServer;
+import com.velocitypowered.api.network.ListenerType;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.server.ServerInfo;
 import com.velocitypowered.api.scheduler.ScheduledTask;
@@ -17,6 +23,8 @@ import com.velocitypowered.api.scheduler.ScheduledTask;
 import fr.nayz.endercloud.core.api.EnderCloudVelocityApi;
 import fr.nayz.endercloud.core.json.JsonCodec;
 import fr.nayz.endercloud.core.model.RedisEnvelope;
+import fr.nayz.endercloud.core.model.ProxyHeartbeat;
+import net.kyori.adventure.text.Component;
 import fr.nayz.endercloud.core.model.ServerSnapshot;
 import fr.nayz.endercloud.core.http.EnderCloudClient;
 import io.lettuce.core.RedisChannelHandler;
@@ -58,6 +66,11 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
     private final Set<String> transfersInFlight = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean ready = new AtomicBoolean();
     private final AtomicBoolean synchronizationInProgress = new AtomicBoolean();
+    private final AtomicBoolean heartbeatInProgress = new AtomicBoolean();
+    private final ProxyAdmission admission = new ProxyAdmission();
+    private volatile boolean listenerBound;
+    private String instanceId;
+    private ScheduledTask heartbeatTask;
 
     private EnderCloudClient orchestrator;
     private RedisClient redis;
@@ -73,6 +86,7 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
 
     @Subscribe
     public void onInitialize(ProxyInitializeEvent ignored) {
+        instanceId = environment("ENDERCLOUD_INSTANCE_ID", "");
         URI orchestratorUrl = URI.create(
                 environment("ENDERCLOUD_ORCHESTRATOR_URL", "http://localhost:8080")
         );
@@ -103,6 +117,71 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
                 .delay(30, TimeUnit.SECONDS)
                 .repeat(30, TimeUnit.SECONDS)
                 .schedule();
+        if (!instanceId.isBlank()) {
+            heartbeatTask = proxy.getScheduler().buildTask(this, this::sendHeartbeat)
+                    .repeat(10, TimeUnit.SECONDS)
+                    .schedule();
+        }
+    }
+
+    @Subscribe
+    public void onListenerBound(ListenerBoundEvent event) {
+        if (event.getListenerType() == ListenerType.MINECRAFT) {
+            listenerBound = true;
+            sendHeartbeat();
+        }
+    }
+
+    @Subscribe
+    public void onListenerClose(ListenerCloseEvent event) {
+        if (event.getListenerType() == ListenerType.MINECRAFT) {
+            listenerBound = false;
+        }
+    }
+
+    @Subscribe
+    public void onPreLogin(PreLoginEvent event) {
+        if (managed() && !acceptingConnections()) {
+            event.setResult(PreLoginEvent.PreLoginComponentResult.denied(
+                    Component.text("This proxy is unavailable. Please reconnect.")
+            ));
+        }
+    }
+
+    @Subscribe
+    public void onLogin(LoginEvent event) {
+        if (managed() && !acceptingConnections()) {
+            event.setResult(ResultedEvent.ComponentResult.denied(
+                    Component.text("This proxy is unavailable. Please reconnect.")
+            ));
+        }
+    }
+
+    private boolean managed() {
+        return instanceId != null && !instanceId.isBlank();
+    }
+
+    private boolean acceptingConnections() {
+        return !shuttingDown && listenerBound && ready.get() && admission.allows(System.nanoTime());
+    }
+
+    private void sendHeartbeat() {
+        if (!managed() || shuttingDown || orchestrator == null) return;
+        if (!heartbeatInProgress.compareAndSet(false, true)) return;
+        ProxyHeartbeat heartbeat = new ProxyHeartbeat(
+                listenerBound && ready.get(),
+                proxy.getPlayerCount(),
+                acceptingConnections()
+        );
+        orchestrator.proxyHeartbeat(instanceId, heartbeat)
+                .whenComplete((control, error) -> {
+                    if (error == null) {
+                        admission.apply(control, System.nanoTime());
+                    } else if (!shuttingDown) {
+                        logger.warn("Unable to report managed proxy heartbeat", error);
+                    }
+                    heartbeatInProgress.set(false);
+                });
     }
 
     @Subscribe
@@ -110,6 +189,7 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
         shuttingDown = true;
         ready.set(false);
         if (refreshTask != null) refreshTask.cancel();
+        if (heartbeatTask != null) heartbeatTask.cancel();
         if (subscription != null) subscription.close();
         if (redis != null) redis.shutdown();
         if (orchestrator != null) orchestrator.close();
@@ -170,6 +250,7 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
                         logger.error("Unable to synchronize the EnderCloud registry", error);
                     } else {
                         ready.set(true);
+                        sendHeartbeat();
                         logger.info("EnderCloud Velocity registry synchronized");
                     }
                 });
@@ -214,7 +295,9 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
                 ));
             }
             snapshots.clear();
-            servers.forEach(server -> snapshots.put(server.instanceId(), server));
+            servers.stream()
+                    .filter(server -> !"proxy".equals(server.groupType()))
+                    .forEach(server -> snapshots.put(server.instanceId(), server));
         });
     }
 
@@ -289,6 +372,7 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
     }
 
     private void update(ServerSnapshot snapshot) {
+        if ("proxy".equals(snapshot.groupType())) return;
         ServerSnapshot previous = snapshots.put(snapshot.instanceId(), snapshot);
         if (previous != null && !serverName(previous).equals(serverName(snapshot))) {
             proxy.getServer(serverName(previous))

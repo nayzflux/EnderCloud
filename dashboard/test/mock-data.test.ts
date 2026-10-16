@@ -100,7 +100,7 @@ describe("mockCluster", () => {
 
   test("summary agrees with the groups it summarises", () => {
     const snapshot = mockCluster(now);
-    const players = snapshot.groups.reduce(
+    const players = snapshot.groups.filter((group) => group.type !== "proxy").reduce(
       (total, group) =>
         total +
         group.instances.reduce(
@@ -199,7 +199,7 @@ describe("mockInstance and mockSession", () => {
         expect(detail).not.toBeNull();
         expect(detail!.instance.id).toBe(instance.id);
         expect(detail!.instance.groupId).toBe(group.id);
-        expect(detail!.players).toHaveLength(instance.playerCount);
+        expect(detail!.players).toHaveLength(group.type === "proxy" ? 0 : instance.playerCount);
       }
       for (const session of group.sessions) {
         const detail = mockSession(session.id, now);

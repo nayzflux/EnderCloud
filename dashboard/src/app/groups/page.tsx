@@ -103,6 +103,8 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
         <CardDescription>
           {group.type === "hub"
             ? "Fallback lobby: players are routed to the least loaded instance."
+            : group.type === "proxy"
+            ? "Velocity entry points: fixed capacity managed behind an external load balancer."
             : "Matchmaking group: parties queue up and are placed on a reserved instance."}
         </CardDescription>
         <CardAction>
@@ -138,7 +140,7 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
       </CardHeader>
 
       <CardContent className="space-y-5">
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+        <div className={group.type === "proxy" ? "grid grid-cols-2 gap-4 sm:grid-cols-3" : "grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6"}>
           <MiniStat
             icon={ServerIcon}
             label="Instances"
@@ -151,7 +153,7 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
             value={capacity.warmInstances}
             hint={`target ${capacity.minimumWarmInstances}–${capacity.maximumWarmInstances}`}
           />
-          <MiniStat
+          {group.type !== "proxy" ? <MiniStat
             icon={Layers3Icon}
             label="Reserved"
             value={capacity.reservedInstances}
@@ -160,20 +162,20 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
                 ? `+${capacity.pendingWarmInstances} starting`
                 : undefined
             }
-          />
-          <MiniStat
+          /> : null}
+          {group.type !== "proxy" ? <MiniStat
             icon={Gamepad2Icon}
             label="Sessions"
             value={activeSessions}
             hint={`${group.sessions.length} tracked`}
-          />
+          /> : null}
           <MiniStat
             icon={UsersIcon}
             label="Players"
             value={players}
-            hint={seats > 0 ? `${Math.round(ratio(players, seats))}% of seats` : undefined}
+            hint={group.type !== "proxy" && seats > 0 ? `${Math.round(ratio(players, seats))}% of seats` : undefined}
           />
-          <MiniStat
+          {group.type === "minigame" ? <MiniStat
             icon={ListOrderedIcon}
             label="Queue"
             value={group.queue.playerCount}
@@ -186,7 +188,7 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
                 `${group.queue.partyCount} parties`
               )
             }
-          />
+          /> : null}
         </div>
 
         <Separator />
@@ -194,9 +196,14 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
         <div className="grid gap-6 lg:grid-cols-2">
           <section className="space-y-3">
             <SectionTitle>
-              {group.matchmaking ? "Matchmaking" : "Routing"}
+              {group.type === "proxy" ? "Proxy capacity" : group.matchmaking ? "Matchmaking" : "Routing"}
             </SectionTitle>
-            {group.matchmaking ? (
+            {group.type === "proxy" ? (
+              <KeyValueGrid>
+                <KeyValue label="Fixed instances">{group.capacity.minimumInstances}</KeyValue>
+                <KeyValue label="Traffic">External load balancer</KeyValue>
+              </KeyValueGrid>
+            ) : group.matchmaking ? (
               <KeyValueGrid>
                 <KeyValue label="Players per match">
                   {group.matchmaking.minimumPlayers}–
@@ -244,15 +251,15 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
               <KeyValue label="Drain">
                 {formatDuration(group.timeouts.drainMs)}
               </KeyValue>
-              <KeyValue label="Cancelled drain">
+              {group.type !== "proxy" ? <KeyValue label="Cancelled drain">
                 {formatDuration(group.timeouts.cancelledDrainMs)}
-              </KeyValue>
+              </KeyValue> : null}
               <KeyValue label="Shutdown">
                 {formatDuration(group.timeouts.shutdownMs)}
               </KeyValue>
-              <KeyValue label="Transfer">
+              {group.type !== "proxy" ? <KeyValue label="Transfer">
                 {formatDuration(group.timeouts.transferMs)}
-              </KeyValue>
+              </KeyValue> : null}
               <KeyValue label="Player stale">
                 {formatDuration(group.timeouts.playerStaleMs)}
               </KeyValue>

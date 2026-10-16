@@ -1,4 +1,4 @@
-export type GroupType = "hub" | "minigame";
+export type GroupType = "hub" | "minigame" | "proxy";
 export type LifecycleState =
   | "CREATING"
   | "STARTING"
@@ -28,6 +28,7 @@ export type SessionPlayerState =
   | "LEFT";
 
 export interface VariantRuntimeSpec {
+  readonly dataDirectory?: string;
   readonly image: string;
   readonly memoryBytes: number;
   readonly cpu: number;
@@ -54,6 +55,7 @@ export interface VariantStartupStatus {
 }
 
 export interface VariantRuntimePatch {
+  readonly dataDirectory?: string;
   readonly image?: string;
   readonly memoryBytes?: number;
   readonly cpu?: number;
@@ -96,6 +98,11 @@ export interface ActiveDeadline {
 }
 
 export interface DashboardInstance {
+  readonly proxy?: {
+    readonly lastHeartbeatAt: string | null;
+    readonly ready: boolean;
+    readonly acceptingConnections: boolean;
+  };
   readonly id: string;
   readonly hostId: string | null;
   readonly variantId: string;

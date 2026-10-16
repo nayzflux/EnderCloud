@@ -109,7 +109,9 @@ export function GroupFrameNode({ data }: NodeProps<ClusterFlowNode>) {
       <header className="flex h-[76px] items-center justify-between gap-4 border-b bg-card px-5">
         <div className="flex min-w-0 items-center gap-3">
           <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
-            {group.type === "hub" ? (
+            {group.type === "proxy" ? (
+              <ServerIcon className="size-4" />
+            ) : group.type === "hub" ? (
               <BoxesIcon className="size-4" />
             ) : (
               <Gamepad2Icon className="size-4" />
@@ -194,7 +196,7 @@ export function PoolNode({ data }: NodeProps<ClusterFlowNode>) {
   return (
     <NodeCard>
       <Ports inbound outbound />
-      <CardLabel icon={BoxesIcon}>Warm pool</CardLabel>
+      <CardLabel icon={BoxesIcon}>{data.group.type === "proxy" ? "Proxy pool" : "Warm pool"}</CardLabel>
       <div className="mt-2 flex items-baseline gap-2">
         <span className="font-heading text-2xl leading-none font-semibold tabular">
           {capacity.warmInstances}
@@ -209,7 +211,9 @@ export function PoolNode({ data }: NodeProps<ClusterFlowNode>) {
           {capacity.pendingWarmInstances > 0
             ? `+${capacity.pendingWarmInstances} starting · `
             : ""}
-          {capacity.reservedInstances} reserved
+          {data.group.type === "proxy"
+            ? `${data.group.instances.filter((instance) => instance.proxy?.acceptingConnections).length} accepting connections`
+            : `${capacity.reservedInstances} reserved`}
         </p>
       </div>
     </NodeCard>
@@ -236,21 +240,26 @@ export function InstanceNode({ data }: NodeProps<ClusterFlowNode>) {
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <StatusBadge tone={tone} label={humanizeState(instance.lifecycleState)} />
-        <Badge variant="outline" className="text-[0.65rem]">
+        {!instance.proxy ? <Badge variant="outline" className="text-[0.65rem]">
           {instance.availabilityState === "RESERVED" ? "reserved" : "open"}
-        </Badge>
+        </Badge> : null}
       </div>
 
       <div className="mt-2.5 space-y-1">
         <div className="flex items-center justify-between gap-2 text-[0.7rem] text-muted-foreground">
           <span className="tabular">
-            {instance.playerCount}/{instance.maximumPlayers} players
+            {instance.playerCount}{instance.proxy ? "" : `/${instance.maximumPlayers}`} players
           </span>
           <span className="tabular">{formatAge(instance.createdAt)}</span>
         </div>
-        <MetricBar
-          percent={ratio(instance.playerCount, instance.maximumPlayers)}
-        />
+        {instance.proxy ? (
+          <p className="text-xs text-muted-foreground">
+            {instance.proxy.acceptingConnections ? "Accepting connections" : "Admissions closed"}
+            {instance.proxy.lastHeartbeatAt ? ` · heartbeat ${formatAge(instance.proxy.lastHeartbeatAt)}` : " · awaiting heartbeat"}
+          </p>
+        ) : (
+          <MetricBar percent={ratio(instance.playerCount, instance.maximumPlayers)} />
+        )}
         <p className="truncate font-mono text-[0.68rem] text-muted-foreground">
           {instance.endpoint ?? "endpoint pending"}
         </p>

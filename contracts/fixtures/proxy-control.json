@@ -1,0 +1,5 @@
+{
+  "lifecycleState": "DRAINING",
+  "acceptingConnections": false,
+  "controlLeaseMs": 30000
+}

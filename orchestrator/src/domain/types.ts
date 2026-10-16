@@ -67,7 +67,8 @@ export const sessionPlayerStates = [
 ] as const;
 export type SessionPlayerState = (typeof sessionPlayerStates)[number];
 
-export type GroupType = "hub" | "minigame";
+export type GroupType = "hub" | "minigame" | "proxy";
+export type InstanceType = "paper" | "proxy";
 
 export interface CapacityPolicy {
   readonly minimumInstances: number;
@@ -113,6 +114,7 @@ export interface ServerGroupConfig {
 }
 
 export interface VariantRuntimeSpec {
+  readonly dataDirectory?: string;
   readonly image: string;
   readonly memoryBytes: number;
   readonly cpu: number;
@@ -126,6 +128,7 @@ export interface GroupVariantReference {
 }
 
 export interface VariantRuntimePatch {
+  readonly dataDirectory?: string;
   readonly image?: string;
   readonly memoryBytes?: number;
   readonly cpu?: number;
@@ -194,6 +197,28 @@ export interface TpsSnapshot {
   readonly oneMinute: number;
   readonly fiveMinutes: number;
   readonly fifteenMinutes: number;
+}
+
+export interface ProxyHeartbeat {
+  readonly ready: boolean;
+  readonly playerCount: number;
+  readonly acceptingConnections: boolean;
+}
+
+export interface ProxyControl {
+  readonly controlLeaseMs: number;
+  readonly lifecycleState: LifecycleState;
+  readonly acceptingConnections: boolean;
+}
+
+export interface ProxySnapshot extends Omit<ProxyControl, "controlLeaseMs"> {
+  readonly instanceId: string;
+  readonly groupId: string;
+  readonly variantId: string;
+  readonly endpoint: string | null;
+  readonly playerCount: number;
+  readonly lastHeartbeatAt: string | null;
+  readonly ready: boolean;
 }
 
 export type PaperEvent =

@@ -20,7 +20,7 @@ final class RegistryReconciliation {
     static Changes plan(List<ServerSnapshot> servers, Map<String, SocketAddress> registered) {
         Map<String, ServerSnapshot> desired = new HashMap<>();
         for (ServerSnapshot server : servers) {
-            if (server.endpoint() != null && !server.endpoint().isBlank()) {
+            if (!"proxy".equals(server.groupType()) && server.endpoint() != null && !server.endpoint().isBlank()) {
                 desired.put(serverName(server), server);
             }
         }

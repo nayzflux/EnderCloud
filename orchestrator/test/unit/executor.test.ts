@@ -86,6 +86,53 @@ test("Docker instance names include the variant and unique instance id", () => {
   );
 });
 
+test("proxy execution uses its dedicated ports, advertised address and container data directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "endercloud-proxy-executor-"));
+  const spec = {
+    hostId: "test-host", instanceId: "proxyinstance001", groupId: "edge-proxies", variantId: "velocity-main",
+    instanceType: "proxy" as const, templateLayers: [], environment: {},
+    runtime: { image: "itzg/mc-proxy:java25", cpu: 1, memoryBytes: 1024 ** 3, environment: {}, dataDirectory: "/server" },
+  };
+  const executor = new LocalDockerExecutor({
+    ...config(root), proxy: { address: "edge.example", portStart: 25700, portEnd: 25702 },
+  }, { debug: () => {}, info: () => {} } as unknown as Logger);
+  let existing: unknown[] = [];
+  const createContainer = mock(async () => ({ id: "proxy-container", start: async () => {} }));
+  const docker = {
+    listContainers: async (options: { filters?: unknown }) => options.filters ? existing : [
+      { Ports: [{ PublicPort: 25700 }], Labels: {} },
+      { Ports: [], Labels: { "orchestrator.host-port": "25702" } },
+    ],
+    getImage: () => ({ inspect: async () => ({}) }),
+    createContainer,
+  };
+  Object.defineProperty(executor, "docker", { value: docker });
+  try {
+    expect(await executor.createInstance(spec)).toMatchObject({ endpoint: "edge.example:25701" });
+    expect(createContainer).toHaveBeenCalledWith(expect.objectContaining({
+      Labels: expect.objectContaining({ "orchestrator.instance-type": "proxy" }),
+      HostConfig: expect.objectContaining({
+        Binds: [join(root, "instances", spec.instanceId) + ":/server"],
+        PortBindings: { "25565/tcp": [{ HostIp: "0.0.0.0", HostPort: "25701" }] },
+      }),
+    }));
+    existing = [{ Id: "proxy-container", State: "running", Labels: { "orchestrator.host-port": "25701" } }];
+    expect(await executor.createInstance(spec)).toMatchObject({ containerId: "proxy-container", endpoint: "edge.example:25701" });
+    expect(createContainer).toHaveBeenCalledTimes(1);
+    existing = [];
+    const fullRange = new LocalDockerExecutor({
+      ...config(root), proxy: { address: "edge.example", portStart: 25700, portEnd: 25700 },
+    }, { debug: () => {}, info: () => {} } as unknown as Logger);
+    Object.defineProperty(fullRange, "docker", { value: docker });
+    await expect(fullRange.createInstance({ ...spec, instanceId: "proxyinstance002" }))
+      .rejects.toThrow("No proxy port is available");
+    const paperOnly = new LocalDockerExecutor(config(root), {} as Logger);
+    await expect(paperOnly.createInstance(spec)).rejects.toThrow("does not support proxy");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("game ports use the first free value in the configured range", () => {
   expect(firstAvailablePort(25565, 25568, new Set([25565, 25566]))).toBe(25567);
   expect(firstAvailablePort(25565, 25566, new Set([25565, 25566]))).toBeNull();

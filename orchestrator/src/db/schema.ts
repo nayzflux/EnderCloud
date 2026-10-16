@@ -34,7 +34,7 @@ import type {
   VariantRuntimeSpec,
 } from "../domain/types.ts";
 
-export const groupTypeEnum = pgEnum("group_type", ["hub", "minigame"]);
+export const groupTypeEnum = pgEnum("group_type", ["hub", "minigame", "proxy"]);
 export const lifecycleStateEnum = pgEnum("lifecycle_state", lifecycleStates);
 export const availabilityStateEnum = pgEnum("availability_state", availabilityStates);
 export const executionHostHealthEnum = pgEnum(
@@ -188,6 +188,9 @@ export const executionHosts = pgTable(
     id: text("id").primaryKey(),
     controlUrl: text("control_url").notNull(),
     gameAddress: text("game_address").notNull(),
+    proxyAddress: text("proxy_address"),
+    proxyPortStart: integer("proxy_port_start"),
+    proxyPortEnd: integer("proxy_port_end"),
     allocatableCpu: doublePrecision("allocatable_cpu").notNull(),
     allocatableMemoryBytes: bigint("allocatable_memory_bytes", { mode: "number" }).notNull(),
     healthState: executionHostHealthEnum("health_state").notNull().default("RECOVERING"),
@@ -202,6 +205,12 @@ export const executionHosts = pgTable(
     index("execution_hosts_health_admin_idx").on(table.healthState, table.adminState),
     check("execution_hosts_cpu_check", sql`${table.allocatableCpu} > 0`),
     check("execution_hosts_memory_check", sql`${table.allocatableMemoryBytes} > 0`),
+    check("execution_hosts_proxy_ports_check", sql`(
+      ${table.proxyAddress} IS NULL AND ${table.proxyPortStart} IS NULL AND ${table.proxyPortEnd} IS NULL
+    ) OR (
+      ${table.proxyAddress} IS NOT NULL AND ${table.proxyPortStart} IS NOT NULL AND ${table.proxyPortEnd} IS NOT NULL
+      AND ${table.proxyPortStart} BETWEEN 1 AND 65535 AND ${table.proxyPortEnd} BETWEEN ${table.proxyPortStart} AND 65535
+    )`),
   ],
 );
 
@@ -540,6 +549,8 @@ export const operationalIncidents = pgTable(
 
 export const proxyHeartbeats = pgTable("proxy_heartbeats", {
   proxyId: text("proxy_id").primaryKey(),
+  ready: boolean("ready").notNull().default(false),
+  acceptingConnections: boolean("accepting_connections").notNull().default(false),
   playerCount: integer("player_count").notNull().default(0),
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
 });

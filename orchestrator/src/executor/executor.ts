@@ -1,6 +1,7 @@
-import type { VariantRuntimeSpec } from "../domain/types.ts";
+import type { InstanceType, VariantRuntimeSpec } from "../domain/types.ts";
 
 export interface InstanceSpec {
+  readonly instanceType?: InstanceType;
   readonly hostId: string;
   readonly instanceId: string;
   readonly groupId: string;

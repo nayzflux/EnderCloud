@@ -1,6 +1,14 @@
 import { expect, test } from "bun:test";
 
 test("shared contract fixtures match the TypeScript protocol", async () => {
+  const heartbeat: import("../../src/domain/types.ts").ProxyHeartbeat = await Bun.file(
+    new URL("../../../contracts/fixtures/proxy-heartbeat.json", import.meta.url),
+  ).json();
+  const control: import("../../src/domain/types.ts").ProxyControl = await Bun.file(
+    new URL("../../../contracts/fixtures/proxy-control.json", import.meta.url),
+  ).json();
+  expect(heartbeat).toEqual({ ready: true, playerCount: 12, acceptingConnections: false });
+  expect(control).toEqual({ lifecycleState: "DRAINING", acceptingConnections: false, controlLeaseMs: 30_000 });
   const transfer = await Bun.file(
     new URL("../../../contracts/fixtures/transfer-players.json", import.meta.url),
   ).json();

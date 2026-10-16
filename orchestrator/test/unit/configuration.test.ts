@@ -6,6 +6,32 @@ import { loadConfiguration, parseDuration, parseGroup, parseVariant } from "../.
 import { jsonParameter } from "../../src/db/json.ts";
 
 describe("configuration", () => {
+  test("proxy groups maintain fixed capacity without Paper policies", () => {
+    const proxy = {
+      id: "edge-proxies", type: "proxy",
+      variants: [{ id: "velocity-main", weight: 100 }],
+      capacity: { minimum_instances: 2, maximum_instances: 2 },
+      timeouts: { startup: "90s", drain: "15m", shutdown: "20s", player_stale: "30s" },
+    };
+    expect(parseGroup(proxy, "proxy.yml")).toMatchObject({
+      type: "proxy",
+      capacity: { minimumInstances: 2, maximumInstances: 2, minimumWarmInstances: 2, maximumWarmInstances: 2 },
+    });
+    expect(() => parseGroup({ ...proxy, capacity: { minimum_instances: 1, maximum_instances: 2 } }, "proxy.yml"))
+      .toThrow("must equal");
+    expect(() => parseGroup({ ...proxy, routing: {} }, "proxy.yml")).toThrow("cannot configure");
+    expect(() => parseGroup({ ...proxy, timeouts: { startup: "90s" } }, "proxy.yml")).toThrow("required");
+  });
+
+  test("container data directories are explicit and reject unsafe paths", () => {
+    expect(parseVariant({ id: "velocity-base", docker: { data_directory: "/server" } }, "variant.yml").runtime.dataDirectory)
+      .toBe("/server");
+    for (const path of ["relative", "/", "/server/../etc", "/server:/etc"]) {
+      expect(() => parseVariant({ id: "velocity-base", docker: { data_directory: path } }, "variant.yml"))
+        .toThrow("absolute container directory");
+    }
+  });
+
   test("parses duration units", () => {
     expect(parseDuration("45s", "test")).toBe(45_000);
     expect(parseDuration("15m", "test")).toBe(900_000);
@@ -280,6 +306,7 @@ environment:
 `);
 
       const first = await loadConfiguration(groups, templates);
+      expect(first.variants[0]?.runtime.dataDirectory).toBe("/data");
       expect(first.variants[0]?.layers.map((layer) => layer.id)).toEqual([
         "skywars",
         "skywars-solo",
@@ -295,6 +322,15 @@ environment:
       await writeFile(join(templates, "skywars", "plugins", "common.jar"), "v2");
       const second = await loadConfiguration(groups, templates);
       expect(second.variants[0]?.checksum).not.toBe(checksum);
+      const basePath = join(templates, "skywars", "variant.yml");
+      const baseDescriptor = await Bun.file(basePath).text();
+      await writeFile(basePath, baseDescriptor.replace("docker:", "docker:\n  data_directory: /server"));
+      const inherited = await loadConfiguration(groups, templates);
+      expect(inherited.variants[0]?.runtime.dataDirectory).toBe("/server");
+      const finalPath = join(templates, "map-one", "variant.yml");
+      await writeFile(finalPath, (await Bun.file(finalPath).text()) + "\ndocker:\n  data_directory: /custom\n");
+      const overridden = await loadConfiguration(groups, templates);
+      expect(overridden.variants[0]?.runtime.dataDirectory).toBe("/custom");
       await writeFile(join(templates, "skywars-solo", "variant.yml"), `
 id: skywars-solo
 parents: [skywars]

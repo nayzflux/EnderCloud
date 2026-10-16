@@ -89,6 +89,11 @@ export interface ActiveDeadline {
 }
 
 export interface DashboardInstance {
+  readonly proxy?: {
+    readonly lastHeartbeatAt: string | null;
+    readonly ready: boolean;
+    readonly acceptingConnections: boolean;
+  };
   readonly id: string;
   readonly hostId: string | null;
   readonly variantId: string;

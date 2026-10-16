@@ -70,6 +70,7 @@ environment:
 | `docker.image` | In resolved final stack | Image with an explicit tag or SHA-256 digest. `latest` is rejected |
 | `docker.memory` | In resolved final stack | Positive byte integer or value ending in `K`, `M`, or `G` |
 | `docker.cpu` | In resolved final stack | Positive number of vCPU |
+| `docker.data_directory` | No | Absolute container directory. Defaults to `/data`; use `/server` with the Velocity proxy image. Inherited with the other Docker fields |
 | `environment` | No | Map of string, number, or boolean YAML scalars |
 
 The directory name does not technically define the layer ID. Keep them equal so operators can

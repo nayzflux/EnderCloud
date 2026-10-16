@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import fr.nayz.endercloud.core.model.PaperEvent;
+import fr.nayz.endercloud.core.model.ProxyHeartbeat;
+import fr.nayz.endercloud.core.model.ProxyControl;
 import fr.nayz.endercloud.core.model.HubTransferResult;
 import fr.nayz.endercloud.core.model.QueueRequest;
 import fr.nayz.endercloud.core.model.QueueResult;
@@ -48,6 +50,14 @@ public final class EnderCloudClient implements AutoCloseable {
         return send("GET", "/api/v1/proxy/servers", null)
                 .thenApply(response -> read(response, new TypeReference<>() {
                 }));
+    }
+
+    public CompletableFuture<ProxyControl> proxyHeartbeat(String instanceId, ProxyHeartbeat heartbeat) {
+        return send(
+                "PUT",
+                "/api/v1/proxies/" + encode(instanceId) + "/heartbeat",
+                JsonCodec.write(heartbeat)
+        ).thenApply(response -> read(response, ProxyControl.class));
     }
 
     public CompletableFuture<QueueResult> enqueue(QueueRequest request) {

@@ -315,7 +315,11 @@ export class SessionController {
     .from(serverInstances)
     .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
     .leftJoin(gameSessions, eq(gameSessions.id, serverInstances.sessionId))
-    .where(eq(serverInstances.lifecycleState, "DRAINING")) as unknown as
+    // Managed proxies are drained by Reconciler after their admission acknowledgement.
+    .where(and(
+      eq(serverInstances.lifecycleState, "DRAINING"),
+      inArray(serverGroups.type, ["hub", "minigame"]),
+    )) as unknown as
       {
         id: string;
         type: "hub" | "minigame";

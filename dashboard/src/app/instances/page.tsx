@@ -13,7 +13,8 @@ import {
   SearchField,
 } from "@/components/filter-bar";
 import { PageHeader } from "@/components/page-header";
-import { AvailabilityBadge, LifecycleBadge } from "@/components/status-badge";
+import { ProxyStatus } from "@/components/proxy-status";
+import { AvailabilityBadge, GroupTypeBadge, LifecycleBadge } from "@/components/status-badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Empty,
@@ -37,6 +38,9 @@ interface Row {
 }
 
 function OccupancyCell({ instance }: { readonly instance: DashboardInstance }) {
+  if (instance.proxy) {
+    return <span className="font-mono text-xs tabular">{instance.playerCount}</span>;
+  }
   const percent = ratio(instance.playerCount, instance.maximumPlayers);
   return (
     <div className="flex w-28 items-center gap-2">
@@ -73,7 +77,10 @@ export default function InstancesPage() {
         id: "group",
         header: "Group",
         cell: ({ group }) => (
-          <span className="font-mono text-xs">{group.id}</span>
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-xs">{group.id}</span>
+            <GroupTypeBadge type={group.type} />
+          </div>
         ),
         sortValue: ({ group }) => group.id,
       },
@@ -111,9 +118,9 @@ export default function InstancesPage() {
         id: "availability",
         header: "Availability",
         hideOnMobile: true,
-        cell: ({ instance }) => (
-          <AvailabilityBadge state={instance.availabilityState} />
-        ),
+        cell: ({ instance }) => instance.proxy
+          ? <ProxyStatus instance={instance} />
+          : <AvailabilityBadge state={instance.availabilityState} />,
         sortValue: ({ instance }) => instance.availabilityState,
       },
       {

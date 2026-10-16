@@ -409,16 +409,16 @@ function GroupsTable({
                     ) : null}
                   </TableCell>
                   <TableCell className="hidden text-right font-mono text-xs tabular sm:table-cell">
-                    {capacity.reservedInstances}
+                    {group.type === "proxy" ? "—" : capacity.reservedInstances}
                   </TableCell>
                   <TableCell className="hidden text-right font-mono text-xs tabular md:table-cell">
-                    {activeSessionCount(group)}
+                    {group.type === "proxy" ? "—" : activeSessionCount(group)}
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs tabular">
                     {players}
                   </TableCell>
                   <TableCell className="pr-4 text-right font-mono text-xs tabular">
-                    {group.type === "hub" ? (
+                    {group.type !== "minigame" ? (
                       <span className="text-muted-foreground">—</span>
                     ) : (
                       <>
