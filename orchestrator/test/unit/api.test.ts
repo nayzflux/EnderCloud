@@ -34,6 +34,7 @@ function testApp(
   startup?: VariantStartController,
   logger: Logger = new Logger("error", { sink: () => {} }),
   proxies: ProxyService = {} as ProxyService,
+  queues: QueueService = {} as QueueService,
 ) {
   const dashboard = {
     getCluster: async () => ({
@@ -64,7 +65,7 @@ function testApp(
     proxies,
     dashboard,
     monitoring,
-    queues: {} as unknown as QueueService,
+    queues,
     instances,
     hubs,
     hosts,
@@ -75,6 +76,31 @@ function testApp(
     isReady: () => true,
   });
 }
+
+test("queue cancellation returns a normal response when transfer already started", async () => {
+  const leaveParty = mock(async () => false);
+  const queues = { leaveParty } as unknown as QueueService;
+  const app = testApp(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    queues,
+  );
+  const response = await app.handle(new Request(
+    "http://orchestrator/api/v1/queue/groups/skywars-solo/parties/party-42",
+    { method: "DELETE" },
+  ));
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ removed: false });
+  expect(leaveParty).toHaveBeenCalledWith("skywars-solo", "party-42");
+});
 
 test("managed proxy discovery and heartbeats validate the public contract", async () => {
   const heartbeat = mock(async () => ({ lifecycleState: "DRAINING", acceptingConnections: false, controlLeaseMs: 30_000 }));

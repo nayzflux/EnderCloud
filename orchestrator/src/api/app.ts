@@ -477,12 +477,11 @@ export function createApp(dependencies: ApiDependencies) {
         )
         .delete(
           "/queue/groups/:groupId/parties/:partyId",
-          async ({ params, set }) => {
+          async ({ params }) => {
             const removed = await dependencies.queues.leaveParty(
               params.groupId,
               params.partyId,
             );
-            if (!removed) set.status = 404;
             return { removed };
           },
           {

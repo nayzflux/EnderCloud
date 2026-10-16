@@ -162,7 +162,7 @@ export class QueueService {
     });
   }
 
-  // Withdraw an entire party until its first transfer command establishes the individual boundary.
+  // Leaving is idempotent until the first transfer command establishes the individual boundary.
   public async leaveParty(groupId: string, partyId: string): Promise<boolean> {
     return this.db.transaction(async (tx) => {
       const entries = await tx.select({
@@ -190,7 +190,8 @@ export class QueueService {
         .limit(1)
         .for("update", { of: queueEntries });
       const entry = entries[0];
-      if (!entry || entry.transferStartedAt) return false;
+      if (!entry) return true;
+      if (entry.transferStartedAt) return false;
       await this.cancelTicket(tx, entry.id, entry.sessionId, partyId);
       return true;
     });

@@ -1818,6 +1818,54 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     );
   });
 
+  test("leaving a queue is idempotent for missing and previously cancelled parties", async () => {
+    const { groupId } = await seedGroup();
+    const queues = new QueueService(db);
+    expect(await queues.leaveParty(groupId, "absent-party")).toBeTrue();
+
+    const ticket = await queues.enqueue({
+      groupId,
+      partyId: "cancelled-party",
+      players: [crypto.randomUUID()],
+    });
+    expect(await queues.leaveParty(groupId, "cancelled-party")).toBeTrue();
+    expect(await queues.leaveParty(groupId, "cancelled-party")).toBeTrue();
+    const [entry] = await db.select().from(queueEntries)
+      .where(eq(queueEntries.id, ticket.entryId));
+    expect(entry?.state).toBe("LEFT");
+  });
+
+  test("leaving preserves a transferred party and succeeds after its session terminates", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const queues = new QueueService(db);
+    await db.insert(serverInstances).values({
+      id: nanoid(),
+      hostId: TEST_HOST_ID,
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+      groupId,
+      variantId,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "game:25565",
+    });
+    const ticket = await queues.enqueue({
+      groupId,
+      partyId: "transferred-party",
+      players: [crypto.randomUUID(), crypto.randomUUID()],
+    });
+    await matchmaker.tick();
+
+    expect(await queues.leaveParty(groupId, "transferred-party")).toBeFalse();
+    const [entry] = await db.select().from(queueEntries)
+      .where(eq(queueEntries.id, ticket.entryId));
+    expect(entry?.state).toBe("SELECTED");
+    expect(entry?.transferStartedAt).not.toBeNull();
+    await db.update(gameSessions).set({ state: "FINISHED" })
+      .where(eq(gameSessions.id, entry!.sessionId!));
+    expect(await queues.leaveParty(groupId, "transferred-party")).toBeTrue();
+  });
+
   test("a departure cancels the whole ticket before transfer and only one player afterwards", async () => {
     const { groupId, variantId } = await seedGroup();
     const queues = new QueueService(db);

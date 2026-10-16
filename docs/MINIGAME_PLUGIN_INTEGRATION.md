@@ -221,14 +221,16 @@ may reuse the same `partyId`, so do not treat `partyId` as a unique session tick
 cloud.leaveQueue("skywars-solo", "party-42")
         .thenAccept(removed -> {
             if (!removed) {
-                getLogger().info("Party was not queued");
+                getLogger().info("Party transfer has already started");
             }
         });
 ```
 
-This removes a party only while its entry remains queued. After the matchmaker selects it into a
-session, `leaveQueue` does not remove a player from the game. The minigame plugin owns its policy
-for disconnects, reconnects, forfeits, and substitutes.
+This removes the entire party while it is queued or selected before its first transfer command.
+It returns `true` when the party has left or has no active queue entry, so retries are idempotent.
+Once its transfer has started, it returns `false` without failing the HTTP request. The endpoint
+returns HTTP 200 with `{ "removed": true }` or `{ "removed": false }` for these outcomes.
+The minigame plugin owns its policy for disconnects, reconnects, forfeits, and substitutes.
 
 ## Read and acknowledge assignments
 

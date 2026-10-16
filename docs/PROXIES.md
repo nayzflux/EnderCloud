@@ -22,6 +22,12 @@ Managed proxies must reach the orchestrator, Redis, and every Paper endpoint adv
 agents. Set `ENDERCLOUD_REDIS_URL` in their template to the reachable Redis address. Agents inject
 `ENDERCLOUD_INSTANCE_ID` and `ENDERCLOUD_ORCHESTRATOR_URL` automatically.
 
+If the Paper plugins use HydrogenAPI, deploy `HydrogenVelocity` on every proxy as well.
+It maintains the shared player presence used to authorize matchmaking. Configure the same
+`HYDROGEN_DB_*` and `HYDROGEN_REDIS_*` values on Paper and Velocity. HydrogenVelocity can use
+the injected `ENDERCLOUD_INSTANCE_ID` when `HYDROGEN_PROXY_ID` is absent, giving each managed
+proxy its own identity. External proxies still need an explicit `HYDROGEN_PROXY_ID`.
+
 ## Group and template
 
 Create `groups/proxy.yml`:
