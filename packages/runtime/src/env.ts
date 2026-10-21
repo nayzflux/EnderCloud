@@ -67,14 +67,15 @@ export function duration(
   name: string,
   fallback: string,
   minimumMs = 1,
+  maximumMs = 2_147_483_647,
 ): number {
   const raw = optionalString(environment, name, fallback);
   const match = durationPattern.exec(raw);
   if (!match) throw new Error(`${name} must be a duration such as 500ms, 5s or 10m`);
   const amount = Number(match[1]);
   const value = amount * durationFactors[match[2] as keyof typeof durationFactors];
-  if (!Number.isSafeInteger(value) || value < minimumMs) {
-    throw new Error(`${name} must be at least ${minimumMs}ms`);
+    if (!Number.isSafeInteger(value) || value < minimumMs || value > maximumMs) {
+      throw new Error(`${name} must be between ${minimumMs}ms and ${maximumMs}ms`);
   }
   return value;
 }

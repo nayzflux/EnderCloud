@@ -89,7 +89,7 @@ export function loadConfig(environment: Environment = process.env): AppConfig {
     incidentFailureThreshold: integer(environment, "INCIDENT_FAILURE_THRESHOLD", 3),
     incidentFailureWindowMs: duration(environment, "INCIDENT_FAILURE_WINDOW", "15m", 1_000),
     incidentHostRecoveryAfterMs: duration(environment, "INCIDENT_HOST_RECOVERY_AFTER", "1m", 1_000),
-    incidentHistoryRetentionMs: duration(environment, "INCIDENT_HISTORY_RETENTION", "90d", 60_000),
+    incidentHistoryRetentionMs: duration(environment, "INCIDENT_HISTORY_RETENTION", "90d", 60_000, 3_650 * 86_400_000),
     instanceStartConcurrency: integer(environment, "INSTANCE_START_CONCURRENCY", 4, 1, 64),
     instanceStartRetryLimit: integer(environment, "INSTANCE_START_RETRY_LIMIT", 5, 0, 20),
     instanceStartRetryBaseDelayMs: duration(environment, "INSTANCE_START_RETRY_BASE_DELAY", "1s"),

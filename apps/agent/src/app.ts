@@ -117,14 +117,14 @@ export function createAgentApp(
       )
       .put(
         "/instances/:instanceId",
-        async ({ params, body }) => {
+        async ({ params, body, request }) => {
           if (params.instanceId !== body.instanceId) {
             throw new ApplicationError("INVALID_REQUEST", 400, "Path and body instance ids differ");
           }
           if (body.hostId !== config.hostId) {
             throw new ApplicationError("FORBIDDEN", 403, "Host identity does not match this agent");
           }
-          const templateLayers = await templates.resolveLayers(body.templateLayers);
+          const templateLayers = await templates.resolveLayers(body.templateLayers, request.signal);
           return executor.createInstance({ ...body, templateLayers });
         },
         { params: t.Object({ instanceId: internalId }), body: instanceCreateSchema },

@@ -29,8 +29,8 @@ export interface TemplateCacheOptions {
 export class TemplateCache {
   private readonly shutdown = new AbortController();
   private active = 0;
-  private readonly waiting: Array<() => void> = [];
-  private readonly downloads = new Map<string, Promise<string>>();
+  private readonly waiting: Array<{ grant: () => void; abort: () => void }> = [];
+  private readonly downloads = new Map<string, { promise: Promise<string>; controller: AbortController; consumers: number; settled: boolean }>();
 
   public constructor(
     private readonly root: string,
@@ -41,11 +41,13 @@ export class TemplateCache {
 
   public async resolveLayers(
     layers: readonly RemoteTemplateLayer[],
+    signal?: AbortSignal,
   ): Promise<readonly CachedTemplateLayer[]> {
-    return Promise.all(layers.map(async (layer) => ({
-      ...layer,
-      templatePath: await this.ensureLayer(layer),
-    })));
+    const batch = new AbortController();
+    const cancellation = signal ? AbortSignal.any([signal, batch.signal]) : batch.signal;
+    try {
+      return await Promise.all(layers.map(async layer => ({ ...layer, templatePath: await this.ensureLayer(layer, cancellation) })));
+    } catch (error) { batch.abort(error); throw error; }
   }
 
   public async initialize(): Promise<void> {
@@ -61,35 +63,56 @@ export class TemplateCache {
 
   public async close(): Promise<void> {
     this.shutdown.abort(new Error("Template cache is shutting down"));
-    await Promise.allSettled(this.downloads.values());
+    await Promise.allSettled([...this.downloads.values()].map(record => record.promise));
   }
 
-  private async withSlot<T>(task: () => Promise<T>): Promise<T> {
-    if (this.active >= (this.options.concurrency ?? 4)) await new Promise<void>(resolve => this.waiting.push(resolve));
-    else this.active += 1;
-    try { this.shutdown.signal.throwIfAborted(); return await task(); }
-    finally { const next = this.waiting.shift(); if (next) next(); else this.active -= 1; }
+  private async withSlot<T>(signal: AbortSignal, task: () => Promise<T>): Promise<T> {
+    signal.throwIfAborted();
+    if (this.active >= (this.options.concurrency ?? 4)) {
+      await new Promise<void>((resolve, reject) => {
+        const waiter = { grant: () => {signal.removeEventListener("abort", waiter.abort); resolve();},
+          abort: () => {const index = this.waiting.indexOf(waiter); if (index >= 0) this.waiting.splice(index, 1); reject(signal.reason);} };
+        this.waiting.push(waiter); signal.addEventListener("abort", waiter.abort, {once: true});
+      });
+    } else this.active++;
+    try { signal.throwIfAborted(); return await task(); }
+    finally {const next = this.waiting.shift(); if (next) next.grant(); else this.active--;}
   }
 
-  private async ensureLayer(layer: RemoteTemplateLayer): Promise<string> {
-    if (!/^[a-z0-9][a-z0-9-]{1,62}$/.test(layer.id)) {
-      throw new Error(`Invalid template layer id ${layer.id}`);
+  private async ensureLayer(layer: RemoteTemplateLayer, caller?: AbortSignal): Promise<string> {
+    if (!/^[a-z0-9][a-z0-9-]{1,62}$/.test(layer.id) || !/^[a-f0-9]{64}$/.test(layer.checksum)) throw new Error("Invalid template layer identity");
+    caller?.throwIfAborted(); this.shutdown.signal.throwIfAborted();
+    const key = layer.id + ":" + layer.checksum;
+    let record = this.downloads.get(key);
+    if (!record || record.controller.signal.aborted) {
+      const controller = new AbortController();
+      const signal = AbortSignal.any([controller.signal, this.shutdown.signal]);
+      const timer = setTimeout(() => controller.abort(new Error("Template total deadline exceeded")), this.options.timeoutMs ?? 300_000);
+      const created = {controller, consumers: 0, settled: false, promise: Promise.resolve("")};
+      created.promise = this.withSlot(signal, () => this.downloadLayer(layer, signal)).finally(() => {
+        clearTimeout(timer); created.settled = true;
+        if (this.downloads.get(key) === created) this.downloads.delete(key);
+      });
+      record = created; this.downloads.set(key, created);
     }
-    if (!/^[a-f0-9]{64}$/.test(layer.checksum)) {
-      throw new Error(`Invalid checksum for template layer ${layer.id}`);
+    record.consumers++;
+    let onAbort: (() => void) | undefined;
+    try {
+      if (!caller) return await record.promise;
+      return await Promise.race([record.promise, new Promise<never>((_, reject) => {
+        onAbort = () => reject(caller.reason); caller.addEventListener("abort", onAbort, {once: true});
+      })]);
+    } finally {
+      if (onAbort) caller?.removeEventListener("abort", onAbort);
+      record.consumers--;
+      if (!record.settled && record.consumers === 0) record.controller.abort(new Error("No template consumers remain"));
     }
-    const key = `${layer.id}:${layer.checksum}`;
-    const existing = this.downloads.get(key);
-    if (existing) return existing;
-    const operation = this.withSlot(() => this.downloadLayer(layer)).finally(() => this.downloads.delete(key));
-    this.downloads.set(key, operation);
-    return operation;
   }
 
-  private async downloadLayer(layer: RemoteTemplateLayer): Promise<string> {
+  private async downloadLayer(layer: RemoteTemplateLayer, signal: AbortSignal): Promise<string> {
     const layerRoot = join(this.root, layer.id);
     const destination = join(layerRoot, layer.checksum);
-    if (await this.isDirectory(destination) && (await inspectTemplateDirectory(destination).catch(() => null))?.checksum === layer.checksum) {
+    if (await this.isDirectory(destination) && (await inspectTemplateDirectory(destination, {signal, maxBytes: this.options.maxExpandedBytes ?? 8 * 1024 ** 3, maxEntries: this.options.maxEntries ?? 100_000}).catch(() => null))?.checksum === layer.checksum) {
       this.logger?.debug("template.cache.hit", "Template layer cache hit", {
         layerId: layer.id,
         checksum: layer.checksum,
@@ -104,9 +127,6 @@ export class TemplateCache {
     await mkdir(layerRoot, { recursive: true });
     const staging = join(layerRoot, `${layer.checksum}-staging-${crypto.randomUUID()}`);
     await mkdir(staging, { recursive: true });
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(new Error("Template download deadline exceeded")), this.options.timeoutMs ?? 300_000);
-    const signal = AbortSignal.any([controller.signal, this.shutdown.signal]);
     try {
       const url = new URL(
         `/api/v1/template-layers/${encodeURIComponent(layer.id)}/archive`,
@@ -118,7 +138,8 @@ export class TemplateCache {
         throw new Error(`Template download failed with HTTP ${response.status}`);
       }
       await this.extractArchive(response.body, staging, signal);
-      const inspected = await inspectTemplateDirectory(staging);
+      const inspected = await inspectTemplateDirectory(staging, {signal, maxBytes: this.options.maxExpandedBytes ?? 8 * 1024 ** 3, maxEntries: this.options.maxEntries ?? 100_000});
+      signal.throwIfAborted();
       if (inspected.checksum !== layer.checksum) {
         throw new Error(
           `Template ${layer.id} checksum mismatch: expected ${layer.checksum}, got ${inspected.checksum}`,
@@ -135,7 +156,7 @@ export class TemplateCache {
     } catch (error) {
       await rm(staging, { recursive: true, force: true }).catch(() => undefined);
       throw error;
-    } finally { clearTimeout(timeout); }
+    }
   }
 
   private async extractArchive(body: ReadableStream<Uint8Array>, destination: string, signal: AbortSignal): Promise<void> {

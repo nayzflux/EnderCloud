@@ -132,7 +132,7 @@ test("agent API delegates idempotent instance operations to the local executor",
     containerId: "container-01",
     endpoint: "10.20.0.11:25565",
   });
-  expect(resolveLayers).toHaveBeenCalledWith(body.templateLayers);
+  expect(resolveLayers).toHaveBeenCalledWith(body.templateLayers, expect.any(AbortSignal));
   expect(createInstance).toHaveBeenCalledTimes(1);
 
   const inspectResponse = await app.handle(new Request(

@@ -34,6 +34,40 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
+test("cancelling one consumer preserves a shared download for another instance", async () => {
+  const root = await mkdtemp(join(tmpdir(), "endercloud-shared-cache-"));
+  const original = globalThis.fetch;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const source = join(root, "source"); await mkdir(source);
+  await writeFile(join(source, "config.txt"), "shared");
+  const checksum = (await inspectTemplateDirectory(source)).checksum;
+  const bytes = await archive([{name: "config.txt", content: "shared"}]);
+  const download = mock(async () => { await gate; return new Response(bytes); });
+  globalThis.fetch = download as unknown as typeof fetch;
+  const cache = new TemplateCache(join(root, "cache"), "http://orchestrator");
+  try {
+    const cancellation = new AbortController();
+    const first = cache.resolveLayers([{id: "base-layer", checksum}], cancellation.signal).catch(error => error);
+    const second = cache.resolveLayers([{id: "base-layer", checksum}]);
+    cancellation.abort(new Error("caller cancelled"));
+    release();
+    expect((await first).message).toBe("caller cancelled");
+    expect((await second)[0]?.checksum).toBe(checksum);
+    expect(download).toHaveBeenCalledTimes(1);
+  } finally { release(); await cache.close(); globalThis.fetch = original; await rm(root, {recursive: true, force: true}); }
+});
+
+test("cached inspections enforce quotas and cancellation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "endercloud-inspection-"));
+  try {
+    await writeFile(join(root, "file.txt"), "bounded");
+    await expect(inspectTemplateDirectory(root, {maxBytes: 2})).rejects.toThrow("size limit");
+    const controller = new AbortController(); controller.abort(new Error("inspection cancelled"));
+    await expect(inspectTemplateDirectory(root, {signal: controller.signal})).rejects.toThrow("inspection cancelled");
+  } finally { await rm(root, {recursive: true, force: true}); }
+});
+
 test("template cache downloads and verifies a valid layer only once", async () => {
   const root = await mkdtemp(join(tmpdir(), "endercloud-cache-"));
   const source = join(root, "source");
