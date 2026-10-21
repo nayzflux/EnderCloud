@@ -2,7 +2,7 @@ FROM node:24.13.0-bookworm-slim AS builder
 COPY --from=oven/bun:1.4.2 /usr/local/bin/bun /usr/local/bin/bun
 WORKDIR /workspace
 ENV NEXT_TELEMETRY_DISABLED=1
-COPY package.json bun.lock ./
+COPY package.json bun.lock tsconfig.base.json ./
 COPY apps/orchestrator/package.json ./apps/orchestrator/package.json
 COPY apps/agent/package.json ./apps/agent/package.json
 COPY apps/dashboard/package.json ./apps/dashboard/package.json

@@ -10,6 +10,10 @@
 .git
 .cache
 .env*
+**/.env*
+.agents
+.codex
+.aws
 deployment
 runtime
 groups
