@@ -102,6 +102,7 @@ const instances = new InstanceController(
   monitoring,
   hosts,
   startup,
+  config.paperHealthLeaseMs,
 );
 const queues = new QueueService(db);
 const dashboard = new DashboardService(db, config.instanceStartRetryLimit);
@@ -116,6 +117,7 @@ const reconciler = new Reconciler(
   logger.child({ component: "reconciler" }),
   config.hostOfflineAfterMs,
   config.hostOfflineAfterMs,
+  config.paperHealthConfirmationMs,
 );
 const maintenance = new HostMaintenanceController(db, hosts, instances, logger.child({ component: "host-maintenance" }));
 const startWorker = new InstanceStartWorker(

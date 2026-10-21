@@ -260,6 +260,8 @@ export const serverInstances = pgTable(
     runtimePath: text("runtime_path"),
     endpoint: text("endpoint"),
     playerCount: integer("player_count").notNull().default(0),
+    paperHealthDeadline: timestamp("paper_health_deadline", { withTimezone: true }).default(sql`now() + interval '30 seconds'`),
+    healthSuspectedAt: timestamp("health_suspected_at", { withTimezone: true }),
     startupDeadline: timestamp("startup_deadline", { withTimezone: true }),
     renewalDeadline: timestamp("renewal_deadline", { withTimezone: true }),
     replacesInstanceId: text("replaces_instance_id"),

@@ -490,6 +490,7 @@ export class Matchmaker {
         and(
           eq(serverInstances.groupId, groupId),
           eq(serverInstances.lifecycleState, "RUNNING"),
+            sql`(${serverInstances.paperHealthDeadline} IS NULL OR ${serverInstances.paperHealthDeadline} > now())`,
           eq(serverInstances.availabilityState, "OPEN"),
           eq(executionHosts.healthState, "ONLINE"),
           eq(executionHosts.adminState, "ACTIVE"),
@@ -512,6 +513,7 @@ export class Matchmaker {
           eq(serverInstances.id, reservation.id),
           eq(serverInstances.availabilityState, "OPEN"),
           eq(serverInstances.lifecycleState, "RUNNING"),
+            sql`(${serverInstances.paperHealthDeadline} IS NULL OR ${serverInstances.paperHealthDeadline} > now())`,
         ),
       )
       .returning({ id: serverInstances.id });

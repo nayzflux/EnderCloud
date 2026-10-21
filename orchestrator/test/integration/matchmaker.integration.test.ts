@@ -504,6 +504,28 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     expect((await db.select().from(serverInstances).where(eq(serverInstances.id, instanceId)))[0]?.reservedCpu).toBe(1);
   });
 
+  test("Paper health lease withdraws stale servers, recovers during grace and rejects late revival", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = nanoid();
+    await db.insert(serverInstances).values({ id: instanceId, hostId: TEST_HOST_ID, groupId, variantId,
+      lifecycleState: "RUNNING", availabilityState: "OPEN", endpoint: "10.0.0.10:25565",
+      paperHealthDeadline: new Date(Date.now() - 1_000), reservedCpu: 1, reservedMemoryBytes: 1024 });
+    const executor = { listManagedInstances: async () => [{ instanceId, running: true, hostId: TEST_HOST_ID }] } as unknown as Executor;
+    const instances = new InstanceController(db, executor, new VariantSelector(db), {
+      publishRegistry: async () => {},
+    } as unknown as RedisEventBus, {} as TransferService, {} as HubRouter, mockLogger);
+    const reconciler = new Reconciler(db, executor, instances, new HostService(db), mockLogger, 30_000);
+    expect(await instances.listProxyServers()).toHaveLength(0);
+    await reconciler.tick();
+    expect((await db.select().from(serverInstances).where(eq(serverInstances.id, instanceId)))[0]?.healthSuspectedAt).not.toBeNull();
+    await instances.handlePaperEvent(instanceId, { type: "HEARTBEAT", playerIds: [] });
+    expect(await instances.listProxyServers()).toHaveLength(1);
+    await db.update(serverInstances).set({ paperHealthDeadline: new Date(0) }).where(eq(serverInstances.id, instanceId));
+    await reconciler.tick();
+    expect((await db.select().from(serverInstances).where(eq(serverInstances.id, instanceId)))[0]?.failureReason).toBe("PAPER_HEALTH_TIMEOUT");
+    await expect(instances.handlePaperEvent(instanceId, { type: "HEARTBEAT", playerIds: [] })).rejects.toThrow("unavailable");
+  });
+
   test("an already offline host retries an instance transition that previously failed", async () => {
     const { groupId, variantId } = await seedGroup();
     await db.insert(serverInstances).values({ id: nanoid(), hostId: TEST_HOST_ID, groupId, variantId,

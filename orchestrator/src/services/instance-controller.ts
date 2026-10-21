@@ -105,6 +105,7 @@ export class InstanceController {
     private readonly monitoring?: MonitoringService,
     private readonly hosts?: HostService,
     private readonly startPolicy?: VariantStartController,
+    private readonly paperHealthLeaseMs = 30_000,
   ) {}
 
   // Move an instance into the shared failure path and remove it from proxy routing.
@@ -242,6 +243,7 @@ export class InstanceController {
           eq(serverInstances.id, replacesInstanceId),
           eq(serverInstances.groupId, groupId),
           eq(serverInstances.lifecycleState, "RUNNING"),
+          sql`(${serverInstances.paperHealthDeadline} IS NULL OR ${serverInstances.paperHealthDeadline} > now())`,
           eq(serverInstances.availabilityState, "OPEN"),
         ];
         if (replacementReason === "HUB_RENEWAL") {
@@ -583,12 +585,24 @@ export class InstanceController {
     await this.recordEvent("instance", instanceId, event.type, event);
   }
 
+  public async suspectHealth(instanceId: string): Promise<void> {
+    await this.db.transaction(async tx => {
+      const changed = await tx.update(serverInstances).set({ healthSuspectedAt: sql`now()` })
+        .where(and(eq(serverInstances.id, instanceId), eq(serverInstances.lifecycleState, "RUNNING"),
+          sql`${serverInstances.paperHealthDeadline} <= now()`, sql`${serverInstances.healthSuspectedAt} IS NULL`))
+        .returning({ id: serverInstances.id });
+      if (changed.length) await enqueueRegistryEvent(tx, "SERVER_UNREGISTERED", { instanceId });
+    });
+  }
+
   // Promote a starting instance to RUNNING and register it with proxies.
   public async markReady(instanceId: string, reportedEndpoint?: string): Promise<void> {
     const rows = (await this.db
       .update(serverInstances)
       .set({
         lifecycleState: "RUNNING",
+        paperHealthDeadline: new Date(Date.now() + this.paperHealthLeaseMs),
+        healthSuspectedAt: null,
         endpoint: sql`COALESCE(${reportedEndpoint ?? null}, ${serverInstances.endpoint})`,
         runningAt: sql`COALESCE(${serverInstances.runningAt}, now())`,
         renewalDeadline: sql`CASE
@@ -678,6 +692,7 @@ export class InstanceController {
         and(
           eq(serverInstances.id, replacementInstanceId),
           eq(serverInstances.lifecycleState, "RUNNING"),
+          sql`(${serverInstances.paperHealthDeadline} IS NULL OR ${serverInstances.paperHealthDeadline} > now())`,
           isNotNull(serverInstances.endpoint),
           isNotNull(serverInstances.replacesInstanceId),
         ),
@@ -694,6 +709,7 @@ export class InstanceController {
           eq(serverInstances.id, replacement.replacesInstanceId),
           eq(serverInstances.groupId, replacement.groupId),
           eq(serverInstances.lifecycleState, "RUNNING"),
+          sql`(${serverInstances.paperHealthDeadline} IS NULL OR ${serverInstances.paperHealthDeadline} > now())`,
         ),
       )
       .limit(1);
@@ -733,6 +749,7 @@ export class InstanceController {
           eq(serverInstances.id, instanceId),
           eq(serverInstances.groupId, serverGroups.id),
           eq(serverInstances.lifecycleState, "RUNNING"),
+          sql`(${serverInstances.paperHealthDeadline} IS NULL OR ${serverInstances.paperHealthDeadline} > now())`,
           sql`(
           ${serverInstances.availabilityState} = 'OPEN'
           OR EXISTS (
@@ -870,6 +887,7 @@ export class InstanceController {
       .where(
         and(
           eq(serverInstances.lifecycleState, "RUNNING"),
+          sql`(${serverInstances.paperHealthDeadline} IS NULL OR ${serverInstances.paperHealthDeadline} > now())`,
           sql`EXISTS (SELECT 1 FROM ${executionHosts} WHERE ${executionHosts.id} = ${serverInstances.hostId} AND ${executionHosts.healthState} = 'ONLINE')`,
           inArray(serverGroups.type, ["hub", "minigame"]),
           isNotNull(serverInstances.endpoint)
@@ -898,6 +916,7 @@ export class InstanceController {
           eq(serverInstances.id, instanceId),
           inArray(serverGroups.type, ["hub", "minigame"]),
           eq(serverInstances.lifecycleState, "RUNNING"),
+          sql`(${serverInstances.paperHealthDeadline} IS NULL OR ${serverInstances.paperHealthDeadline} > now())`,
           isNotNull(serverInstances.endpoint),
         ),
       )
@@ -1179,6 +1198,11 @@ export class InstanceController {
   // Reconcile the authoritative player list reported by the game server.
   private async heartbeat(instanceId: string, playerIds: readonly string[]): Promise<void> {
     await this.db.transaction(async (tx) => {
+      const alive = await tx.update(serverInstances).set({
+        paperHealthDeadline: new Date(Date.now() + this.paperHealthLeaseMs), healthSuspectedAt: null,
+      }).where(and(eq(serverInstances.id, instanceId), inArray(serverInstances.lifecycleState, ["RUNNING", "DRAINING"])))
+        .returning({ id: serverInstances.id });
+      if (!alive.length) throw new Error(`Paper instance ${instanceId} is unavailable`);
       const effectiveSessionId = await this.validateEventSession(tx, instanceId);
       let assignmentChanged = false;
       // Refresh every reported player before removing stale rows, making the heartbeat authoritative.

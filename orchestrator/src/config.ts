@@ -41,6 +41,8 @@ export interface AppConfig {
   readonly capacityIntervalMs: number;
   readonly matchmakingIntervalMs: number;
   readonly hostReconcileIntervalMs: number;
+  readonly paperHealthLeaseMs: number;
+  readonly paperHealthConfirmationMs: number;
   readonly hostOfflineAfterMs: number;
   readonly agentProbeTimeoutMs: number;
   readonly agentOperationTimeoutMs: number;
@@ -76,6 +78,8 @@ export function loadConfig(environment: Environment = process.env): AppConfig {
     capacityIntervalMs: duration(environment, "SCHEDULER_CAPACITY_INTERVAL", "5s", 100),
     matchmakingIntervalMs: duration(environment, "SCHEDULER_MATCHMAKING_INTERVAL", "1s", 100),
     hostReconcileIntervalMs: duration(environment, "SCHEDULER_RECONCILIATION_INTERVAL", "5s", 1_000),
+    paperHealthLeaseMs: duration(environment, "PAPER_HEALTH_LEASE", "30s", 1_000),
+    paperHealthConfirmationMs: duration(environment, "PAPER_HEALTH_CONFIRMATION", "30s", 1_000),
     hostOfflineAfterMs: duration(environment, "HOST_OFFLINE_TIMEOUT", "30s", 5_000),
     agentProbeTimeoutMs: duration(environment, "EXECUTOR_PROBE_TIMEOUT", "3s", 100),
     agentOperationTimeoutMs: duration(environment, "EXECUTOR_OPERATION_TIMEOUT", "10m", 1_000),

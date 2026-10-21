@@ -13,6 +13,8 @@ interface InstanceRow {
   host_id: string | null;
   lifecycle_state: LifecycleState;
   startup_expired: boolean;
+  health_expired: boolean;
+  health_failed: boolean;
   runtime_retained: boolean;
   shutdown_timeout_ms: number;
 }
@@ -36,6 +38,7 @@ export class Reconciler {
     private readonly logger: Logger,
     private readonly offlineAfterMs: number,
     private readonly startupGraceMs = 0,
+    private readonly paperHealthConfirmationMs = 30_000,
   ) {}
 
   public async tick(): Promise<void> {
@@ -49,6 +52,8 @@ export class Reconciler {
           lifecycle_state: serverInstances.lifecycleState,
           runtime_retained: serverInstances.runtimeRetained,
           shutdown_timeout_ms: serverGroups.shutdownTimeoutMs,
+          health_expired: sql<boolean>`server_groups.type <> 'proxy' AND ${serverInstances.paperHealthDeadline} <= now()`,
+          health_failed: sql<boolean>`server_groups.type <> 'proxy' AND ${serverInstances.paperHealthDeadline} + ${this.paperHealthConfirmationMs} * interval '1 millisecond' <= now()`,
           startup_expired: sql<boolean>`(
             ${serverInstances.lifecycleState} = 'STARTING'
             AND ${serverInstances.startupDeadline} <= now()
@@ -160,6 +165,9 @@ export class Reconciler {
           (!runtime || !runtime.running)
         ) {
           await this.instances.failInstance(database.id, "RUNTIME_MISSING", { hostId });
+        } else if (database.lifecycle_state === "RUNNING" && database.health_expired) {
+          if (database.health_failed) await this.instances.failInstance(database.id, "PAPER_HEALTH_TIMEOUT", { hostId });
+          else await this.instances.suspectHealth(database.id);
         } else if (database.lifecycle_state === "DRAINING") {
           if (!runtime || !runtime.running) {
             await this.instances.stopAndDelete(database.id);
