@@ -36,7 +36,9 @@ set -Eeuo pipefail
 
 case "${1:-}" in
   info) exit 0 ;;
-  compose) exit 0 ;;
+  compose)
+    if [[ -n "${REAL_DOCKER:-}" && "${2:-}" != "version" ]]; then exec "$REAL_DOCKER" "$@"; fi
+    exit 0 ;;
   *) exit 0 ;;
 esac
 EOF
@@ -55,7 +57,8 @@ run_case() {
   local fake_bin="$TEMPORARY_ROOT/bin-$name"
 
   mkdir -p "$directory/apps/orchestrator" "$directory/apps/agent" "$directory/apps/dashboard" "$directory/groups" "$directory/templates"
-  cp "$SOURCE_ROOT/install.sh" "$SOURCE_ROOT/compose.yml" "$directory/"
+  cp "$SOURCE_ROOT/install.sh" "$SOURCE_ROOT/compose.yml" "$SOURCE_ROOT/compose.agent.yml" "$directory/"
+  cp -R "$SOURCE_ROOT/deployment-tools" "$directory/"
   create_fake_docker "$fake_bin"
   PATH="$fake_bin:$PATH" /usr/bin/env bash "$directory/install.sh" <<< "$answers" >/dev/null 2>&1
   printf '%s' "$directory"
@@ -91,4 +94,9 @@ assert_contains "$proxy_directory/deployment/worker.env" 'AGENT_PROXY_PORT_START
 assert_contains "$proxy_directory/deployment/worker.env" 'AGENT_PROXY_PORT_END=25709'
 assert_contains "$proxy_directory/deployment/worker.env" 'AGENT_ADVERTISED_PROXY_ADDRESS=10.20.0.12'
 
+assert_contains "$master_directory/deployment/master.env" 'DASHBOARD_PUBLIC_URL=http://127.0.0.1:3000'
+grep -Eq '^AUTH_SECRET=.{32,}$' "$master_directory/deployment/master.env" || fail 'secret auth manquant'
+grep -Eq '^REDIS_PROXY_PASSWORD=.{32,}$' "$master_directory/deployment/master.env" || fail 'secret redis manquant'
+assert_contains "$both_directory/deployment/compose.master.yml" '  - path: ../compose.yml'
+assert_contains "$worker_directory/deployment/compose.worker.yml" '  - path: ../compose.agent.yml'
 printf 'Les tests de l installateur sont passes.\n'

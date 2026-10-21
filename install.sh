@@ -333,149 +333,27 @@ prompt_worker() {
 }
 
 write_master_compose() {
-  cat > "$DEPLOYMENT_DIRECTORY/compose.master.yml" <<'EOF'
+  cat > "$DEPLOYMENT_DIRECTORY/compose.master.yml" <<EOF
 name: endercloud-master
-
-x-service-defaults: &service-defaults
-  restart: unless-stopped
-  init: true
-  stop_grace_period: 20s
-  networks:
-    - endercloud
-
-services:
-  postgres:
-    <<: *service-defaults
-    image: postgres:18.1-alpine
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
-  redis:
-    <<: *service-defaults
-    image: redis:8.4.0-alpine
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
-  orchestrator:
-    <<: *service-defaults
-    build:
-      context: ..
-      dockerfile: apps/orchestrator/Dockerfile
-    environment:
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
-      REDIS_URL: redis://redis:6379
-      ORCHESTRATOR_LISTEN_PORT: 8080
-      ORCHESTRATOR_GROUPS_DIRECTORY: /data/groups
-      ORCHESTRATOR_TEMPLATES_DIRECTORY: /data/templates
-    volumes:
-      - ../groups:/data/groups:ro
-      - ../templates:/data/templates:ro
-    ports:
-      - "${ORCHESTRATOR_PUBLISH_ADDRESS}:${ORCHESTRATOR_PUBLISH_PORT}:8080"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "bun", "-e", "const r=await fetch('http://localhost:8080/health/ready');process.exit(r.ok?0:1)"]
-      interval: 10s
-      timeout: 3s
-      retries: 12
-
-  dashboard:
-    <<: *service-defaults
-    build:
-      context: ..
-      dockerfile: apps/dashboard/Dockerfile
-    environment:
-      ORCHESTRATOR_URL: http://orchestrator:8080
-      DASHBOARD_MOCK_DATA: "false"
-    ports:
-      - "127.0.0.1:${DASHBOARD_PUBLISH_PORT}:3000"
-    depends_on:
-      orchestrator:
-        condition: service_healthy
-
-volumes:
-  postgres-data:
-
-networks:
-  endercloud:
-    name: endercloud
+include:
+  - path: ../compose.yml
+    env_file: "$DEPLOYMENT_DIRECTORY/master.env"
 EOF
 }
 
 write_worker_compose() {
-  cat > "$DEPLOYMENT_DIRECTORY/compose.worker.yml" <<'EOF'
+  cat > "$DEPLOYMENT_DIRECTORY/compose.worker.yml" <<EOF
 name: endercloud-worker
-
-services:
-  agent:
-    build:
-      context: ../orchestrator
-    command: ["bun", "src/agent/index.ts"]
-    restart: unless-stopped
-    init: true
-    stop_grace_period: 20s
-    environment:
-      AGENT_ID: ${AGENT_ID:?Set AGENT_ID}
-      AGENT_VERSION: ${AGENT_VERSION:-0.1.0}
-      AGENT_LISTEN_PORT: 8090
-      AGENT_ADVERTISED_CONTROL_URL: ${AGENT_ADVERTISED_CONTROL_URL:?Set AGENT_ADVERTISED_CONTROL_URL}
-      AGENT_ADVERTISED_GAME_ADDRESS: ${AGENT_ADVERTISED_GAME_ADDRESS:?Set AGENT_ADVERTISED_GAME_ADDRESS}
-      AGENT_ALLOCATABLE_CPU: ${AGENT_ALLOCATABLE_CPU:?Set AGENT_ALLOCATABLE_CPU}
-      AGENT_ALLOCATABLE_MEMORY_BYTES: ${AGENT_ALLOCATABLE_MEMORY_BYTES:?Set AGENT_ALLOCATABLE_MEMORY_BYTES}
-      AGENT_GAME_PORT_START: ${AGENT_GAME_PORT_START:?Set AGENT_GAME_PORT_START}
-      AGENT_GAME_PORT_END: ${AGENT_GAME_PORT_END:?Set AGENT_GAME_PORT_END}
-      AGENT_PROXY_PORT_START: ${AGENT_PROXY_PORT_START:-}
-      AGENT_PROXY_PORT_END: ${AGENT_PROXY_PORT_END:-}
-      AGENT_ADVERTISED_PROXY_ADDRESS: ${AGENT_ADVERTISED_PROXY_ADDRESS:-}
-      ORCHESTRATOR_URL: ${ORCHESTRATOR_URL:?Set ORCHESTRATOR_URL}
-      AGENT_DOCKER_SOCKET: /var/run/docker.sock
-      AGENT_DOCKER_NETWORK: ${AGENT_DOCKER_NETWORK:-endercloud}
-      AGENT_RUNTIME_DIRECTORY: /data/runtime
-      AGENT_RUNTIME_HOST_DIRECTORY: ${AGENT_RUNTIME_HOST_DIRECTORY:?Set AGENT_RUNTIME_HOST_DIRECTORY}
-      AGENT_TEMPLATE_CACHE_DIRECTORY: /data/template-cache
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ${AGENT_RUNTIME_LOCAL_DIRECTORY:?Set AGENT_RUNTIME_LOCAL_DIRECTORY}:/data/runtime
-      - agent-template-cache:/data/template-cache
-    ports:
-      - "${AGENT_PUBLISH_ADDRESS}:${AGENT_PUBLISH_PORT}:8090"
-    healthcheck:
-      test: ["CMD", "bun", "-e", "const r=await fetch('http://localhost:8090/health/ready');process.exit(r.ok?0:1)"]
-      interval: 10s
-      timeout: 3s
-      retries: 12
-    networks:
-      - endercloud
-
-volumes:
-  agent-template-cache:
-
-networks:
-  endercloud:
-    name: ${AGENT_DOCKER_NETWORK:-endercloud}
+include:
+  - path: ../compose.agent.yml
+    env_file: "$DEPLOYMENT_DIRECTORY/worker.env"
 EOF
 }
 
 write_master_environment() {
-  local password
+  local password redis_proxy_password
   password="$(random_password)"
+  redis_proxy_password="$(random_password)$(random_password)"
 
   {
     printf 'POSTGRES_DB=%s\n' "$database_name"
@@ -485,6 +363,13 @@ write_master_environment() {
     printf 'ORCHESTRATOR_PUBLISH_ADDRESS=%s\n' "$master_address"
     printf 'ORCHESTRATOR_PUBLISH_PORT=%s\n' "$master_port"
     printf 'DASHBOARD_PUBLISH_PORT=%s\n' "$dashboard_port"
+    printf 'DASHBOARD_PUBLIC_URL=http://127.0.0.1:%s\n' "$dashboard_port"
+    printf 'AUTH_SECRET=%s\n' "$(random_password)$(random_password)"
+    printf 'CREDENTIAL_ENCRYPTION_KEY=%s\n' "$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
+    printf 'REDIS_PUBLISHER_PASSWORD=%s\n' "$(random_password)$(random_password)"
+    printf 'REDIS_PROXY_PASSWORD=%s\n' "$redis_proxy_password"
+    printf 'REDIS_PUBLISH_ADDRESS=%s\n' "$master_address"
+    printf 'PROXY_REDIS_URL=redis://proxy:%s@%s:6379\n' "$redis_proxy_password" "$master_address"
   } > "$DEPLOYMENT_DIRECTORY/master.env"
 }
 
@@ -505,7 +390,8 @@ write_worker_environment() {
     printf 'AGENT_RUNTIME_HOST_DIRECTORY=%s\n' "$agent_runtime_directory"
     printf 'AGENT_PUBLISH_ADDRESS=%s\n' "$agent_bind_address"
     printf 'AGENT_PUBLISH_PORT=%s\n' "$agent_port"
-    printf 'AGENT_DOCKER_NETWORK=endercloud\n'
+    printf 'AGENT_DOCKER_NETWORK=endercloud-%s\n' "$agent_id"
+    printf 'AGENT_CREDENTIALS_FILE=%s/agent.env\n' "$DEPLOYMENT_DIRECTORY"
   } > "$DEPLOYMENT_DIRECTORY/worker.env"
 }
 
@@ -521,11 +407,22 @@ validate_compose() {
 
 start_services() {
   if [[ "$role" == "master" || "$role" == "both" ]]; then
-    "${docker_command[@]}" compose --env-file "$DEPLOYMENT_DIRECTORY/master.env" -f "$DEPLOYMENT_DIRECTORY/compose.master.yml" up --build -d
+    "${docker_command[@]}" compose --env-file "$DEPLOYMENT_DIRECTORY/master.env" -f "$DEPLOYMENT_DIRECTORY/compose.master.yml" up --build --wait
+    local administrator password
+    administrator="$(ask_non_empty "Email de l'administrateur local" "admin@example.com")"
+    read -r -s -p 'Mot de passe administrateur (14 à 128 caractères): ' password
+    printf '\n'
+    [[ ${#password} -ge 14 && ${#password} -le 128 ]] || error "Longueur du mot de passe invalide. Utilisez la commande locale admin:create pour reprendre."
+    printf '%s' "$password" | "${docker_command[@]}" compose --env-file "$DEPLOYMENT_DIRECTORY/master.env" -f "$DEPLOYMENT_DIRECTORY/compose.master.yml" exec -T orchestrator bun src/security/cli.ts admin:create "$administrator"
+    unset password
+    if [[ "$role" == "both" ]]; then
+      "${docker_command[@]}" compose --env-file "$DEPLOYMENT_DIRECTORY/master.env" -f "$DEPLOYMENT_DIRECTORY/compose.master.yml" exec -T orchestrator bun src/security/cli.ts agent:provision "$agent_id" --stdout > "$DEPLOYMENT_DIRECTORY/agent.env"
+    fi
   fi
-
   if [[ "$role" == "worker" || "$role" == "both" ]]; then
-    "${docker_command[@]}" compose --env-file "$DEPLOYMENT_DIRECTORY/worker.env" -f "$DEPLOYMENT_DIRECTORY/compose.worker.yml" up --build -d
+    [[ -s "$DEPLOYMENT_DIRECTORY/agent.env" ]] || error "Copiez les identifiants provisionnés par agent:provision dans $DEPLOYMENT_DIRECTORY/agent.env, puis démarrez le worker."
+    chmod 600 "$DEPLOYMENT_DIRECTORY/agent.env"
+    "${docker_command[@]}" compose --env-file "$DEPLOYMENT_DIRECTORY/worker.env" -f "$DEPLOYMENT_DIRECTORY/compose.worker.yml" up --build --wait
   fi
 }
 
@@ -557,6 +454,9 @@ main() {
     write_worker_environment
   fi
 
+  if [[ "$role" == "worker" ]]; then
+    info "Provisionnez cet agent sur le master et copiez le fichier privé vers $DEPLOYMENT_DIRECTORY/agent.env avant de le démarrer."
+  fi
   validate_compose
 
   section "Configuration créée"

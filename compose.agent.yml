@@ -1,11 +1,9 @@
 name: endercloud-agent
-
 services:
   agent:
     build:
       context: .
       dockerfile: apps/agent/Dockerfile
-
     restart: unless-stopped
     init: true
     stop_grace_period: 20s
@@ -35,29 +33,33 @@ services:
       AGENT_RUNTIME_DIRECTORY: /data/runtime
       AGENT_RUNTIME_HOST_DIRECTORY: ${AGENT_RUNTIME_HOST_DIRECTORY:?Set the absolute runtime path seen by Docker}
       AGENT_TEMPLATE_CACHE_DIRECTORY: /data/template-cache
+      AGENT_TEMPLATE_DOWNLOAD_TIMEOUT: ${AGENT_TEMPLATE_DOWNLOAD_TIMEOUT:-5m}
+      AGENT_TEMPLATE_IDLE_TIMEOUT: ${AGENT_TEMPLATE_IDLE_TIMEOUT:-30s}
+      AGENT_TEMPLATE_MAX_EXPANDED_BYTES: ${AGENT_TEMPLATE_MAX_EXPANDED_BYTES:-8589934592}
+      AGENT_TEMPLATE_MAX_ENTRIES: ${AGENT_TEMPLATE_MAX_ENTRIES:-100000}
+      AGENT_TEMPLATE_DOWNLOAD_CONCURRENCY: ${AGENT_TEMPLATE_DOWNLOAD_CONCURRENCY:-4}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${AGENT_RUNTIME_HOST_DIRECTORY:?Set the runtime path seen by Docker}:/data/runtime
+      - ${AGENT_RUNTIME_LOCAL_DIRECTORY:-./runtime}:/data/runtime
       - agent-template-cache:/data/template-cache
     ports:
-      - "${AGENT_PUBLISH_ADDRESS:?Set the private bind address}:${AGENT_PUBLISH_PORT:-8090}:8090"
+      - ${AGENT_PUBLISH_ADDRESS:?Set the private bind address}:${AGENT_PUBLISH_PORT:-8090}:8090
     healthcheck:
       test:
-        [
-          "CMD",
-          "bun",
-          "-e",
-          "const r=await fetch('http://localhost:8090/health/ready');process.exit(r.ok?0:1)",
-        ]
+        - CMD
+        - bun
+        - -e
+        - const r=await fetch('http://localhost:8090/health/ready');process.exit(r.ok?0:1)
       interval: 10s
       timeout: 3s
       retries: 12
     networks:
       - endercloud
-
+    env_file:
+      - path: ${AGENT_CREDENTIALS_FILE:-./deployment/agent.env}
+        required: false
 volumes:
-  agent-template-cache:
-
+  agent-template-cache: null
 networks:
   endercloud:
     name: ${AGENT_DOCKER_NETWORK:-endercloud}

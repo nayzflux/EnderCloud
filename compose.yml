@@ -1,6 +1,5 @@
 name: endercloud
-
-x-service-defaults: &service-defaults
+x-service-defaults: &a1
   restart: unless-stopped
   init: true
   stop_grace_period: 20s
@@ -11,10 +10,9 @@ x-service-defaults: &service-defaults
       max-file: "5"
   networks:
     - endercloud
-
 services:
   postgres:
-    <<: *service-defaults
+    <<: *a1
     image: postgres:18.1-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-endercloud}
@@ -23,29 +21,41 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/18/docker
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test:
+        - CMD-SHELL
+        - pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}
       interval: 5s
       timeout: 3s
       retries: 20
-
   redis:
-    <<: *service-defaults
+    <<: *a1
     image: redis:8.4.0-alpine
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    command:
+      - sh
+      - /etc/endercloud/start-redis.sh
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+        - CMD-SHELL
+        - REDISCLI_AUTH=$$REDIS_PUBLISHER_PASSWORD redis-cli --user orchestrator ping
       interval: 5s
       timeout: 3s
       retries: 20
-
+    user: redis
+    environment:
+      REDIS_PUBLISHER_PASSWORD: ${REDIS_PUBLISHER_PASSWORD:?Set REDIS_PUBLISHER_PASSWORD}
+      REDIS_PROXY_PASSWORD: ${REDIS_PROXY_PASSWORD:?Set REDIS_PROXY_PASSWORD}
+    volumes:
+      - ./deployment-tools/start-redis.sh:/etc/endercloud/start-redis.sh:ro
+    ports:
+      - ${REDIS_PUBLISH_ADDRESS:-127.0.0.1}:${REDIS_PUBLISH_PORT:-6379}:6379
   orchestrator:
-    <<: *service-defaults
+    <<: *a1
     build:
       context: .
       dockerfile: apps/orchestrator/Dockerfile
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://orchestrator:${REDIS_PUBLISHER_PASSWORD}@redis:6379
       ORCHESTRATOR_LISTEN_PORT: 8080
       ORCHESTRATOR_GROUPS_DIRECTORY: /data/groups
       ORCHESTRATOR_TEMPLATES_DIRECTORY: /data/templates
@@ -60,36 +70,50 @@ services:
       HOST_OFFLINE_TIMEOUT: ${HOST_OFFLINE_TIMEOUT:-30s}
       EXECUTOR_PROBE_TIMEOUT: ${EXECUTOR_PROBE_TIMEOUT:-3s}
       EXECUTOR_OPERATION_TIMEOUT: ${EXECUTOR_OPERATION_TIMEOUT:-10m}
+      AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?Set CREDENTIAL_ENCRYPTION_KEY}
+      DASHBOARD_PUBLIC_URL: ${DASHBOARD_PUBLIC_URL:?Set DASHBOARD_PUBLIC_URL}
+      NODE_ENV: production
+      PROXY_REDIS_URL: ${PROXY_REDIS_URL:-redis://proxy:${REDIS_PROXY_PASSWORD}@redis:6379}
+      PAPER_HEALTH_LEASE: ${PAPER_HEALTH_LEASE:-30s}
+      PAPER_HEALTH_CONFIRMATION: ${PAPER_HEALTH_CONFIRMATION:-30s}
+      INCIDENT_BLOCKED_AFTER: ${INCIDENT_BLOCKED_AFTER:-30s}
+      INCIDENT_FAILURE_THRESHOLD: ${INCIDENT_FAILURE_THRESHOLD:-3}
+      INCIDENT_FAILURE_WINDOW: ${INCIDENT_FAILURE_WINDOW:-15m}
+      INCIDENT_HOST_RECOVERY_AFTER: ${INCIDENT_HOST_RECOVERY_AFTER:-1m}
+      INCIDENT_HISTORY_RETENTION: ${INCIDENT_HISTORY_RETENTION:-90d}
     volumes:
       - ./groups:/data/groups:ro
       - ./templates:/data/templates:ro
     ports:
-      - "${ORCHESTRATOR_PUBLISH_ADDRESS:-127.0.0.1}:${ORCHESTRATOR_PUBLISH_PORT:-8080}:8080"
+      - ${ORCHESTRATOR_PUBLISH_ADDRESS:-127.0.0.1}:${ORCHESTRATOR_PUBLISH_PORT:-8080}:8080
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "bun", "-e", "const r=await fetch('http://localhost:8080/health/ready');process.exit(r.ok?0:1)"]
+      test:
+        - CMD
+        - bun
+        - -e
+        - const r=await fetch('http://localhost:8080/health/ready');process.exit(r.ok?0:1)
       interval: 10s
       timeout: 3s
       retries: 12
-
   agent:
-    <<: *service-defaults
+    <<: *a1
     build:
       context: .
       dockerfile: apps/agent/Dockerfile
-
     environment:
-      AGENT_ID: ${AGENT_ID:?Set a stable AGENT_ID}
+      AGENT_ID: ${AGENT_ID:-primary-host}
       AGENT_VERSION: ${AGENT_VERSION:-0.1.0}
       AGENT_LISTEN_PORT: 8090
       AGENT_ADVERTISED_CONTROL_URL: http://agent:8090
-      AGENT_ADVERTISED_GAME_ADDRESS: ${AGENT_ADVERTISED_GAME_ADDRESS:?Set the game address}
-      AGENT_ALLOCATABLE_CPU: ${AGENT_ALLOCATABLE_CPU:?Set allocatable vCPU}
-      AGENT_ALLOCATABLE_MEMORY_BYTES: ${AGENT_ALLOCATABLE_MEMORY_BYTES:?Set allocatable memory}
+      AGENT_ADVERTISED_GAME_ADDRESS: ${AGENT_ADVERTISED_GAME_ADDRESS:-127.0.0.1}
+      AGENT_ALLOCATABLE_CPU: ${AGENT_ALLOCATABLE_CPU:-4}
+      AGENT_ALLOCATABLE_MEMORY_BYTES: ${AGENT_ALLOCATABLE_MEMORY_BYTES:-8589934592}
       AGENT_HEARTBEAT_INTERVAL: ${AGENT_HEARTBEAT_INTERVAL:-5s}
       AGENT_GAME_PORT_START: ${AGENT_GAME_PORT_START:-25565}
       AGENT_GAME_PORT_END: ${AGENT_GAME_PORT_END:-25664}
@@ -101,44 +125,60 @@ services:
       AGENT_DOCKER_SOCKET: /var/run/docker.sock
       AGENT_DOCKER_NETWORK: endercloud
       AGENT_RUNTIME_DIRECTORY: /data/runtime
-      AGENT_RUNTIME_HOST_DIRECTORY: ${AGENT_RUNTIME_HOST_DIRECTORY:?Set the runtime path seen by Docker}
+      AGENT_RUNTIME_HOST_DIRECTORY: ${AGENT_RUNTIME_HOST_DIRECTORY:-}
       AGENT_TEMPLATE_CACHE_DIRECTORY: /data/template-cache
+      AGENT_TEMPLATE_DOWNLOAD_TIMEOUT: ${AGENT_TEMPLATE_DOWNLOAD_TIMEOUT:-5m}
+      AGENT_TEMPLATE_IDLE_TIMEOUT: ${AGENT_TEMPLATE_IDLE_TIMEOUT:-30s}
+      AGENT_TEMPLATE_MAX_EXPANDED_BYTES: ${AGENT_TEMPLATE_MAX_EXPANDED_BYTES:-8589934592}
+      AGENT_TEMPLATE_MAX_ENTRIES: ${AGENT_TEMPLATE_MAX_ENTRIES:-100000}
+      AGENT_TEMPLATE_DOWNLOAD_CONCURRENCY: ${AGENT_TEMPLATE_DOWNLOAD_CONCURRENCY:-4}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${AGENT_RUNTIME_HOST_DIRECTORY:?Set the runtime path seen by Docker}:/data/runtime
+      - ${AGENT_RUNTIME_LOCAL_DIRECTORY:-./runtime}:/data/runtime
       - agent-template-cache:/data/template-cache
     depends_on:
       orchestrator:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "bun", "-e", "const r=await fetch('http://localhost:8090/health/ready');process.exit(r.ok?0:1)"]
+      test:
+        - CMD
+        - bun
+        - -e
+        - const r=await fetch('http://localhost:8090/health/ready');process.exit(r.ok?0:1)
       interval: 10s
       timeout: 3s
       retries: 12
-
+    profiles:
+      - agents
+    env_file:
+      - path: ${AGENT_CREDENTIALS_FILE:-./deployment/agent.env}
+        required: false
   dashboard:
-    <<: *service-defaults
+    <<: *a1
     build:
       context: .
       dockerfile: apps/dashboard/Dockerfile
     environment:
       ORCHESTRATOR_URL: http://orchestrator:8080
       DASHBOARD_MOCK_DATA: "false"
+      DASHBOARD_PUBLIC_URL: ${DASHBOARD_PUBLIC_URL}
     ports:
-      - "${DASHBOARD_PUBLISH_ADDRESS:-127.0.0.1}:${DASHBOARD_PUBLISH_PORT:-3000}:3000"
+      - ${DASHBOARD_PUBLISH_ADDRESS:-127.0.0.1}:${DASHBOARD_PUBLISH_PORT:-3000}:3000
     depends_on:
       orchestrator:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "bun", "-e", "const r=await fetch('http://localhost:3000');process.exit(r.ok?0:1)"]
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://localhost:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
       interval: 10s
       timeout: 3s
       retries: 12
-
 volumes:
-  postgres-data:
-  agent-template-cache:
-
+  postgres-data: null
+  agent-template-cache: null
 networks:
   endercloud:
     name: endercloud

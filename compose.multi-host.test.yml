@@ -1,11 +1,9 @@
 name: endercloud
-
 services:
   agent-secondary:
     build:
       context: .
       dockerfile: apps/agent/Dockerfile
-
     restart: unless-stopped
     init: true
     stop_grace_period: 20s
@@ -34,7 +32,7 @@ services:
       AGENT_TEMPLATE_CACHE_DIRECTORY: /data/template-cache
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./runtime-secondary:/data/runtime
+      - ${SECONDARY_RUNTIME_HOST_ROOT:?Set secondary runtime path}:/data/runtime
       - secondary-agent-template-cache:/data/template-cache
     expose:
       - "8090"
@@ -43,17 +41,19 @@ services:
         condition: service_healthy
     healthcheck:
       test:
-        [
-          "CMD",
-          "bun",
-          "-e",
-          "const r=await fetch('http://localhost:8090/health/ready');process.exit(r.ok?0:1)",
-        ]
+        - CMD
+        - bun
+        - -e
+        - const r=await fetch('http://localhost:8090/health/ready');process.exit(r.ok?0:1)
       interval: 10s
       timeout: 3s
       retries: 12
     networks:
       - endercloud
-
+    env_file:
+      - path: ${SECONDARY_AGENT_CREDENTIALS_FILE:-./deployment/secondary-agent.env}
+        required: false
+    profiles:
+      - agents
 volumes:
-  secondary-agent-template-cache:
+  secondary-agent-template-cache: null
