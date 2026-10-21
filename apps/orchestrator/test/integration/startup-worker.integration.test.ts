@@ -38,9 +38,12 @@ const groupId = "startup-group";
 const variantId = "startup-variant";
 const hostId = "startup-host";
 
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 2_000): Promise<void> {
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 2_000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (!await predicate()) {
+  while (!(await predicate())) {
     if (Date.now() >= deadline) throw new Error("Timed out waiting for startup worker state");
     await Bun.sleep(5);
   }
@@ -78,9 +81,13 @@ async function seedBase(): Promise<void> {
     runtimePatch: runtime,
     fileSummary: { fileCount: 0, totalBytes: 0, roots: [] },
   });
-  await db.insert(serverVariants).values({ id: variantId, revision: 1, checksum: "a".repeat(64), runtimeSpec: runtime });
+  await db
+    .insert(serverVariants)
+    .values({ id: variantId, revision: 1, checksum: "a".repeat(64), runtimeSpec: runtime });
   await db.insert(serverVariantLayers).values({ variantId, layerId: variantId, ordinal: 0 });
-  await db.insert(serverGroupVariants).values({ groupId, variantId, enabled: true, selectionWeight: 100 });
+  await db
+    .insert(serverGroupVariants)
+    .values({ groupId, variantId, enabled: true, selectionWeight: 100 });
   await db.insert(executionHosts).values({
     id: hostId,
     controlUrl: "http://startup-host:8090",
@@ -114,9 +121,19 @@ async function seedCreates(count: number, state: "PENDING" | "RUNNING" = "PENDIN
       id: `startup-command-${index}`,
       instanceId,
       operation: "CREATE",
-      payload: { version: 1, instanceType: "paper", variantRevision: 1, variantChecksum: "checksum",
-        runtime: { image: "itzg/minecraft-server:java25", cpu: 1, memoryBytes: 1024 ** 3, environment: {} },
-        templateLayers: [{ id: variantId, checksum: "a".repeat(64) }] },
+      payload: {
+        version: 1,
+        instanceType: "paper",
+        variantRevision: 1,
+        variantChecksum: "checksum",
+        runtime: {
+          image: "itzg/minecraft-server:java25",
+          cpu: 1,
+          memoryBytes: 1024 ** 3,
+          environment: {},
+        },
+        templateLayers: [{ id: variantId, checksum: "a".repeat(64) }],
+      },
       state,
       createdAt: new Date(createdAt + index * 100),
       ...(state === "RUNNING" ? { startedAt: new Date() } : {}),
@@ -145,34 +162,67 @@ describe("durable instance startup", () => {
     if (container) await container.stop();
   });
 
-  test.each(["HOST_OFFLINE", "HOST_MAINTENANCE"])("probe recovers after %s without consuming a variant retry", async reason => {
-    await seedCreates(1);
-    await db.update(serverInstances).set({ lifecycleState: "FAILED", failureReason: reason });
-    await db.insert(variantStartStates).values({ groupId, variantId, variantRevision: 1,
-      state: "PROBING", failureCount: 1, probeInstanceId: "startup-instance-0",
-      probeDeadline: new Date(Date.now() + 90_000),
-    });
-    const policy = new VariantStartController(db, {} as Executor, {
-      instanceStartRetryLimit: 5, instanceStartRetryBaseDelayMs: 1_000,
-    }, logger);
-    await policy.reconcile();
-    expect((await policy.getStatus(groupId, variantId, 1))?.state).toBe("BACKING_OFF");
-    expect((await policy.getStatus(groupId, variantId, 1))?.failureCount).toBe(1);
-    await db.update(variantStartStates).set({ nextRetryAt: new Date(0) });
-    expect(await new VariantSelector(db).select(groupId)).not.toBeNull();
-  });
+  test.each(["HOST_OFFLINE", "HOST_MAINTENANCE"])(
+    "probe recovers after %s without consuming a variant retry",
+    async (reason) => {
+      await seedCreates(1);
+      await db.update(serverInstances).set({ lifecycleState: "FAILED", failureReason: reason });
+      await db.insert(variantStartStates).values({
+        groupId,
+        variantId,
+        variantRevision: 1,
+        state: "PROBING",
+        failureCount: 1,
+        probeInstanceId: "startup-instance-0",
+        probeDeadline: new Date(Date.now() + 90_000),
+      });
+      const policy = new VariantStartController(
+        db,
+        {} as Executor,
+        {
+          instanceStartRetryLimit: 5,
+          instanceStartRetryBaseDelayMs: 1_000,
+        },
+        logger,
+      );
+      await policy.reconcile();
+      expect((await policy.getStatus(groupId, variantId, 1))?.state).toBe("BACKING_OFF");
+      expect((await policy.getStatus(groupId, variantId, 1))?.failureCount).toBe(1);
+      await db.update(variantStartStates).set({ nextRetryAt: new Date(0) });
+      expect(await new VariantSelector(db).select(groupId)).not.toBeNull();
+    },
+  );
 
   test("Redis outage cannot lose or double-count a startup failure", async () => {
     await seedCreates(1);
-    const policy = new VariantStartController(db, {} as Executor, {
-      instanceStartRetryLimit: 5, instanceStartRetryBaseDelayMs: 1_000,
-    }, logger);
-    const controller = new RealInstanceController(db, {
-      stopInstance: async () => {}, deleteInstance: async () => {},
-    } as unknown as Executor, new VariantSelector(db), {
-      publishRegistry: async () => { throw new Error("Redis unavailable"); },
-    } as unknown as RedisEventBus, { cancelForInstance: async () => {} } as unknown as TransferService,
-    {} as HubRouter, logger, undefined, undefined, policy);
+    const policy = new VariantStartController(
+      db,
+      {} as Executor,
+      {
+        instanceStartRetryLimit: 5,
+        instanceStartRetryBaseDelayMs: 1_000,
+      },
+      logger,
+    );
+    const controller = new RealInstanceController(
+      db,
+      {
+        stopInstance: async () => {},
+        deleteInstance: async () => {},
+      } as unknown as Executor,
+      new VariantSelector(db),
+      {
+        publishRegistry: async () => {
+          throw new Error("Redis unavailable");
+        },
+      } as unknown as RedisEventBus,
+      { cancelForInstance: async () => {} } as unknown as TransferService,
+      {} as HubRouter,
+      logger,
+      undefined,
+      undefined,
+      policy,
+    );
     expect(await controller.failInstance("startup-instance-0", "CREATE_FAILED")).toBe(true);
     expect((await policy.getStatus(groupId, variantId, 1))?.failureCount).toBe(1);
     const pendingCount = (await db.select().from(registryOutbox)).length;
@@ -180,12 +230,14 @@ describe("durable instance startup", () => {
     expect((await policy.getStatus(groupId, variantId, 1))?.failureCount).toBe(1);
     const first = await db.select().from(registryOutbox);
     expect(first.length).toBe(pendingCount);
-    expect(first.some(event => event.type === "SERVER_UNREGISTERED")).toBe(true);
+    expect(first.some((event) => event.type === "SERVER_UNREGISTERED")).toBe(true);
     let calls = 0;
-    const publisher = new RegistryOutbox(db, { publishRegistry: async () => {
-      calls += 1;
-      if (calls === 1) throw new Error("Redis unavailable");
-    } });
+    const publisher = new RegistryOutbox(db, {
+      publishRegistry: async () => {
+        calls += 1;
+        if (calls === 1) throw new Error("Redis unavailable");
+      },
+    });
     await expect(publisher.tick()).rejects.toThrow("Redis unavailable");
     expect((await db.select().from(registryOutbox))[0]?.publishedAt).toBeNull();
     await db.update(registryOutbox).set({ nextAttemptAt: new Date(0) });
@@ -206,7 +258,9 @@ describe("durable instance startup", () => {
         maximumActive = Math.max(maximumActive, active);
         await new Promise<void>((resolve) => releases.push(resolve));
         active -= 1;
-        await db.update(commands).set({ state: "SUCCEEDED", completedAt: new Date() })
+        await db
+          .update(commands)
+          .set({ state: "SUCCEEDED", completedAt: new Date() })
           .where(eq(commands.id, commandId));
       },
     } as unknown as InstanceController;
@@ -224,7 +278,9 @@ describe("durable instance startup", () => {
     }
     releases.splice(0).forEach((release) => release());
     await waitFor(async () => {
-      const rows = await db.select({ state: commands.state }).from(commands)
+      const rows = await db
+        .select({ state: commands.state })
+        .from(commands)
         .where(eq(commands.operation, "CREATE"));
       return rows.every((row) => row.state === "SUCCEEDED");
     });
@@ -257,7 +313,9 @@ describe("durable instance startup", () => {
           });
         }
         active -= 1;
-        await db.update(commands).set({ state: "SUCCEEDED", completedAt: new Date() })
+        await db
+          .update(commands)
+          .set({ state: "SUCCEEDED", completedAt: new Date() })
           .where(eq(commands.id, commandId));
       },
     } as unknown as InstanceController;
@@ -267,7 +325,9 @@ describe("durable instance startup", () => {
     const startedBeforeRelease = started.length;
     releaseFirst?.();
     await waitFor(async () => {
-      const rows = await db.select({ state: commands.state }).from(commands)
+      const rows = await db
+        .select({ state: commands.state })
+        .from(commands)
         .where(eq(commands.operation, "CREATE"));
       return rows.every((row) => row.state === "SUCCEEDED");
     });
@@ -276,6 +336,83 @@ describe("durable instance startup", () => {
     expect(startedBeforeRelease).toBe(1);
     expect(maximumActive).toBe(1);
   });
+
+  test.each(["success", "failure"])(
+    "SQL outage after remote %s preserves the command for idempotent replay",
+    async (outcome) => {
+      let rejectPersistence = false;
+      let createCalls = 0;
+      const failingDatabase = new Proxy(db, {
+        get(target, property, receiver) {
+          if (property === "transaction")
+            return (...args: Parameters<typeof db.transaction>) => {
+              if (rejectPersistence) {
+                rejectPersistence = false;
+                return Promise.reject(new Error("SQL unavailable after remote CREATE"));
+              }
+              return target.transaction(...args);
+            };
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      const executor: Executor = {
+        createInstance: async () => {
+          createCalls += 1;
+          if (createCalls === 1) rejectPersistence = true;
+          if (outcome === "failure") throw new Error("Image refuses to start");
+          return {
+            containerId: "same-container",
+            runtimePath: "/runtime/replay",
+            endpoint: "10.0.0.10:25565",
+          };
+        },
+        stopInstance: async () => {},
+        deleteInstance: async () => {},
+        deleteOrphanInstance: async () => ({
+          containerRemoved: true,
+          runtimeDirectoryRemoved: true,
+        }),
+        inspectInstance: async () => ({ exists: false, running: false }),
+        listManagedInstances: async () => [],
+      };
+      const controller = new RealInstanceController(
+        failingDatabase,
+        executor,
+        new VariantSelector(db),
+        {} as RedisEventBus,
+        {} as TransferService,
+        {} as HubRouter,
+        logger,
+        undefined,
+        new HostService(db),
+      );
+      const instanceId = (await controller.createWarm(groupId))!;
+      const [command] = await db.select().from(commands).where(eq(commands.instanceId, instanceId));
+      await db.update(commands).set({ state: "RUNNING" }).where(eq(commands.id, command!.id));
+      await expect(controller.executeCreate(instanceId, command!.id)).rejects.toThrow(
+        "SQL unavailable after remote CREATE",
+      );
+      expect(
+        (await db.select().from(serverInstances).where(eq(serverInstances.id, instanceId)))[0]
+          ?.lifecycleState,
+      ).toBe("CREATING");
+      expect((await db.select().from(commands).where(eq(commands.id, command!.id)))[0]?.state).toBe(
+        "RUNNING",
+      );
+      expect(await db.select().from(variantStartStates)).toHaveLength(0);
+      await controller.executeCreate(instanceId, command!.id);
+      const [instance] = await db
+        .select()
+        .from(serverInstances)
+        .where(eq(serverInstances.id, instanceId));
+      expect(instance?.lifecycleState).toBe(outcome === "success" ? "STARTING" : "FAILED");
+      if (outcome === "success") expect(instance?.containerId).toBe("same-container");
+      expect((await db.select().from(commands).where(eq(commands.id, command!.id)))[0]?.state).toBe(
+        outcome === "success" ? "SUCCEEDED" : "FAILED",
+      );
+      expect(createCalls).toBe(2);
+    },
+  );
 
   test("a queued CREATE keeps its reserved runtime and layers after a variant update", async () => {
     const received: InstanceSpec[] = [];
@@ -302,18 +439,22 @@ describe("durable instance startup", () => {
     );
     const instanceId = await controller.createWarm(groupId);
     expect(instanceId).not.toBeNull();
-    const command = await db.select({ id: commands.id })
+    const command = await db
+      .select({ id: commands.id })
       .from(commands)
       .where(eq(commands.instanceId, instanceId!));
-    await db.update(serverVariants).set({
-      revision: 2,
-      runtimeSpec: {
-        image: "itzg/minecraft-server:java25",
-        cpu: 2,
-        memoryBytes: 4 * 1024 ** 3,
-        environment: {},
-      },
-    }).where(eq(serverVariants.id, variantId));
+    await db
+      .update(serverVariants)
+      .set({
+        revision: 2,
+        runtimeSpec: {
+          image: "itzg/minecraft-server:java25",
+          cpu: 2,
+          memoryBytes: 4 * 1024 ** 3,
+          environment: {},
+        },
+      })
+      .where(eq(serverVariants.id, variantId));
     await controller.executeCreate(instanceId!, command[0]!.id);
 
     expect(received).toHaveLength(1);
@@ -322,47 +463,60 @@ describe("durable instance startup", () => {
     expect(received[0]?.templateLayers[0]?.checksum).toBe("a".repeat(64));
   });
 
-  test.each(["changed-layer", "disabled-group", "invalid-runtime"])("a frozen CREATE is refused for %s", async (cause) => {
-    let createCalls = 0;
-    const executor = {
-      createInstance: async () => {
-        createCalls += 1;
-        throw new Error("Unavailable template must not reach the agent");
-      },
-    } as unknown as Executor;
-    const controller = new RealInstanceController(
-      db,
-      executor,
-      new VariantSelector(db),
-      {} as RedisEventBus,
-      {} as TransferService,
-      {} as HubRouter,
-      logger,
-      undefined,
-      new HostService(db),
-    );
-    const instanceId = await controller.createWarm(groupId);
-    const command = await db.select({ id: commands.id })
-      .from(commands)
-      .where(eq(commands.instanceId, instanceId!));
-    if (cause === "changed-layer") await db.update(templateLayers).set({ checksum: "changed-layer" })
-      .where(eq(templateLayers.id, variantId));
-    if (cause === "disabled-group") await db.update(serverGroups).set({ enabled: false }).where(eq(serverGroups.id, groupId));
-    if (cause === "invalid-runtime") await db.update(commands).set({ payload: { version: 1, runtime: { cpu: -1 } } }).where(eq(commands.id, command[0]!.id));
+  test.each(["changed-layer", "disabled-group", "invalid-runtime"])(
+    "a frozen CREATE is refused for %s",
+    async (cause) => {
+      let createCalls = 0;
+      const executor = {
+        createInstance: async () => {
+          createCalls += 1;
+          throw new Error("Unavailable template must not reach the agent");
+        },
+      } as unknown as Executor;
+      const controller = new RealInstanceController(
+        db,
+        executor,
+        new VariantSelector(db),
+        {} as RedisEventBus,
+        {} as TransferService,
+        {} as HubRouter,
+        logger,
+        undefined,
+        new HostService(db),
+      );
+      const instanceId = await controller.createWarm(groupId);
+      const command = await db
+        .select({ id: commands.id })
+        .from(commands)
+        .where(eq(commands.instanceId, instanceId!));
+      if (cause === "changed-layer")
+        await db
+          .update(templateLayers)
+          .set({ checksum: "changed-layer" })
+          .where(eq(templateLayers.id, variantId));
+      if (cause === "disabled-group")
+        await db.update(serverGroups).set({ enabled: false }).where(eq(serverGroups.id, groupId));
+      if (cause === "invalid-runtime")
+        await db
+          .update(commands)
+          .set({ payload: { version: 1, runtime: { cpu: -1 } } })
+          .where(eq(commands.id, command[0]!.id));
 
-    await controller.executeCreate(instanceId!, command[0]!.id);
+      await controller.executeCreate(instanceId!, command[0]!.id);
 
-    expect(createCalls).toBe(0);
-    const commandState = await db.select({ state: commands.state }).from(commands)
-      .where(eq(commands.id, command[0]!.id));
-    expect(commandState[0]?.state).toBe("CANCELLED");
-  });
+      expect(createCalls).toBe(0);
+      const commandState = await db
+        .select({ state: commands.state })
+        .from(commands)
+        .where(eq(commands.id, command[0]!.id));
+      expect(commandState[0]?.state).toBe("CANCELLED");
+    },
+  );
 
   test("a CREATE without a frozen snapshot is refused", async () => {
     await seedCreates(1);
     await db.update(commands).set({ payload: null }).where(eq(commands.id, "startup-command-0"));
-    await db.update(serverVariants).set({ revision: 2 })
-      .where(eq(serverVariants.id, variantId));
+    await db.update(serverVariants).set({ revision: 2 }).where(eq(serverVariants.id, variantId));
     const received: InstanceSpec[] = [];
     const executor = {
       createInstance: async (spec: InstanceSpec) => {
@@ -383,9 +537,12 @@ describe("durable instance startup", () => {
     await controller.executeCreate("startup-instance-0", "startup-command-0");
 
     expect(received).toHaveLength(0);
-    const command = await db.select({ state: commands.state }).from(commands)
+    const command = await db
+      .select({ state: commands.state })
+      .from(commands)
       .where(eq(commands.id, "startup-command-0"));
-    const instance = await db.select({ lifecycle: serverInstances.lifecycleState })
+    const instance = await db
+      .select({ lifecycle: serverInstances.lifecycleState })
       .from(serverInstances)
       .where(eq(serverInstances.id, "startup-instance-0"));
     expect(command[0]?.state).toBe("CANCELLED");
@@ -397,18 +554,25 @@ describe("durable instance startup", () => {
     let release: (() => void) | undefined;
     const executor = { cancelPending: () => release?.() } as Executor;
     const instances = {
-      executeCreate: async () => new Promise<void>((resolve) => { release = resolve; }),
+      executeCreate: async () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
     } as unknown as InstanceController;
     const worker = new InstanceStartWorker(db, instances, executor, logger, 1);
 
     expect(await worker.recoverInterrupted()).toBe(2);
     await worker.tick();
-    await waitFor(async () => (await db.select().from(commands)
-      .where(eq(commands.state, "RUNNING"))).length === 1);
+    await waitFor(
+      async () =>
+        (await db.select().from(commands).where(eq(commands.state, "RUNNING"))).length === 1,
+    );
     await worker.stop();
 
-    const rows = await db.select({ state: commands.state, startedAt: commands.startedAt })
-      .from(commands).orderBy(asc(commands.createdAt));
+    const rows = await db
+      .select({ state: commands.state, startedAt: commands.startedAt })
+      .from(commands)
+      .orderBy(asc(commands.createdAt));
     expect(rows.every((row) => row.state === "PENDING" && row.startedAt === null)).toBe(true);
   });
 
@@ -416,14 +580,24 @@ describe("durable instance startup", () => {
     const stopped: string[] = [];
     const deleted: string[] = [];
     const executor = {
-      getInstanceLogs: async () => Array.from({ length: 300 }, (_, index) => `${index}:${"x".repeat(400)}`).join("\n"),
-      stopInstance: async ({ instanceId }: { instanceId: string }) => { stopped.push(instanceId); },
-      deleteInstance: async ({ instanceId }: { instanceId: string }) => { deleted.push(instanceId); },
+      getInstanceLogs: async () =>
+        Array.from({ length: 300 }, (_, index) => `${index}:${"x".repeat(400)}`).join("\n"),
+      stopInstance: async ({ instanceId }: { instanceId: string }) => {
+        stopped.push(instanceId);
+      },
+      deleteInstance: async ({ instanceId }: { instanceId: string }) => {
+        deleted.push(instanceId);
+      },
     } as unknown as Executor;
-    const policy = new VariantStartController(db, executor, {
-      instanceStartRetryLimit: 5,
-      instanceStartRetryBaseDelayMs: 1_000,
-    }, logger);
+    const policy = new VariantStartController(
+      db,
+      executor,
+      {
+        instanceStartRetryLimit: 5,
+        instanceStartRetryBaseDelayMs: 1_000,
+      },
+      logger,
+    );
 
     const delays: number[] = [];
     for (let attempt = 1; attempt <= 6; attempt += 1) {
@@ -438,15 +612,20 @@ describe("durable instance startup", () => {
         availabilityState: "OPEN",
       });
       if (attempt > 1) {
-        await db.update(variantStartStates).set({
-          state: "PROBING",
-          probeInstanceId: instanceId,
-          nextRetryAt: null,
-        }).where(and(
-          eq(variantStartStates.groupId, groupId),
-          eq(variantStartStates.variantId, variantId),
-          eq(variantStartStates.variantRevision, 1),
-        ));
+        await db
+          .update(variantStartStates)
+          .set({
+            state: "PROBING",
+            probeInstanceId: instanceId,
+            nextRetryAt: null,
+          })
+          .where(
+            and(
+              eq(variantStartStates.groupId, groupId),
+              eq(variantStartStates.variantId, variantId),
+              eq(variantStartStates.variantRevision, 1),
+            ),
+          );
       }
       const before = Date.now();
       const status = await policy.recordFailure(instanceId, "STARTUP_TIMEOUT");
@@ -454,13 +633,17 @@ describe("durable instance startup", () => {
       if (attempt < 6) expect(status?.state).toBe("BACKING_OFF");
       else expect(status?.state).toBe("BLOCKED");
       if (attempt < 6) {
-        await db.update(serverInstances).set({ lifecycleState: "STOPPED" })
+        await db
+          .update(serverInstances)
+          .set({ lifecycleState: "STOPPED" })
           .where(eq(serverInstances.id, instanceId));
       }
     }
     expect(delays.map((delay) => Math.round(delay / 1_000))).toEqual([1, 2, 4, 8, 16]);
 
-    const retained = await db.select().from(serverInstances)
+    const retained = await db
+      .select()
+      .from(serverInstances)
       .where(eq(serverInstances.id, "failed-startup-6"));
     expect(retained[0]?.runtimeRetained).toBe(true);
     expect(Buffer.byteLength(retained[0]?.failureLogTail ?? "")).toBeLessThanOrEqual(65_536);
@@ -475,7 +658,9 @@ describe("durable instance startup", () => {
     await policy.reconcile();
     expect(await db.select().from(variantStartStates)).toHaveLength(0);
     expect(deleted).toEqual(["failed-startup-6"]);
-    const cleaned = await db.select().from(serverInstances)
+    const cleaned = await db
+      .select()
+      .from(serverInstances)
       .where(eq(serverInstances.id, "failed-startup-6"));
     expect(cleaned[0]?.lifecycleState).toBe("STOPPED");
   });
@@ -516,17 +701,33 @@ describe("durable instance startup", () => {
       operation: "CREATE",
       state: "PENDING",
     });
-    const policy = new VariantStartController(db, {} as Executor, {
-      instanceStartRetryLimit: 5,
-      instanceStartRetryBaseDelayMs: 1_000,
-    }, logger);
+    const policy = new VariantStartController(
+      db,
+      {} as Executor,
+      {
+        instanceStartRetryLimit: 5,
+        instanceStartRetryBaseDelayMs: 1_000,
+      },
+      logger,
+    );
 
-    expect((await policy.recordFailure("first-concurrent-failure", "CREATE_FAILED"))?.failureCount).toBe(1);
-    expect((await db.select().from(commands)
-      .where(eq(commands.id, "queued-sibling-command")))[0]?.state).toBe("CANCELLED");
-    expect((await db.select().from(serverInstances)
-      .where(eq(serverInstances.id, "queued-sibling-start")))[0]?.lifecycleState).toBe("STOPPED");
-    expect((await policy.recordFailure("running-sibling-failure", "CREATE_FAILED"))?.failureCount).toBe(1);
+    expect(
+      (await policy.recordFailure("first-concurrent-failure", "CREATE_FAILED"))?.failureCount,
+    ).toBe(1);
+    expect(
+      (await db.select().from(commands).where(eq(commands.id, "queued-sibling-command")))[0]?.state,
+    ).toBe("CANCELLED");
+    expect(
+      (
+        await db
+          .select()
+          .from(serverInstances)
+          .where(eq(serverInstances.id, "queued-sibling-start"))
+      )[0]?.lifecycleState,
+    ).toBe("STOPPED");
+    expect(
+      (await policy.recordFailure("running-sibling-failure", "CREATE_FAILED"))?.failureCount,
+    ).toBe(1);
     expect((await db.select().from(variantStartStates))[0]?.failureCount).toBe(1);
   });
 
@@ -561,16 +762,21 @@ describe("durable instance startup", () => {
       lastFailureReason: "CREATE_FAILED",
       lastFailureAt: new Date(),
     });
-    const policy = new VariantStartController(db, {} as Executor, {
-      instanceStartRetryLimit: 5,
-      instanceStartRetryBaseDelayMs: 1_000,
-    }, logger);
+    const policy = new VariantStartController(
+      db,
+      {} as Executor,
+      {
+        instanceStartRetryLimit: 5,
+        instanceStartRetryBaseDelayMs: 1_000,
+      },
+      logger,
+    );
 
     const first = await db.transaction((tx) =>
-      policy.reserveAttempt(tx, groupId, variantId, 1, "startup-probe-one")
+      policy.reserveAttempt(tx, groupId, variantId, 1, "startup-probe-one"),
     );
     const second = await db.transaction((tx) =>
-      policy.reserveAttempt(tx, groupId, variantId, 1, "startup-probe-two")
+      policy.reserveAttempt(tx, groupId, variantId, 1, "startup-probe-two"),
     );
     expect(first).toBe(true);
     expect(second).toBe(false);
@@ -628,16 +834,22 @@ describe("durable instance startup", () => {
         deleted.push(instanceId);
       },
     } as unknown as Executor;
-    const policy = new VariantStartController(db, executor, {
-      instanceStartRetryLimit: 5,
-      instanceStartRetryBaseDelayMs: 1_000,
-    }, logger);
+    const policy = new VariantStartController(
+      db,
+      executor,
+      {
+        instanceStartRetryLimit: 5,
+        instanceStartRetryBaseDelayMs: 1_000,
+      },
+      logger,
+    );
 
     await policy.reconcile();
     expect((await db.select().from(variantStartStates))[0]?.state).toBe("RESETTING");
     expect(await new VariantSelector(db).select(groupId)).toBeNull();
-    expect((await db.select().from(commands)
-      .where(eq(commands.id, "old-revision-command")))[0]?.state).toBe("CANCELLED");
+    expect(
+      (await db.select().from(commands).where(eq(commands.id, "old-revision-command")))[0]?.state,
+    ).toBe("CANCELLED");
     cleanupFails = false;
     await policy.reconcile();
     expect(await db.select().from(variantStartStates)).toHaveLength(0);

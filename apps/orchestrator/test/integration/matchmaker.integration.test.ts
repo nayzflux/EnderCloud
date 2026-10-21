@@ -3,7 +3,24 @@ import { createDatabase, type Database, type SqlClient } from "../../src/db/clie
 import { migrateDatabase } from "../../src/db/migrate.ts";
 import { Matchmaker } from "../../src/modules/matchmaking/matchmaker.ts";
 import { QueueService } from "../../src/modules/matchmaking/queue.ts";
-import { commands as instanceCommands, executionHosts, serverGroups, serverGroupVariants, serverVariantLayers, serverVariants, templateLayers, serverInstances, queueEntries, queueEntryPlayers, gameSessions, sessionPlayers, instancePlayers, transferCommands, events, serverTpsMetrics } from "../../src/db/schema.ts";
+import {
+  commands as instanceCommands,
+  executionHosts,
+  serverGroups,
+  serverGroupVariants,
+  serverVariantLayers,
+  serverVariants,
+  templateLayers,
+  serverInstances,
+  queueEntries,
+  queueEntryPlayers,
+  gameSessions,
+  sessionPlayers,
+  instancePlayers,
+  transferCommands,
+  events,
+  serverTpsMetrics,
+} from "../../src/db/schema.ts";
 import { TransferService } from "../../src/modules/transfers/service.ts";
 import { InstanceController } from "../../src/modules/instances/lifecycle.ts";
 import type { Executor, RuntimeInstance } from "@endercloud/contracts/executor";
@@ -37,7 +54,8 @@ const mockLogger = {
   warn: () => {},
   error: console.error,
   write: () => {},
-  runWithContext: (_context: Readonly<Record<string, unknown>>, operation: () => unknown) => operation(),
+  runWithContext: (_context: Readonly<Record<string, unknown>>, operation: () => unknown) =>
+    operation(),
 } as unknown as Logger;
 
 const mockTransfers = {
@@ -51,27 +69,30 @@ let sql: ReturnType<typeof createDatabase>["sql"];
 let db: ReturnType<typeof createDatabase>["db"];
 let matchmaker: Matchmaker;
 
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000): Promise<void> {
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 5_000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (!await predicate()) {
+  while (!(await predicate())) {
     if (Date.now() >= deadline) throw new Error("Timed out waiting for integration state");
     await Bun.sleep(5);
   }
 }
 
-async function drainCreateQueue(
-  instances: InstanceController,
-  executor: Executor,
-): Promise<void> {
+async function drainCreateQueue(instances: InstanceController, executor: Executor): Promise<void> {
   const worker = new InstanceStartWorker(db, instances, executor, mockLogger, 4);
   await worker.tick();
   await waitFor(async () => {
-    const active = await db.select({ state: instanceCommands.state })
+    const active = await db
+      .select({ state: instanceCommands.state })
       .from(instanceCommands)
-      .where(and(
-        eq(instanceCommands.operation, "CREATE"),
-        inArray(instanceCommands.state, ["PENDING", "RUNNING"]),
-      ));
+      .where(
+        and(
+          eq(instanceCommands.operation, "CREATE"),
+          inArray(instanceCommands.state, ["PENDING", "RUNNING"]),
+        ),
+      );
     return active.length === 0;
   });
 }
@@ -86,14 +107,14 @@ async function seedVariant(groupId: string, variantId: string, revision = 1) {
   await db.insert(templateLayers).values({
     id: variantId,
     templatePath: "none",
-    checksum: "none",
+    checksum: "a".repeat(64),
     runtimePatch: runtime,
     fileSummary: { fileCount: 0, totalBytes: 0, roots: [] },
   });
   await db.insert(serverVariants).values({
     id: variantId,
     revision,
-    checksum: "none",
+    checksum: "a".repeat(64),
     runtimeSpec: runtime,
   });
   await db.insert(serverVariantLayers).values({ variantId, layerId: variantId, ordinal: 0 });
@@ -132,10 +153,10 @@ async function seedGroup() {
     transferTimeoutMs: 20_000,
     playerStaleTimeoutMs: 30_000,
   });
-  
+
   const variantId = "test-variant";
   await seedVariant(groupId, variantId);
-  
+
   return { groupId, variantId };
 }
 
@@ -143,13 +164,13 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
   beforeAll(async () => {
     container = await new PostgreSqlContainer("postgres:18.1-alpine").start();
     const uri = container.getConnectionUri();
-    
+
     await migrateDatabase(uri);
-    
+
     const client = createDatabase(uri);
     sql = client.sql;
     db = client.db;
-    
+
     matchmaker = new Matchmaker(db, mockTransfers, mockLogger);
   }, 30000); // Allow time for container to download and start
 
@@ -183,46 +204,45 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       releaseSecondRead = resolve;
     });
     const coordinatedDb = {
-      transaction: (work: (tx: unknown) => Promise<unknown>) => db.transaction(async (tx) => {
-        let firstExecute = true;
-        const coordinatedTx = new Proxy(tx, {
-          get(target, property) {
-            if (property === "execute") {
-              return async (...args: Parameters<typeof tx.execute>) => {
-                const result = await tx.execute(...args);
-                if (firstExecute) {
-                  firstExecute = false;
-                  reads += 1;
-                  if (reads === 2) releaseSecondRead?.();
-                  await Promise.race([secondRead, Bun.sleep(300)]);
-                }
-                return result;
-              };
-            }
-            const value = Reflect.get(target, property);
-            return typeof value === "function" ? value.bind(target) : value;
-          },
-        });
-        return work(coordinatedTx);
-      }),
+      transaction: (work: (tx: unknown) => Promise<unknown>) =>
+        db.transaction(async (tx) => {
+          let firstExecute = true;
+          const coordinatedTx = new Proxy(tx, {
+            get(target, property) {
+              if (property === "execute") {
+                return async (...args: Parameters<typeof tx.execute>) => {
+                  const result = await tx.execute(...args);
+                  if (firstExecute) {
+                    firstExecute = false;
+                    reads += 1;
+                    if (reads === 2) releaseSecondRead?.();
+                    await Promise.race([secondRead, Bun.sleep(300)]);
+                  }
+                  return result;
+                };
+              }
+              const value = Reflect.get(target, property);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+          return work(coordinatedTx);
+        }),
     } as unknown as Database;
     const queues = new QueueService(coordinatedDb);
     const playerId = crypto.randomUUID();
     const requests = ["party-a", "party-b"].map((partyId) =>
-      queues.enqueue({ groupId, partyId, players: [playerId] })
+      queues.enqueue({ groupId, partyId, players: [playerId] }),
     );
 
     const results = await Promise.allSettled(requests);
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
 
-    const active = await db.select({ id: queueEntries.id })
+    const active = await db
+      .select({ id: queueEntries.id })
       .from(queueEntries)
       .innerJoin(queueEntryPlayers, eq(queueEntryPlayers.queueEntryId, queueEntries.id))
-      .where(and(
-        eq(queueEntries.state, "QUEUED"),
-        eq(queueEntryPlayers.playerId, playerId),
-      ));
+      .where(and(eq(queueEntries.state, "QUEUED"), eq(queueEntryPlayers.playerId, playerId)));
     expect(active).toHaveLength(1);
   });
 
@@ -231,15 +251,25 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const queues = new QueueService(db);
     const firstPlayer = crypto.randomUUID();
     const secondPlayer = crypto.randomUUID();
-    const first = await queues.enqueue({ groupId, partyId: "reused-party", players: [firstPlayer] });
-    const retry = await queues.enqueue({ groupId, partyId: "reused-party", players: [firstPlayer] });
-
-    expect(retry.entryId).toBe(first.entryId);
-    await expect(queues.enqueue({
+    const first = await queues.enqueue({
       groupId,
       partyId: "reused-party",
-      players: [secondPlayer],
-    })).rejects.toThrow();
+      players: [firstPlayer],
+    });
+    const retry = await queues.enqueue({
+      groupId,
+      partyId: "reused-party",
+      players: [firstPlayer],
+    });
+
+    expect(retry.entryId).toBe(first.entryId);
+    await expect(
+      queues.enqueue({
+        groupId,
+        partyId: "reused-party",
+        players: [secondPlayer],
+      }),
+    ).rejects.toThrow();
   });
 
   test("session cancellation drains the current instance despite a stale caller snapshot", async () => {
@@ -273,9 +303,11 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       mockLogger,
     );
 
-    await (controller as unknown as {
-      cancel: (sessionId: string) => Promise<void>;
-    }).cancel(sessionId);
+    await (
+      controller as unknown as {
+        cancel: (sessionId: string) => Promise<void>;
+      }
+    ).cancel(sessionId);
 
     expect(beginDrain).toHaveBeenCalledWith(instanceId, "SESSION_CANCELLED");
   });
@@ -316,12 +348,37 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const { groupId, variantId } = await seedGroup();
     const instanceId = nanoid();
     const playerId = crypto.randomUUID();
-    await db.insert(serverInstances).values({ id: instanceId, hostId: TEST_HOST_ID, groupId, variantId,
-      lifecycleState: "RUNNING", availabilityState: "OPEN", endpoint: "target:25565", reservedCpu: 1, reservedMemoryBytes: 1024 });
-    const deliveries: Array<{ commandId: string; expiresAt: string; playerGenerations: Record<string, number> }> = [];
-    const transfers = new TransferService(db, { publishTransfer: async payload => { deliveries.push(payload); } } as RedisEventBus, mockLogger);
-    const first = await db.transaction(tx => transfers.enqueue(tx, { instanceId, endpoint: "target:25565", players: [playerId] }));
-    const second = await db.transaction(tx => transfers.enqueue(tx, { instanceId, endpoint: "target:25565", players: [playerId] }));
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "target:25565",
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+    });
+    const deliveries: Array<{
+      commandId: string;
+      expiresAt: string;
+      playerGenerations: Record<string, number>;
+    }> = [];
+    const transfers = new TransferService(
+      db,
+      {
+        publishTransfer: async (payload) => {
+          deliveries.push(payload);
+        },
+      } as RedisEventBus,
+      mockLogger,
+    );
+    const first = await db.transaction((tx) =>
+      transfers.enqueue(tx, { instanceId, endpoint: "target:25565", players: [playerId] }),
+    );
+    const second = await db.transaction((tx) =>
+      transfers.enqueue(tx, { instanceId, endpoint: "target:25565", players: [playerId] }),
+    );
     await transfers.abandon(first, playerId, 1);
     await transfers.tick();
     expect(deliveries).toHaveLength(1);
@@ -352,11 +409,13 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       { publishTransfer } as unknown as RedisEventBus,
       mockLogger,
     );
-    await db.transaction((tx) => transfers.enqueue(tx, {
-      instanceId,
-      endpoint: "10.0.0.10:25565",
-      players: [arrivedPlayer, waitingPlayer],
-    }));
+    await db.transaction((tx) =>
+      transfers.enqueue(tx, {
+        instanceId,
+        endpoint: "10.0.0.10:25565",
+        players: [arrivedPlayer, waitingPlayer],
+      }),
+    );
     await db.insert(instancePlayers).values({
       instanceId,
       playerId: arrivedPlayer,
@@ -364,10 +423,14 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     });
 
     await transfers.tick();
-    await db.delete(instancePlayers).where(and(
-      eq(instancePlayers.instanceId, instanceId),
-      eq(instancePlayers.playerId, arrivedPlayer),
-    ));
+    await db
+      .delete(instancePlayers)
+      .where(
+        and(
+          eq(instancePlayers.instanceId, instanceId),
+          eq(instancePlayers.playerId, arrivedPlayer),
+        ),
+      );
     await db.update(transferCommands).set({ nextAttemptAt: new Date(0) });
     await transfers.tick();
 
@@ -399,11 +462,13 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       publishRegistry: async () => undefined,
     } as unknown as RedisEventBus;
     const transfers = new TransferService(db, bus, mockLogger);
-    await db.transaction((tx) => transfers.enqueue(tx, {
-      instanceId,
-      endpoint: "10.0.0.10:25565",
-      players: [arrivedPlayer, waitingPlayer],
-    }));
+    await db.transaction((tx) =>
+      transfers.enqueue(tx, {
+        instanceId,
+        endpoint: "10.0.0.10:25565",
+        players: [arrivedPlayer, waitingPlayer],
+      }),
+    );
     const instances = new InstanceController(
       db,
       {} as Executor,
@@ -414,13 +479,17 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       mockLogger,
     );
 
-    await instances.handlePaperEvent(instanceId, { type: "PLAYER_JOINED", playerId: arrivedPlayer });
+    await instances.handlePaperEvent(instanceId, {
+      type: "PLAYER_JOINED",
+      playerId: arrivedPlayer,
+    });
     await instances.handlePaperEvent(instanceId, { type: "PLAYER_LEFT", playerId: arrivedPlayer });
     await transfers.tick();
 
     expect(publishTransfer).toHaveBeenCalledTimes(1);
-    expect((publishTransfer.mock.calls[0]?.[0] as { players: string[] }).players)
-      .toEqual([waitingPlayer]);
+    expect((publishTransfer.mock.calls[0]?.[0] as { players: string[] }).players).toEqual([
+      waitingPlayer,
+    ]);
   });
 
   test("a recovered session retains its original instance acquisition deadline", async () => {
@@ -444,13 +513,17 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       players: [crypto.randomUUID(), crypto.randomUUID()],
     });
     await matchmaker.tick();
-    const before = await db.select({
-      id: gameSessions.id,
-      acquisitionDeadline: gameSessions.instanceAcquisitionDeadline,
-    }).from(gameSessions);
+    const before = await db
+      .select({
+        id: gameSessions.id,
+        acquisitionDeadline: gameSessions.instanceAcquisitionDeadline,
+      })
+      .from(gameSessions);
     expect(before[0]?.acquisitionDeadline).not.toBeNull();
 
-    await db.update(serverInstances).set({ lifecycleState: "FAILED" })
+    await db
+      .update(serverInstances)
+      .set({ lifecycleState: "FAILED" })
       .where(eq(serverInstances.id, instanceId));
     const controller = new SessionController(
       db,
@@ -460,13 +533,17 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       mockLogger,
     );
     await controller.tick();
-    const recovered = await db.select({
-      state: gameSessions.state,
-      acquisitionDeadline: gameSessions.instanceAcquisitionDeadline,
-    }).from(gameSessions).where(eq(gameSessions.id, before[0]!.id));
+    const recovered = await db
+      .select({
+        state: gameSessions.state,
+        acquisitionDeadline: gameSessions.instanceAcquisitionDeadline,
+      })
+      .from(gameSessions)
+      .where(eq(gameSessions.id, before[0]!.id));
     expect(recovered[0]?.state).toBe("WAITING_FOR_INSTANCE");
-    expect(recovered[0]?.acquisitionDeadline?.getTime())
-      .toBe(before[0]?.acquisitionDeadline?.getTime());
+    expect(recovered[0]?.acquisitionDeadline?.getTime()).toBe(
+      before[0]?.acquisitionDeadline?.getTime(),
+    );
 
     const replacementId = nanoid();
     await db.insert(serverInstances).values({
@@ -481,78 +558,187 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       endpoint: "10.0.0.11:25565",
     });
     await matchmaker.tick();
-    await db.update(serverInstances).set({ lifecycleState: "FAILED" })
+    await db
+      .update(serverInstances)
+      .set({ lifecycleState: "FAILED" })
       .where(eq(serverInstances.id, replacementId));
     await controller.tick();
-    const recoveredAgain = await db.select({
-      state: gameSessions.state,
-      acquisitionDeadline: gameSessions.instanceAcquisitionDeadline,
-    }).from(gameSessions).where(eq(gameSessions.id, before[0]!.id));
+    const recoveredAgain = await db
+      .select({
+        state: gameSessions.state,
+        acquisitionDeadline: gameSessions.instanceAcquisitionDeadline,
+      })
+      .from(gameSessions)
+      .where(eq(gameSessions.id, before[0]!.id));
     expect(recoveredAgain[0]?.state).toBe("WAITING_FOR_INSTANCE");
-    expect(recoveredAgain[0]?.acquisitionDeadline?.getTime())
-      .toBe(before[0]?.acquisitionDeadline?.getTime());
+    expect(recoveredAgain[0]?.acquisitionDeadline?.getTime()).toBe(
+      before[0]?.acquisitionDeadline?.getTime(),
+    );
 
-    await db.update(gameSessions).set({ instanceAcquisitionDeadline: new Date(0) })
+    await db
+      .update(gameSessions)
+      .set({ instanceAcquisitionDeadline: new Date(0) })
       .where(eq(gameSessions.id, before[0]!.id));
     await controller.tick();
-    const expired = await db.select({ state: gameSessions.state })
-      .from(gameSessions).where(eq(gameSessions.id, before[0]!.id));
+    const expired = await db
+      .select({ state: gameSessions.state })
+      .from(gameSessions)
+      .where(eq(gameSessions.id, before[0]!.id));
     expect(expired[0]?.state).toBe("CANCELLED");
   });
 
-  test.each([false, true])("session recovery during STOPPING preserves concurrent cancellation: %s", async cancel => {
-    const { groupId, variantId } = await seedGroup();
-    const instanceId = nanoid();
-    const sessionId = nanoid();
-    await db.insert(serverInstances).values({ id: instanceId, hostId: TEST_HOST_ID, groupId, variantId,
-      lifecycleState: "STOPPING", availabilityState: "OPEN", failureReason: "RUNTIME_MISSING", reservedCpu: 1, reservedMemoryBytes: 1024 });
-    await db.insert(gameSessions).values({ id: sessionId, groupId, instanceId, state: "TRANSFERRING" });
-    const boundary = new Proxy(db, { get(target, key) {
-      if (key === "transaction") return async (operation: Parameters<Database["transaction"]>[0]) => {
-        if (cancel) await db.update(gameSessions).set({ state: "CANCELLED" }).where(eq(gameSessions.id, sessionId));
-        return db.transaction(operation);
-      };
-      return Reflect.get(target, key);
-    } });
-    const controller = new SessionController(boundary, {} as InstanceController, {} as TransferService, {} as HubRouter, mockLogger);
-    await (controller as unknown as { recoverFailedInstances(): Promise<void> }).recoverFailedInstances();
-    const [result] = await db.select().from(gameSessions).where(eq(gameSessions.id, sessionId));
-    expect(result?.state).toBe(cancel ? "CANCELLED" : "WAITING_FOR_INSTANCE");
-    expect((await db.select().from(serverInstances).where(eq(serverInstances.id, instanceId)))[0]?.reservedCpu).toBe(1);
-  });
+  test.each([false, true])(
+    "session recovery during STOPPING preserves concurrent cancellation: %s",
+    async (cancel) => {
+      const { groupId, variantId } = await seedGroup();
+      const instanceId = nanoid();
+      const sessionId = nanoid();
+      await db.insert(serverInstances).values({
+        id: instanceId,
+        hostId: TEST_HOST_ID,
+        groupId,
+        variantId,
+        lifecycleState: "STOPPING",
+        availabilityState: "OPEN",
+        failureReason: "RUNTIME_MISSING",
+        reservedCpu: 1,
+        reservedMemoryBytes: 1024,
+      });
+      await db
+        .insert(gameSessions)
+        .values({ id: sessionId, groupId, instanceId, state: "TRANSFERRING" });
+      const boundary = new Proxy(db, {
+        get(target, key) {
+          if (key === "transaction")
+            return async (operation: Parameters<Database["transaction"]>[0]) => {
+              if (cancel)
+                await db
+                  .update(gameSessions)
+                  .set({ state: "CANCELLED" })
+                  .where(eq(gameSessions.id, sessionId));
+              return db.transaction(operation);
+            };
+          return Reflect.get(target, key);
+        },
+      });
+      const controller = new SessionController(
+        boundary,
+        {} as InstanceController,
+        {} as TransferService,
+        {} as HubRouter,
+        mockLogger,
+      );
+      await (
+        controller as unknown as { recoverFailedInstances(): Promise<void> }
+      ).recoverFailedInstances();
+      const [result] = await db.select().from(gameSessions).where(eq(gameSessions.id, sessionId));
+      expect(result?.state).toBe(cancel ? "CANCELLED" : "WAITING_FOR_INSTANCE");
+      expect(
+        (await db.select().from(serverInstances).where(eq(serverInstances.id, instanceId)))[0]
+          ?.reservedCpu,
+      ).toBe(1);
+    },
+  );
 
   test("Paper health lease withdraws stale servers, recovers during grace and rejects late revival", async () => {
     const { groupId, variantId } = await seedGroup();
     const instanceId = nanoid();
-    await db.insert(serverInstances).values({ id: instanceId, hostId: TEST_HOST_ID, groupId, variantId,
-      lifecycleState: "RUNNING", availabilityState: "OPEN", endpoint: "10.0.0.10:25565",
-      paperHealthDeadline: new Date(Date.now() - 1_000), reservedCpu: 1, reservedMemoryBytes: 1024 });
-    const executor = { listManagedInstances: async () => [{ instanceId, running: true, hostId: TEST_HOST_ID }] } as unknown as Executor;
-    const instances = new InstanceController(db, executor, new VariantSelector(db), {
-      publishRegistry: async () => {},
-    } as unknown as RedisEventBus, {} as TransferService, {} as HubRouter, mockLogger);
-    const reconciler = new Reconciler(db, executor, instances, new HostService(db), mockLogger, 30_000);
+    await db.insert(serverInstances).values({
+      id: instanceId,
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      endpoint: "10.0.0.10:25565",
+      paperHealthDeadline: new Date(Date.now() - 1_000),
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+    });
+    const executor = {
+      listManagedInstances: async () => [{ instanceId, running: true, hostId: TEST_HOST_ID }],
+    } as unknown as Executor;
+    const instances = new InstanceController(
+      db,
+      executor,
+      new VariantSelector(db),
+      {
+        publishRegistry: async () => {},
+      } as unknown as RedisEventBus,
+      {} as TransferService,
+      {} as HubRouter,
+      mockLogger,
+    );
+    const reconciler = new Reconciler(
+      db,
+      executor,
+      instances,
+      new HostService(db),
+      mockLogger,
+      30_000,
+    );
     expect(await instances.listProxyServers()).toHaveLength(0);
     await reconciler.tick();
-    expect((await db.select().from(serverInstances).where(eq(serverInstances.id, instanceId)))[0]?.healthSuspectedAt).not.toBeNull();
+    expect(
+      (await db.select().from(serverInstances).where(eq(serverInstances.id, instanceId)))[0]
+        ?.healthSuspectedAt,
+    ).not.toBeNull();
     await instances.handlePaperEvent(instanceId, { type: "HEARTBEAT", playerIds: [] });
     expect(await instances.listProxyServers()).toHaveLength(1);
-    await db.update(serverInstances).set({ paperHealthDeadline: new Date(0) }).where(eq(serverInstances.id, instanceId));
+    await db
+      .update(serverInstances)
+      .set({ paperHealthDeadline: new Date(0) })
+      .where(eq(serverInstances.id, instanceId));
     await reconciler.tick();
-    expect((await db.select().from(serverInstances).where(eq(serverInstances.id, instanceId)))[0]?.failureReason).toBe("PAPER_HEALTH_TIMEOUT");
-    await expect(instances.handlePaperEvent(instanceId, { type: "HEARTBEAT", playerIds: [] })).rejects.toThrow("unavailable");
+    expect(
+      (await db.select().from(serverInstances).where(eq(serverInstances.id, instanceId)))[0]
+        ?.failureReason,
+    ).toBe("PAPER_HEALTH_TIMEOUT");
+    await expect(
+      instances.handlePaperEvent(instanceId, { type: "HEARTBEAT", playerIds: [] }),
+    ).rejects.toThrow("unavailable");
   });
 
   test("an already offline host retries an instance transition that previously failed", async () => {
     const { groupId, variantId } = await seedGroup();
-    await db.insert(serverInstances).values({ id: nanoid(), hostId: TEST_HOST_ID, groupId, variantId,
-      lifecycleState: "RUNNING", availabilityState: "OPEN", reservedCpu: 1, reservedMemoryBytes: 1024 });
-    await db.update(executionHosts).set({ healthState: "OFFLINE", lastHeartbeatAt: new Date(0),
-      lastControlContactAt: new Date(0), createdAt: new Date(0) }).where(eq(executionHosts.id, TEST_HOST_ID));
+    await db.insert(serverInstances).values({
+      id: nanoid(),
+      hostId: TEST_HOST_ID,
+      groupId,
+      variantId,
+      lifecycleState: "RUNNING",
+      availabilityState: "OPEN",
+      reservedCpu: 1,
+      reservedMemoryBytes: 1024,
+    });
+    await db
+      .update(executionHosts)
+      .set({
+        healthState: "OFFLINE",
+        lastHeartbeatAt: new Date(0),
+        lastControlContactAt: new Date(0),
+        createdAt: new Date(0),
+      })
+      .where(eq(executionHosts.id, TEST_HOST_ID));
     let attempts = 0;
-    const reconciler = new Reconciler(db, { listManagedInstances: async () => { throw Error("offline"); } } as unknown as Executor,
-      { failInstance: async () => { attempts += 1; if (attempts === 1) throw Error("temporary SQL failure"); return true; } } as unknown as InstanceController,
-      new HostService(db), mockLogger, 1);
+    const reconciler = new Reconciler(
+      db,
+      {
+        listManagedInstances: async () => {
+          throw Error("offline");
+        },
+      } as unknown as Executor,
+      {
+        failInstance: async () => {
+          attempts += 1;
+          if (attempts === 1) throw Error("temporary SQL failure");
+          return true;
+        },
+      } as unknown as InstanceController,
+      new HostService(db),
+      mockLogger,
+      1,
+    );
     await reconciler.tick();
     await reconciler.tick();
     expect(attempts).toBe(2);
@@ -589,10 +775,13 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     );
     const beforeRecovery = Date.now();
     await controller.tick();
-    const recovered = await db.select({
-      state: gameSessions.state,
-      acquisitionDeadline: gameSessions.instanceAcquisitionDeadline,
-    }).from(gameSessions).where(eq(gameSessions.id, sessionId));
+    const recovered = await db
+      .select({
+        state: gameSessions.state,
+        acquisitionDeadline: gameSessions.instanceAcquisitionDeadline,
+      })
+      .from(gameSessions)
+      .where(eq(gameSessions.id, sessionId));
     expect(recovered[0]?.state).toBe("WAITING_FOR_INSTANCE");
     expect(recovered[0]?.acquisitionDeadline?.getTime()).toBeGreaterThan(beforeRecovery);
   });
@@ -622,16 +811,20 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       await rm(configurationRoot, { recursive: true, force: true });
     }
 
-    const group = await db.select({ enabled: serverGroups.enabled })
-      .from(serverGroups).where(eq(serverGroups.id, groupId));
+    const group = await db
+      .select({ enabled: serverGroups.enabled })
+      .from(serverGroups)
+      .where(eq(serverGroups.id, groupId));
     expect(group).toEqual([{ enabled: false }]);
 
     const queue = new QueueService(db);
-    await expect(queue.enqueue({
-      groupId,
-      partyId: "new-party",
-      players: [crypto.randomUUID()],
-    })).rejects.toThrow("unavailable");
+    await expect(
+      queue.enqueue({
+        groupId,
+        partyId: "new-party",
+        players: [crypto.randomUUID()],
+      }),
+    ).rejects.toThrow("unavailable");
 
     const drained: string[] = [];
     const instances = {
@@ -639,21 +832,20 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
         drained.push(id);
       },
     } as unknown as InstanceController;
-    const capacity = new CapacityController(
-      db,
-      instances,
-      mockLogger,
-    );
+    const capacity = new CapacityController(db, instances, mockLogger);
     await capacity.tick();
     expect(drained).toContain(instanceId);
   });
 
   test("placement serializes reservations without overallocating either host", async () => {
     const { groupId } = await seedGroup();
-    await db.update(executionHosts).set({
-      allocatableCpu: 2,
-      allocatableMemoryBytes: 2048,
-    }).where(eq(executionHosts.id, TEST_HOST_ID));
+    await db
+      .update(executionHosts)
+      .set({
+        allocatableCpu: 2,
+        allocatableMemoryBytes: 2048,
+      })
+      .where(eq(executionHosts.id, TEST_HOST_ID));
     await db.insert(executionHosts).values({
       id: "integration-host-b",
       controlUrl: "http://integration-host-b:8090",
@@ -691,43 +883,49 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     expect(results.filter(Boolean)).toHaveLength(4);
     expect(results.filter((result) => result === null)).toHaveLength(1);
 
-    const placed = await db.select({ hostId: serverInstances.hostId })
-      .from(serverInstances);
+    const placed = await db.select({ hostId: serverInstances.hostId }).from(serverInstances);
     expect(placed.filter((row) => row.hostId === TEST_HOST_ID)).toHaveLength(2);
     expect(placed.filter((row) => row.hostId === "integration-host-b")).toHaveLength(2);
   });
 
   test("orchestrator routes creation through two HTTP agents", async () => {
     const requests = new Map<string, string[]>();
-    const startAgent = (hostId: string, gameAddress: string) => Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch: async (request) => {
-        const url = new URL(request.url);
-        requests.set(hostId, [...(requests.get(hostId) ?? []), `${request.method} ${url.pathname}`]);
-        if (request.method === "GET" && url.pathname === "/api/v1/instances") {
-          return Response.json([]);
-        }
-        if (request.method === "PUT") {
-          const spec = await request.json() as { instanceId: string };
-          return Response.json({
-            containerId: `${hostId}-${spec.instanceId}`,
-            runtimePath: `/runtime/${spec.instanceId}`,
-            endpoint: `${gameAddress}:25565`,
-          });
-        }
-        return new Response(null, { status: 204 });
-      },
-    });
+    const startAgent = (hostId: string, gameAddress: string) =>
+      Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: async (request) => {
+          const url = new URL(request.url);
+          requests.set(hostId, [
+            ...(requests.get(hostId) ?? []),
+            `${request.method} ${url.pathname}`,
+          ]);
+          if (request.method === "GET" && url.pathname === "/api/v1/instances") {
+            return Response.json([]);
+          }
+          if (request.method === "PUT") {
+            const spec = (await request.json()) as { instanceId: string };
+            return Response.json({
+              containerId: `${hostId}-${spec.instanceId}`,
+              runtimePath: `/runtime/${spec.instanceId}`,
+              endpoint: `${gameAddress}:25565`,
+            });
+          }
+          return new Response(null, { status: 204 });
+        },
+      });
     const agentA = startAgent(TEST_HOST_ID, "10.0.0.10");
     const agentB = startAgent("integration-host-b", "10.0.0.11");
     try {
       const { groupId } = await seedGroup();
-      await db.update(executionHosts).set({
-        controlUrl: agentA.url.toString(),
-        allocatableCpu: 1,
-        allocatableMemoryBytes: 1024,
-      }).where(eq(executionHosts.id, TEST_HOST_ID));
+      await db
+        .update(executionHosts)
+        .set({
+          controlUrl: agentA.url.toString(),
+          allocatableCpu: 1,
+          allocatableMemoryBytes: 1024,
+        })
+        .where(eq(executionHosts.id, TEST_HOST_ID));
       await db.insert(executionHosts).values({
         id: "integration-host-b",
         controlUrl: agentB.url.toString(),
@@ -763,12 +961,8 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       expect(second).not.toBeNull();
       expect(requests.size).toBe(0);
       await drainCreateQueue(controller, executor);
-      expect(requests.get(TEST_HOST_ID)).toContain(
-        `PUT /api/v1/instances/${first}`,
-      );
-      expect(requests.get("integration-host-b")).toContain(
-        `PUT /api/v1/instances/${second}`,
-      );
+      expect(requests.get(TEST_HOST_ID)).toContain(`PUT /api/v1/instances/${first}`);
+      expect(requests.get("integration-host-b")).toContain(`PUT /api/v1/instances/${second}`);
     } finally {
       await agentA.stop(true);
       await agentB.stop(true);
@@ -779,11 +973,14 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const { groupId, variantId } = await seedGroup();
     const instanceId = "offlineInstance1";
     const stale = new Date(Date.now() - 60_000);
-    await db.update(executionHosts).set({
-      healthState: "ONLINE",
-      lastHeartbeatAt: stale,
-      lastControlContactAt: stale,
-    }).where(eq(executionHosts.id, TEST_HOST_ID));
+    await db
+      .update(executionHosts)
+      .set({
+        healthState: "ONLINE",
+        lastHeartbeatAt: stale,
+        lastControlContactAt: stale,
+      })
+      .where(eq(executionHosts.id, TEST_HOST_ID));
     await db.insert(serverInstances).values({
       id: instanceId,
       hostId: TEST_HOST_ID,
@@ -824,7 +1021,8 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       expect.objectContaining({ hostId: TEST_HOST_ID }),
     );
     expect(listManagedInstances).not.toHaveBeenCalled();
-    let state = await db.select({ health: executionHosts.healthState })
+    let state = await db
+      .select({ health: executionHosts.healthState })
       .from(executionHosts)
       .where(eq(executionHosts.id, TEST_HOST_ID));
     expect(state[0]?.health).toBe("OFFLINE");
@@ -836,14 +1034,16 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       allocatableMemoryBytes: 64 * 1024 ** 3,
       agentVersion: "test",
     });
-    state = await db.select({ health: executionHosts.healthState })
+    state = await db
+      .select({ health: executionHosts.healthState })
       .from(executionHosts)
       .where(eq(executionHosts.id, TEST_HOST_ID));
     expect(state[0]?.health).toBe("RECOVERING");
 
     await reconciler.tick();
     expect(listManagedInstances).toHaveBeenCalledTimes(1);
-    state = await db.select({ health: executionHosts.healthState })
+    state = await db
+      .select({ health: executionHosts.healthState })
       .from(executionHosts)
       .where(eq(executionHosts.id, TEST_HOST_ID));
     expect(state[0]?.health).toBe("ONLINE");
@@ -853,11 +1053,14 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const { groupId, variantId } = await seedGroup();
     const instanceId = "recoveringStartup1";
     const stale = new Date(Date.now() - 60_000);
-    await db.update(executionHosts).set({
-      healthState: "ONLINE",
-      lastHeartbeatAt: stale,
-      lastControlContactAt: stale,
-    }).where(eq(executionHosts.id, TEST_HOST_ID));
+    await db
+      .update(executionHosts)
+      .set({
+        healthState: "ONLINE",
+        lastHeartbeatAt: stale,
+        lastControlContactAt: stale,
+      })
+      .where(eq(executionHosts.id, TEST_HOST_ID));
     await db.insert(serverInstances).values({
       id: instanceId,
       hostId: TEST_HOST_ID,
@@ -871,15 +1074,17 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     });
 
     const failInstance = mock(async () => true);
-    const listManagedInstances = mock(async () => [{
-      hostId: TEST_HOST_ID,
-      instanceId,
-      containerId: "recovering-container",
-      groupId,
-      variantId,
-      running: true,
-      status: "Up",
-    }]);
+    const listManagedInstances = mock(async () => [
+      {
+        hostId: TEST_HOST_ID,
+        instanceId,
+        containerId: "recovering-container",
+        groupId,
+        variantId,
+        running: true,
+        status: "Up",
+      },
+    ]);
     const reconciler = new Reconciler(
       db,
       { listManagedInstances } as unknown as Executor,
@@ -894,7 +1099,8 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
 
     expect(listManagedInstances).toHaveBeenCalledTimes(1);
     expect(failInstance).not.toHaveBeenCalled();
-    const host = await db.select({ health: executionHosts.healthState })
+    const host = await db
+      .select({ health: executionHosts.healthState })
       .from(executionHosts)
       .where(eq(executionHosts.id, TEST_HOST_ID));
     expect(host[0]?.health).toBe("ONLINE");
@@ -902,9 +1108,10 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
 
   test("maintenance limits surge to one replacement and waits without capacity", async () => {
     const { groupId, variantId } = await seedGroup();
-    await db.update(serverGroups).set({ maximumInstances: 2 })
-      .where(eq(serverGroups.id, groupId));
-    await db.update(executionHosts).set({ adminState: "DRAINING" })
+    await db.update(serverGroups).set({ maximumInstances: 2 }).where(eq(serverGroups.id, groupId));
+    await db
+      .update(executionHosts)
+      .set({ adminState: "DRAINING" })
       .where(eq(executionHosts.id, TEST_HOST_ID));
     await db.insert(executionHosts).values({
       id: "maintenance-target",
@@ -919,17 +1126,19 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       lastControlContactAt: new Date(),
     });
     const sourceIds = ["maintenanceSrc1", "maintenanceSrc2"];
-    await db.insert(serverInstances).values(sourceIds.map((id, index) => ({
-      id,
-      hostId: TEST_HOST_ID,
-      reservedCpu: 1,
-      reservedMemoryBytes: 1024,
-      groupId,
-      variantId,
-      lifecycleState: "RUNNING" as const,
-      availabilityState: "OPEN" as const,
-      endpoint: `10.0.0.10:${25565 + index}`,
-    })));
+    await db.insert(serverInstances).values(
+      sourceIds.map((id, index) => ({
+        id,
+        hostId: TEST_HOST_ID,
+        reservedCpu: 1,
+        reservedMemoryBytes: 1024,
+        groupId,
+        variantId,
+        lifecycleState: "RUNNING" as const,
+        availabilityState: "OPEN" as const,
+        endpoint: `10.0.0.10:${25565 + index}`,
+      })),
+    );
     const executor = {
       createInstance: mock(async (spec) => ({
         containerId: `container-${spec.instanceId}`,
@@ -957,12 +1166,16 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const maintenance = new HostMaintenanceController(db, hosts, controller, mockLogger);
 
     await maintenance.tick();
-    let replacements = await db.select().from(serverInstances)
+    let replacements = await db
+      .select()
+      .from(serverInstances)
       .where(inArray(serverInstances.replacesInstanceId, sourceIds));
     expect(replacements).toHaveLength(1);
     expect(replacements[0]?.lifecycleState).toBe("CREATING");
     await drainCreateQueue(controller, executor);
-    replacements = await db.select().from(serverInstances)
+    replacements = await db
+      .select()
+      .from(serverInstances)
       .where(inArray(serverInstances.replacesInstanceId, sourceIds));
     expect(replacements[0]?.lifecycleState).toBe("STARTING");
 
@@ -973,20 +1186,25 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     await controller.stopAndDelete(replacements[0]!.replacesInstanceId!);
     await maintenance.tick();
 
-    replacements = await db.select().from(serverInstances)
+    replacements = await db
+      .select()
+      .from(serverInstances)
       .where(inArray(serverInstances.replacesInstanceId, sourceIds));
     expect(replacements).toHaveLength(1);
-    const remainingSources = await db.select().from(serverInstances)
-      .where(and(
-        inArray(serverInstances.id, sourceIds),
-        eq(serverInstances.lifecycleState, "RUNNING"),
-      ));
+    const remainingSources = await db
+      .select()
+      .from(serverInstances)
+      .where(
+        and(inArray(serverInstances.id, sourceIds), eq(serverInstances.lifecycleState, "RUNNING")),
+      );
     expect(remainingSources).toHaveLength(1);
   });
 
   test("maintenance reassigns an empty session but leaves an occupied game", async () => {
     const { groupId, variantId } = await seedGroup();
-    await db.update(executionHosts).set({ adminState: "DRAINING" })
+    await db
+      .update(executionHosts)
+      .set({ adminState: "DRAINING" })
       .where(eq(executionHosts.id, TEST_HOST_ID));
     const emptySessionId = "emptySession0001";
     const activeSessionId = "activeSession001";
@@ -1023,9 +1241,13 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
         playerCount: 1,
       },
     ]);
-    await db.update(gameSessions).set({ instanceId: emptyInstanceId })
+    await db
+      .update(gameSessions)
+      .set({ instanceId: emptyInstanceId })
       .where(eq(gameSessions.id, emptySessionId));
-    await db.update(gameSessions).set({ instanceId: activeInstanceId })
+    await db
+      .update(gameSessions)
+      .set({ instanceId: activeInstanceId })
       .where(eq(gameSessions.id, activeSessionId));
     await seedSessionPlayers({
       sessionId: activeSessionId,
@@ -1049,11 +1271,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     await maintenance.tick();
 
     expect(failInstance).toHaveBeenCalledTimes(1);
-    expect(failInstance).toHaveBeenCalledWith(
-      emptyInstanceId,
-      "HOST_MAINTENANCE",
-      { hostId: TEST_HOST_ID },
-    );
+    expect(failInstance).toHaveBeenCalledWith(emptyInstanceId, "HOST_MAINTENANCE", {
+      hostId: TEST_HOST_ID,
+    });
   });
 
   test("2.1 Happy Path: Formation with warm instance", async () => {
@@ -1095,13 +1315,16 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     expect(sessions[0]!.state).toBe("TRANSFERRING");
     expect(sessions[0]!.instanceId).toBe(instanceId);
 
-    const instances = await db.select().from(serverInstances).where(eq(serverInstances.id, instanceId));
+    const instances = await db
+      .select()
+      .from(serverInstances)
+      .where(eq(serverInstances.id, instanceId));
     expect(instances[0]!.availabilityState).toBe("RESERVED");
     expect(instances[0]!.sessionId).toBe(sessions[0]!.id);
 
     const entries = await db.select().from(queueEntries);
     expect(entries[0]!.state).toBe("SELECTED");
-    
+
     expect(mockTransfers.enqueue).toHaveBeenCalledTimes(1);
   });
 
@@ -1126,7 +1349,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     expect(sessions).toHaveLength(1);
     expect(sessions[0]!.state).toBe("WAITING_FOR_INSTANCE");
     expect(sessions[0]!.instanceId).toBeNull();
-    
+
     expect(mockTransfers.enqueue).toHaveBeenCalledTimes(0);
   });
 
@@ -1145,7 +1368,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const partyId = nanoid();
     const playerId = crypto.randomUUID();
     const secondPlayerId = crypto.randomUUID();
-    
+
     // Simulate player attached to the waiting session
     await seedSessionPlayers([
       {
@@ -1184,13 +1407,19 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     expect(sessions[0]!.state).toBe("TRANSFERRING");
     expect(sessions[0]!.instanceId).toBe(instanceId);
 
-    const instances = await db.select().from(serverInstances).where(eq(serverInstances.id, instanceId));
+    const instances = await db
+      .select()
+      .from(serverInstances)
+      .where(eq(serverInstances.id, instanceId));
     expect(instances[0]!.availabilityState).toBe("RESERVED");
     expect(instances[0]!.sessionId).toBe(sessionId);
 
-    const sPlayers = await db.select().from(sessionPlayers).where(eq(sessionPlayers.sessionId, sessionId));
+    const sPlayers = await db
+      .select()
+      .from(sessionPlayers)
+      .where(eq(sessionPlayers.sessionId, sessionId));
     expect(sPlayers[0]!.state).toBe("TRANSFERRING");
-    
+
     expect(mockTransfers.enqueue).toHaveBeenCalledTimes(1);
   });
 
@@ -1216,16 +1445,16 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       partyId: nanoid(),
       state: "QUEUED",
     });
-    await db.insert(queueEntryPlayers).values([
-      { queueEntryId: entryId, playerId: crypto.randomUUID() },
-    ]); // 1 player, minimum=2
+    await db
+      .insert(queueEntryPlayers)
+      .values([{ queueEntryId: entryId, playerId: crypto.randomUUID() }]); // 1 player, minimum=2
 
     await matchmaker.tick();
 
     const sessions = await db.select().from(gameSessions);
     expect(sessions).toHaveLength(1);
     expect(sessions[0]!.state).toBe("FORMING");
-    
+
     const entries = await db.select().from(queueEntries);
     expect(entries[0]!.state).toBe("SELECTED");
   });
@@ -1257,7 +1486,8 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       assignmentRevision: 1,
     });
 
-    await db.update(serverInstances)
+    await db
+      .update(serverInstances)
       .set({ availabilityState: "RESERVED", sessionId })
       .where(eq(serverInstances.id, instanceId));
 
@@ -1287,9 +1517,12 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const sessions = await db.select().from(gameSessions).where(eq(gameSessions.id, sessionId));
     expect(sessions[0]!.assignmentRevision).toBe(2);
 
-    const sPlayers = await db.select().from(sessionPlayers).where(eq(sessionPlayers.sessionId, sessionId));
+    const sPlayers = await db
+      .select()
+      .from(sessionPlayers)
+      .where(eq(sessionPlayers.sessionId, sessionId));
     expect(sPlayers).toHaveLength(3);
-    
+
     expect(mockTransfers.enqueue).toHaveBeenCalledTimes(1);
   });
 
@@ -1319,7 +1552,8 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       lobbyStaleDeadline: new Date(Date.now() + 60_000),
     });
 
-    await db.update(serverInstances)
+    await db
+      .update(serverInstances)
       .set({ availabilityState: "RESERVED", sessionId })
       .where(eq(serverInstances.id, instanceId));
 
@@ -1346,9 +1580,12 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
 
     await matchmaker.tick();
 
-    const sPlayers = await db.select().from(sessionPlayers).where(eq(sessionPlayers.sessionId, sessionId));
+    const sPlayers = await db
+      .select()
+      .from(sessionPlayers)
+      .where(eq(sessionPlayers.sessionId, sessionId));
     expect(sPlayers).toHaveLength(3);
-    
+
     const allSessions = await db.select().from(gameSessions);
     expect(allSessions).toHaveLength(1);
   });
@@ -1399,7 +1636,8 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       state: "WAITING",
       lobbyStaleDeadline: new Date(Date.now() + 60_000),
     });
-    await db.update(serverInstances)
+    await db
+      .update(serverInstances)
       .set({ sessionId, availabilityState: "RESERVED" })
       .where(eq(serverInstances.id, instanceId));
     await seedSessionPlayers([
@@ -1466,7 +1704,8 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       state: "RUNNING",
       startedAt: new Date(),
     });
-    await db.update(serverInstances)
+    await db
+      .update(serverInstances)
       .set({ sessionId, availabilityState: "RESERVED" })
       .where(eq(serverInstances.id, instanceId));
     await seedSessionPlayers([
@@ -1506,24 +1745,32 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       mockLogger,
     );
 
-    await expect(queues.enqueue({
-      groupId,
-      partyId: "next-party",
-      players: [eliminatedPlayerId],
-    })).rejects.toThrow("already matchmaking");
+    await expect(
+      queues.enqueue({
+        groupId,
+        partyId: "next-party",
+        players: [eliminatedPlayerId],
+      }),
+    ).rejects.toThrow("already matchmaking");
 
     await controller.handlePaperEvent(instanceId, {
       type: "PLAYER_ELIMINATED",
       sessionId,
       playerId: eliminatedPlayerId,
     });
-    const released = await db.select().from(sessionPlayers).where(and(
-      eq(sessionPlayers.sessionId, sessionId),
-      eq(sessionPlayers.playerId, eliminatedPlayerId),
-    ));
-    const connected = await db.select().from(instancePlayers).where(
-      eq(instancePlayers.instanceId, instanceId),
-    );
+    const released = await db
+      .select()
+      .from(sessionPlayers)
+      .where(
+        and(
+          eq(sessionPlayers.sessionId, sessionId),
+          eq(sessionPlayers.playerId, eliminatedPlayerId),
+        ),
+      );
+    const connected = await db
+      .select()
+      .from(instancePlayers)
+      .where(eq(instancePlayers.instanceId, instanceId));
     const revised = await db.select().from(gameSessions).where(eq(gameSessions.id, sessionId));
     expect(released[0]!.state).toBe("LEFT");
     expect(released[0]!.leftAt).not.toBeNull();
@@ -1538,11 +1785,13 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       players: [eliminatedPlayerId],
     });
     expect(requeued.state).toBe("QUEUED");
-    await expect(queues.enqueue({
-      groupId,
-      partyId: "still-playing",
-      players: [activePlayerId],
-    })).rejects.toThrow("already matchmaking");
+    await expect(
+      queues.enqueue({
+        groupId,
+        partyId: "still-playing",
+        players: [activePlayerId],
+      }),
+    ).rejects.toThrow("already matchmaking");
 
     await controller.handlePaperEvent(instanceId, {
       type: "HEARTBEAT",
@@ -1553,10 +1802,15 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       sessionId,
       playerId: eliminatedPlayerId,
     });
-    const afterHeartbeat = await db.select().from(sessionPlayers).where(and(
-      eq(sessionPlayers.sessionId, sessionId),
-      eq(sessionPlayers.playerId, eliminatedPlayerId),
-    ));
+    const afterHeartbeat = await db
+      .select()
+      .from(sessionPlayers)
+      .where(
+        and(
+          eq(sessionPlayers.sessionId, sessionId),
+          eq(sessionPlayers.playerId, eliminatedPlayerId),
+        ),
+      );
     const afterRetry = await db.select().from(gameSessions).where(eq(gameSessions.id, sessionId));
     expect(afterHeartbeat[0]!.state).toBe("LEFT");
     expect(afterRetry[0]!.assignmentRevision).toBe(2);
@@ -1584,7 +1838,8 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       instanceId,
       state: "WAITING",
     });
-    await db.update(serverInstances)
+    await db
+      .update(serverInstances)
       .set({ sessionId, availabilityState: "RESERVED" })
       .where(eq(serverInstances.id, instanceId));
     await seedSessionPlayers({
@@ -1603,27 +1858,35 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       mockLogger,
     );
 
-    await expect(controller.handlePaperEvent(instanceId, {
-      type: "PLAYER_ELIMINATED",
-      sessionId,
-      playerId,
-    })).rejects.toThrow("unavailable");
+    await expect(
+      controller.handlePaperEvent(instanceId, {
+        type: "PLAYER_ELIMINATED",
+        sessionId,
+        playerId,
+      }),
+    ).rejects.toThrow("unavailable");
     await db.update(gameSessions).set({ state: "RUNNING" }).where(eq(gameSessions.id, sessionId));
-    await expect(controller.handlePaperEvent(instanceId, {
-      type: "PLAYER_ELIMINATED",
-      sessionId,
-      playerId: crypto.randomUUID(),
-    })).rejects.toThrow("unavailable");
-    await expect(controller.handlePaperEvent(instanceId, {
-      type: "PLAYER_ELIMINATED",
-      sessionId: nanoid(),
-      playerId,
-    })).rejects.toThrow("unavailable");
-    await expect(controller.handlePaperEvent(nanoid(), {
-      type: "PLAYER_ELIMINATED",
-      sessionId,
-      playerId,
-    })).rejects.toThrow("unavailable");
+    await expect(
+      controller.handlePaperEvent(instanceId, {
+        type: "PLAYER_ELIMINATED",
+        sessionId,
+        playerId: crypto.randomUUID(),
+      }),
+    ).rejects.toThrow("unavailable");
+    await expect(
+      controller.handlePaperEvent(instanceId, {
+        type: "PLAYER_ELIMINATED",
+        sessionId: nanoid(),
+        playerId,
+      }),
+    ).rejects.toThrow("unavailable");
+    await expect(
+      controller.handlePaperEvent(nanoid(), {
+        type: "PLAYER_ELIMINATED",
+        sessionId,
+        playerId,
+      }),
+    ).rejects.toThrow("unavailable");
   });
 
   test("GAME_CANCELLED rapidly drains connected minigame players to an available hub", async () => {
@@ -1683,20 +1946,25 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       instanceId: sourceInstanceId,
       state: "RUNNING",
     });
-    await db.update(serverInstances)
+    await db
+      .update(serverInstances)
       .set({ sessionId, availabilityState: "RESERVED" })
       .where(eq(serverInstances.id, sourceInstanceId));
-    await seedSessionPlayers(playerIds.map((playerId) => ({
-      sessionId,
-      playerId,
-      partyId: `party-${playerId}`,
-      state: "CONNECTED" as const,
-    })));
-    await db.insert(instancePlayers).values(playerIds.map((playerId) => ({
-      instanceId: sourceInstanceId,
-      playerId,
-      staleDeadline: new Date(Date.now() + 30_000),
-    })));
+    await seedSessionPlayers(
+      playerIds.map((playerId) => ({
+        sessionId,
+        playerId,
+        partyId: `party-${playerId}`,
+        state: "CONNECTED" as const,
+      })),
+    );
+    await db.insert(instancePlayers).values(
+      playerIds.map((playerId) => ({
+        instanceId: sourceInstanceId,
+        playerId,
+        staleDeadline: new Date(Date.now() + 30_000),
+      })),
+    );
 
     const evacuationTransfers = {
       enqueue: async (tx: any, payload: any) => {
@@ -1734,9 +2002,10 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       reason: "duplicate notification",
     });
 
-    const [session] = await db.select().from(gameSessions)
-      .where(eq(gameSessions.id, sessionId));
-    const [source] = await db.select().from(serverInstances)
+    const [session] = await db.select().from(gameSessions).where(eq(gameSessions.id, sessionId));
+    const [source] = await db
+      .select()
+      .from(serverInstances)
       .where(eq(serverInstances.id, sourceInstanceId));
     const commands = await db.select().from(transferCommands);
     expect(session!.state).toBe("CANCELLED");
@@ -1846,11 +2115,13 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     });
 
     const playerIds = Array.from({ length: 5 }, () => crypto.randomUUID());
-    await db.insert(instancePlayers).values(playerIds.map((playerId) => ({
-      instanceId: sourceInstanceId,
-      playerId,
-      staleDeadline: new Date(Date.now() + 30_000),
-    })));
+    await db.insert(instancePlayers).values(
+      playerIds.map((playerId) => ({
+        instanceId: sourceInstanceId,
+        playerId,
+        staleDeadline: new Date(Date.now() + 30_000),
+      })),
+    );
     await db.insert(transferCommands).values({
       id: nanoid(),
       instanceId: hubInstances[0]!,
@@ -1888,9 +2159,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       .filter((payload) => playerIds.some((playerId) => payload.players.includes(playerId)));
     expect(routed).toHaveLength(2);
     expect(routed.every((payload) => payload.instanceId !== overloadedInstanceId)).toBeTrue();
-    expect(routed.flatMap((payload) => payload.players).toSorted()).toEqual(
-      playerIds.toSorted(),
-    );
+    expect(routed.flatMap((payload) => payload.players).toSorted()).toEqual(playerIds.toSorted());
   });
 
   test("leaving a queue is idempotent for missing and previously cancelled parties", async () => {
@@ -1905,8 +2174,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     });
     expect(await queues.leaveParty(groupId, "cancelled-party")).toBeTrue();
     expect(await queues.leaveParty(groupId, "cancelled-party")).toBeTrue();
-    const [entry] = await db.select().from(queueEntries)
-      .where(eq(queueEntries.id, ticket.entryId));
+    const [entry] = await db.select().from(queueEntries).where(eq(queueEntries.id, ticket.entryId));
     expect(entry?.state).toBe("LEFT");
   });
 
@@ -1932,11 +2200,12 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     await matchmaker.tick();
 
     expect(await queues.leaveParty(groupId, "transferred-party")).toBeFalse();
-    const [entry] = await db.select().from(queueEntries)
-      .where(eq(queueEntries.id, ticket.entryId));
+    const [entry] = await db.select().from(queueEntries).where(eq(queueEntries.id, ticket.entryId));
     expect(entry?.state).toBe("SELECTED");
     expect(entry?.transferStartedAt).not.toBeNull();
-    await db.update(gameSessions).set({ state: "FINISHED" })
+    await db
+      .update(gameSessions)
+      .set({ state: "FINISHED" })
       .where(eq(gameSessions.id, entry!.sessionId!));
     expect(await queues.leaveParty(groupId, "transferred-party")).toBeTrue();
   });
@@ -1967,10 +2236,14 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     await queues.enqueue({ groupId, partyId: "after-transfer", players: afterPlayers });
     await matchmaker.tick();
     await queues.networkDisconnected(afterPlayers[0]!);
-    const afterRows = await db.select().from(sessionPlayers)
+    const afterRows = await db
+      .select()
+      .from(sessionPlayers)
       .where(inArray(sessionPlayers.playerId, afterPlayers));
     expect(afterRows.find((player) => player.playerId === afterPlayers[0])?.state).toBe("LEFT");
-    expect(afterRows.find((player) => player.playerId === afterPlayers[1])?.state).toBe("TRANSFERRING");
+    expect(afterRows.find((player) => player.playerId === afterPlayers[1])?.state).toBe(
+      "TRANSFERRING",
+    );
 
     const previousSessionId = afterRows[0]!.sessionId;
     const requeued = await queues.enqueue({
@@ -1981,7 +2254,9 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     expect(requeued.state).toBe("QUEUED");
     await matchmaker.tick();
 
-    const playerHistory = await db.select().from(sessionPlayers)
+    const playerHistory = await db
+      .select()
+      .from(sessionPlayers)
       .where(eq(sessionPlayers.playerId, afterPlayers[0]!));
     expect(playerHistory).toHaveLength(1);
     expect(playerHistory[0]!.sessionId).toBe(previousSessionId);
@@ -2092,26 +2367,34 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const capacity = new CapacityController(db, controller, mockLogger);
 
     await capacity.tick();
-    let active = await db.select().from(serverInstances)
-      .where(inArray(serverInstances.lifecycleState, ["CREATING", "STARTING", "RUNNING", "DRAINING"]));
+    let active = await db
+      .select()
+      .from(serverInstances)
+      .where(
+        inArray(serverInstances.lifecycleState, ["CREATING", "STARTING", "RUNNING", "DRAINING"]),
+      );
     expect(active).toHaveLength(3);
     expect(active.some((instance) => instance.replacesInstanceId === sourceInstanceId)).toBeFalse();
 
-    await db.update(serverInstances)
+    await db
+      .update(serverInstances)
       .set({ lifecycleState: "STOPPED" })
       .where(eq(serverInstances.id, occupyingInstanceId));
     await capacity.tick();
 
-    active = await db.select().from(serverInstances)
-      .where(inArray(serverInstances.lifecycleState, ["CREATING", "STARTING", "RUNNING", "DRAINING"]));
+    active = await db
+      .select()
+      .from(serverInstances)
+      .where(
+        inArray(serverInstances.lifecycleState, ["CREATING", "STARTING", "RUNNING", "DRAINING"]),
+      );
     expect(active).toHaveLength(3);
-    let replacement = active.find(
-      (instance) => instance.replacesInstanceId === sourceInstanceId,
-    );
+    let replacement = active.find((instance) => instance.replacesInstanceId === sourceInstanceId);
     expect(replacement?.lifecycleState).toBe("CREATING");
     await drainCreateQueue(controller, executor);
-    replacement = (await db.select().from(serverInstances)
-      .where(eq(serverInstances.id, replacement!.id)))[0];
+    replacement = (
+      await db.select().from(serverInstances).where(eq(serverInstances.id, replacement!.id))
+    )[0];
     expect(replacement?.lifecycleState).toBe("STARTING");
 
     await controller.handlePaperEvent(replacement!.id, {
@@ -2134,10 +2417,10 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     ]);
 
     await capacity.tick();
-    const activeReplacements = await db.select().from(serverInstances)
-      .where(
-        inArray(serverInstances.lifecycleState, ["CREATING", "STARTING", "RUNNING"]),
-      );
+    const activeReplacements = await db
+      .select()
+      .from(serverInstances)
+      .where(inArray(serverInstances.lifecycleState, ["CREATING", "STARTING", "RUNNING"]));
     expect(
       activeReplacements.filter((instance) => instance.replacesInstanceId !== null),
     ).toHaveLength(1);
@@ -2215,7 +2498,8 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const executor = {
       listManagedInstances: mock(async () => {
         await Bun.sleep(50);
-        await db.update(serverInstances)
+        await db
+          .update(serverInstances)
           .set({ lifecycleState: "RUNNING" })
           .where(eq(serverInstances.id, instanceId));
         return [orphan];
@@ -2424,18 +2708,37 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
 });
 
 // Fixtures follow the release invariant: every selected player has a durable ticket.
-async function seedSessionPlayers(input: (Omit<typeof sessionPlayers.$inferInsert, "queueEntryId"> & {queueEntryId?: string}) | (Omit<typeof sessionPlayers.$inferInsert, "queueEntryId"> & {queueEntryId?: string})[]) {
+async function seedSessionPlayers(
+  input:
+    | (Omit<typeof sessionPlayers.$inferInsert, "queueEntryId"> & { queueEntryId?: string })
+    | (Omit<typeof sessionPlayers.$inferInsert, "queueEntryId"> & { queueEntryId?: string })[],
+) {
   const rows = Array.isArray(input) ? input : [input];
   const tickets = new Map<string, string>();
   for (const row of rows) {
     let ticket = row.queueEntryId ?? tickets.get(row.sessionId + ":" + row.partyId);
     if (!ticket) {
-      const [session] = await db.select().from(gameSessions).where(eq(gameSessions.id, row.sessionId));
-      const [existing] = await db.select().from(queueEntries).where(and(eq(queueEntries.sessionId, row.sessionId), eq(queueEntries.partyId, row.partyId)));
+      const [session] = await db
+        .select()
+        .from(gameSessions)
+        .where(eq(gameSessions.id, row.sessionId));
+      const [existing] = await db
+        .select()
+        .from(queueEntries)
+        .where(
+          and(eq(queueEntries.sessionId, row.sessionId), eq(queueEntries.partyId, row.partyId)),
+        );
       ticket = existing?.id ?? nanoid();
-      if (!existing) await db.insert(queueEntries).values({id: ticket, partyId: row.partyId, groupId: session!.groupId, sessionId: row.sessionId, state: "SELECTED"});
+      if (!existing)
+        await db.insert(queueEntries).values({
+          id: ticket,
+          partyId: row.partyId,
+          groupId: session!.groupId,
+          sessionId: row.sessionId,
+          state: "SELECTED",
+        });
       tickets.set(row.sessionId + ":" + row.partyId, ticket);
     }
-    await db.insert(sessionPlayers).values({...row, queueEntryId: ticket});
+    await db.insert(sessionPlayers).values({ ...row, queueEntryId: ticket });
   }
 }
