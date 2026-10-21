@@ -1,6 +1,6 @@
 import { withDashboardSession } from "@/lib/server-session";
 import type { MonitoringRange } from "@endercloud/contracts";
-import { isMockEnabled, mockGroupMonitoring } from "@/lib/mock-data";
+import { isMockEnabled, mockGroupMonitoring } from "@/features/demo/data.server";
 import {
   jsonResponse,
   notFoundResponse,

@@ -1,11 +1,11 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getDashboardSession } from "@/lib/server-session";
-import { AppSidebar } from "@/components/app-sidebar";
-import { Providers } from "@/components/providers";
-import { SiteHeader } from "@/components/site-header";
+import { AppSidebar } from "@/components/shell/app-sidebar";
+import { Providers } from "@/components/shell/providers";
+import { SiteHeader } from "@/components/shell/site-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
-import { isMockEnabled } from "@/lib/mock-data";
+import { isMockEnabled } from "@/features/demo/data.server";
 export default async function ConsoleLayout({children}: Readonly<{children: React.ReactNode}>) {
   const request = new Request("http://dashboard/", {headers: await headers()});
   if (!await getDashboardSession(request)) redirect("/login");

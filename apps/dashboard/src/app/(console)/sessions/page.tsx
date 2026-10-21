@@ -2,10 +2,10 @@
 
 import { Gamepad2Icon } from "lucide-react";
 import { useMemo, useState } from "react";
-import { ClusterGate } from "@/components/cluster-gate";
+import { ClusterGate } from "@/features/cluster/gate";
 import { CopyableId } from "@/components/copyable-id";
 import { DataTable, type Column } from "@/components/data-table";
-import { useDetailPanel } from "@/components/detail-panel";
+import { useDetailPanel } from "@/features/inspection/panel";
 import {
   FilterBar,
   FilterSelect,

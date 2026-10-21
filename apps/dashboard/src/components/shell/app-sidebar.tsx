@@ -15,7 +15,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ComponentType } from "react";
-import { useCluster } from "@/components/cluster-provider";
+import { useCluster } from "@/features/cluster/provider";
 import {
   Sidebar,
   SidebarContent,

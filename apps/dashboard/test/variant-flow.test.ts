@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { DashboardVariantGraph } from "@endercloud/contracts";
-import { buildVariantFlow } from "../src/lib/variant-flow";
+import { buildVariantFlow } from "../src/features/variants/model";
 
 const runtime = {
   image: "itzg/minecraft-server:java25",

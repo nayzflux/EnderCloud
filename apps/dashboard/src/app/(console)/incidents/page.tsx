@@ -193,7 +193,7 @@ function IncidentsContent() {
   const query = useInfiniteQuery({
     queryKey: ["incidents", status, severity, kind, groupId, scopeId],
     initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam }) => fetchIncidents({
+    queryFn: ({ pageParam, signal }) => fetchIncidents({
       status,
       ...(severity === "all" ? {} : { severity }),
       ...(kind === "all" ? {} : { kind }),
@@ -201,7 +201,7 @@ function IncidentsContent() {
       ...(scopeId ? { scopeId } : {}),
       ...(pageParam ? { cursor: pageParam } : {}),
       limit: 50,
-    }),
+    }, signal),
     getNextPageParam: (page) => page.nextCursor ?? undefined,
   });
 

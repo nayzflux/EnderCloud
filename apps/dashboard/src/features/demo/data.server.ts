@@ -25,7 +25,7 @@ import type {
 
 /**
  * Synthetic cluster used when `DASHBOARD_MOCK_DATA` is enabled, so the console
- * can be developed and demoed without an orchestrator, Docker or PostgreSQL.
+ * can exercise synthetic topology while retaining normal persisted authentication.
  *
  * The world is rebuilt from a fixed seed on every request: identifiers stay
  * stable across refreshes (detail routes keep resolving), while every timestamp

@@ -3,9 +3,9 @@
 import { RefreshCwIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { refreshIntervals, useCluster } from "@/components/cluster-provider";
-import { ThemeToggle } from "@/components/theme-toggle";
-import { SignOut } from "@/components/sign-out";
+import { refreshIntervals, useCluster } from "@/features/cluster/provider";
+import { ThemeToggle } from "@/components/shell/theme-toggle";
+import { SignOut } from "@/components/shell/sign-out";
 import {
   Breadcrumb,
   BreadcrumbItem,

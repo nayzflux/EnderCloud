@@ -30,39 +30,43 @@ export function fetchCluster(context?: {signal?: AbortSignal}): Promise<Dashboar
 export function fetchQueue(
   groupId: string,
   limit = 100,
+  signal?: AbortSignal,
 ): Promise<DashboardQueueDetail> {
   return readJson(
-    `/api/groups/${encodeURIComponent(groupId)}/queue?limit=${limit}`,
+    `/api/groups/${encodeURIComponent(groupId)}/queue?limit=${limit}`, signal,
   );
 }
 
-export function fetchMonitoringSummary(): Promise<DashboardMonitoringSummary> {
-  return readJson("/api/monitoring/summary");
+export function fetchMonitoringSummary(context?: {signal?: AbortSignal}): Promise<DashboardMonitoringSummary> {
+  return readJson("/api/monitoring/summary", context?.signal);
 }
 
 export function fetchGroupMonitoring(
   groupId: string,
   range: MonitoringRange,
+  signal?: AbortSignal,
 ): Promise<DashboardMonitoringSeries> {
   return readJson(
-    `/api/groups/${encodeURIComponent(groupId)}/monitoring?range=${range}`,
+    `/api/groups/${encodeURIComponent(groupId)}/monitoring?range=${range}`, signal,
   );
 }
 
-export function fetchVariants(groupId: string): Promise<DashboardVariantGraph> {
-  return readJson(`/api/groups/${encodeURIComponent(groupId)}/variants`);
+export function fetchVariants(groupId: string, signal?: AbortSignal): Promise<DashboardVariantGraph> {
+  return readJson(`/api/groups/${encodeURIComponent(groupId)}/variants`, signal);
 }
 
 export function fetchInstance(
   instanceId: string,
+  signal?: AbortSignal,
 ): Promise<DashboardInstanceDetail> {
-  return readJson(`/api/instances/${encodeURIComponent(instanceId)}`);
+  return readJson(`/api/instances/${encodeURIComponent(instanceId)}`, signal);
 }
 
 export function fetchSession(
   sessionId: string,
+  signal?: AbortSignal,
 ): Promise<DashboardSessionDetail> {
-  return readJson(`/api/sessions/${encodeURIComponent(sessionId)}`);
+  return readJson(`/api/sessions/${encodeURIComponent(sessionId)}`, signal);
 }
 
 export function fetchIncidents(filters: {
@@ -73,13 +77,13 @@ export function fetchIncidents(filters: {
   readonly scopeId?: string;
   readonly cursor?: string;
   readonly limit?: number;
-} = {}): Promise<DashboardIncidentPage> {
+} = {}, signal?: AbortSignal): Promise<DashboardIncidentPage> {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(filters)) {
     if (value !== undefined) query.set(key, String(value));
   }
   const suffix = query.size > 0 ? `?${query}` : "";
-  return readJson(`/api/incidents${suffix}`);
+  return readJson(`/api/incidents${suffix}`, signal);
 }
 
 export function drainHost(hostId: string): Promise<{ accepted: boolean }> {

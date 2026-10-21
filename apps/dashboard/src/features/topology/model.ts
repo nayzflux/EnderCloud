@@ -5,7 +5,7 @@ import type {
   DashboardInstance,
   DashboardSession,
 } from "@endercloud/contracts";
-import { matchesInstanceFilter, type InstanceFilter } from "./status";
+import { matchesInstanceFilter, type InstanceFilter } from "../../lib/status";
 
 export type ClusterNodeKind =
   | "groupFrame"

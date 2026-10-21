@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useState, type ComponentType, type ReactNode } from "react";
-import { ClusterGate } from "@/components/cluster-gate";
+import { ClusterGate } from "@/features/cluster/gate";
 import { FilterBar, ResultCount, SearchField } from "@/components/filter-bar";
 import { KeyValue, KeyValueGrid, PageHeader, SectionTitle } from "@/components/page-header";
 import { GroupTypeBadge, StatusBadge } from "@/components/status-badge";

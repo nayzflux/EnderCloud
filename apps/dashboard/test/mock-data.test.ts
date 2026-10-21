@@ -8,7 +8,7 @@ import {
   mockMonitoringSummary,
   mockQueue,
   mockSession,
-} from "../src/lib/mock-data";
+} from "../src/features/demo/data.server";
 
 const now = Date.parse("2026-07-27T12:00:00.000Z");
 const internalIdPattern = /^[A-Za-z0-9]{16}$/;

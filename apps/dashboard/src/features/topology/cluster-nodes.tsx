@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { GroupTypeBadge, StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
-import type { ClusterFlowNode } from "@/lib/cluster-flow";
+import type { ClusterFlowNode } from "@/features/topology/model";
 import { formatAge, humanizeState, ratio } from "@/lib/format";
 import {
   lifecycleTone,

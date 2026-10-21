@@ -2,7 +2,7 @@
 
 import { CircleAlertIcon, PlugZapIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import { useCluster } from "@/components/cluster-provider";
+import { useCluster } from "@/features/cluster/provider";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Empty,

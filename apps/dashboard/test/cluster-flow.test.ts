@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildClusterFlow } from "../src/lib/cluster-flow";
+import { buildClusterFlow } from "../src/features/topology/model";
 import { snapshot } from "./fixtures";
 
 const noFilters = { groupId: "all", state: "all", search: "" } as const;

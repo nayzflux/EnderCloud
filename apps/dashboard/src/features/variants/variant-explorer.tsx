@@ -20,7 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { fetchVariants } from "@/lib/api";
 import type { DashboardVariantGraph } from "@endercloud/contracts";
 import { formatBytes } from "@/lib/format";
-import { buildVariantFlow, type VariantFlowNode } from "@/lib/variant-flow";
+import { buildVariantFlow, type VariantFlowNode } from "@/features/variants/model";
 
 const VariantFlow = dynamic(
   () => import("./variant-flow").then((module) => module.VariantFlow),
@@ -136,7 +136,7 @@ export function VariantExplorer({ groupId }: { readonly groupId: string }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const query = useQuery({
     queryKey: ["variants", groupId],
-    queryFn: () => fetchVariants(groupId),
+    queryFn: ({signal}) => fetchVariants(groupId, signal),
     staleTime: 30_000,
   });
   const model = useMemo(

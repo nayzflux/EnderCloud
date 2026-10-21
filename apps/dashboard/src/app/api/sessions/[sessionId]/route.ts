@@ -1,5 +1,5 @@
 import { withDashboardSession } from "@/lib/server-session";
-import { isMockEnabled, mockSession } from "@/lib/mock-data";
+import { isMockEnabled, mockSession } from "@/features/demo/data.server";
 import {
   jsonResponse,
   notFoundResponse,

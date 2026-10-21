@@ -1,5 +1,5 @@
 import { withDashboardSession } from "@/lib/server-session";
-import { isMockEnabled, mockIncidents } from "@/lib/mock-data";
+import { isMockEnabled, mockIncidents } from "@/features/demo/data.server";
 import { jsonResponse, proxyOrchestrator, validationErrorResponse } from "@/lib/orchestrator-proxy";
 
 export const dynamic = "force-dynamic";

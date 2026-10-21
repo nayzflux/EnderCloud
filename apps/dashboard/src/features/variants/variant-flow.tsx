@@ -10,7 +10,7 @@ import {
 } from "@xyflow/react";
 import { useMemo } from "react";
 import { VariantLayerNode } from "./variant-layer-node";
-import type { VariantFlowModel, VariantFlowNode } from "@/lib/variant-flow";
+import type { VariantFlowModel, VariantFlowNode } from "@/features/variants/model";
 import "@xyflow/react/dist/style.css";
 
 const nodeTypes: NodeTypes = { variantLayer: VariantLayerNode };

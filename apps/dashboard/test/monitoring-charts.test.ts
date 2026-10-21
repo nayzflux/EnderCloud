@@ -5,7 +5,7 @@ import {
   buildTpsChartRows,
   buildVariantChartConfig,
   sampleKey,
-} from "../src/lib/monitoring-charts";
+} from "../src/features/monitoring/charts";
 
 const variants: DashboardMonitoringSeries["variants"] = [
   {

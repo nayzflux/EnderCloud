@@ -19,7 +19,7 @@ import { CopyableId } from "@/components/copyable-id";
 import { ProxyStatus } from "@/components/proxy-status";
 import { Countdown, Elapsed, RelativeTime } from "@/components/live-time";
 import { KeyValue, KeyValueGrid, SectionTitle } from "@/components/page-header";
-import { Timeline, type TimelineStep } from "@/components/timeline";
+import { Timeline, type TimelineStep } from "@/features/inspection/timeline";
 import {
   AvailabilityBadge,
   LifecycleBadge,
@@ -278,7 +278,7 @@ function ListCard({
 function InstancePanel({ instanceId }: { readonly instanceId: string }) {
   const query = useQuery({
     queryKey: ["instance", instanceId],
-    queryFn: () => fetchInstance(instanceId),
+    queryFn: ({signal}) => fetchInstance(instanceId, signal),
     refetchInterval: 5_000,
   });
 
@@ -553,7 +553,7 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
   const { openInstance } = useDetailPanel();
   const query = useQuery({
     queryKey: ["session", sessionId],
-    queryFn: () => fetchSession(sessionId),
+    queryFn: ({signal}) => fetchSession(sessionId, signal),
     refetchInterval: 5_000,
   });
 

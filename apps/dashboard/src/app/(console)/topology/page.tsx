@@ -3,7 +3,7 @@
 import { NetworkIcon } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
-import { ClusterGate } from "@/components/cluster-gate";
+import { ClusterGate } from "@/features/cluster/gate";
 import { FilterBar, FilterSelect, SearchField } from "@/components/filter-bar";
 import { PageHeader } from "@/components/page-header";
 import {
@@ -14,7 +14,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import { buildClusterFlow } from "@/lib/cluster-flow";
+import { buildClusterFlow } from "@/features/topology/model";
 import type { DashboardClusterSnapshot } from "@endercloud/contracts";
 import { instanceFilters, type InstanceFilter } from "@/lib/status";
 import { cn } from "@/lib/utils";
@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
 // React Flow measures the DOM, so it can only render on the client.
 const ClusterFlow = dynamic(
   () =>
-    import("@/components/topology/cluster-flow").then(
+    import("@/features/topology/cluster-flow").then(
       (module) => module.ClusterFlow,
     ),
   { ssr: false, loading: () => <Skeleton className="size-full" /> },

@@ -1,6 +1,6 @@
 import { ArrowLeftIcon } from "lucide-react";
 import Link from "next/link";
-import { VariantExplorer } from "@/components/variants/variant-explorer";
+import { VariantExplorer } from "@/features/variants/variant-explorer";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 

@@ -10,15 +10,15 @@ import {
   type NodeTypes,
 } from "@xyflow/react";
 import { useCallback } from "react";
-import { useDetailPanel } from "@/components/detail-panel";
+import { useDetailPanel } from "@/features/inspection/panel";
 import {
   GroupFrameNode,
   InstanceNode,
   PoolNode,
   QueueNode,
   SessionNode,
-} from "@/components/topology/cluster-nodes";
-import type { ClusterFlowModel, ClusterFlowNode } from "@/lib/cluster-flow";
+} from "@/features/topology/cluster-nodes";
+import type { ClusterFlowModel, ClusterFlowNode } from "@/features/topology/model";
 import "@xyflow/react/dist/style.css";
 
 const nodeTypes: NodeTypes = {

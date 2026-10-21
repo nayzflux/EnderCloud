@@ -11,13 +11,13 @@ import {
 import Link from "next/link";
 import { useMemo, type ReactNode } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, XAxis, YAxis } from "recharts";
-import { ClusterGate } from "@/components/cluster-gate";
-import { useDetailPanel } from "@/components/detail-panel";
+import { ClusterGate } from "@/features/cluster/gate";
+import { useDetailPanel } from "@/features/inspection/panel";
 import { PageHeader } from "@/components/page-header";
-import { OverviewMonitoringAlerts } from "@/components/monitoring-alerts";
-import { OverviewIncidentAlerts } from "@/components/incident-alerts";
+import { OverviewMonitoringAlerts } from "@/features/monitoring/alerts";
+import { OverviewIncidentAlerts } from "@/features/incidents/alerts";
 import { StatCard } from "@/components/stat-card";
-import { VariantStartupAction } from "@/components/variant-startup-action";
+import { VariantStartupAction } from "@/features/variants/startup-action";
 import {
   GroupTypeBadge,
   LifecycleBadge,

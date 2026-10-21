@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Timeline } from "../src/components/timeline";
+import { Timeline } from "../src/features/inspection/timeline";
 
 test("renders the active deadline name next to its timeline marker", () => {
   const html = renderToStaticMarkup(

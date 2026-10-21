@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, XAxis, YAxis } from "recharts";
-import { ClusterGate } from "@/components/cluster-gate";
+import { ClusterGate } from "@/features/cluster/gate";
 import { CopyableId } from "@/components/copyable-id";
 import { DataTable, type Column } from "@/components/data-table";
 import { PageHeader, SectionTitle } from "@/components/page-header";
@@ -183,7 +183,7 @@ function WaitDistribution({ rows }: { readonly rows: readonly QueueRow[] }) {
 function QueuePanel({ group }: { readonly group: DashboardGroup }) {
   const query = useQuery({
     queryKey: ["queue", group.id],
-    queryFn: () => fetchQueue(group.id, QUEUE_LIMIT),
+    queryFn: ({signal}) => fetchQueue(group.id, QUEUE_LIMIT, signal),
     refetchInterval: 5_000,
     placeholderData: (previous) => previous,
   });

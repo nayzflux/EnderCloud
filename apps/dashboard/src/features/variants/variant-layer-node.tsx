@@ -3,7 +3,7 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { BoxIcon, Layers3Icon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import type { VariantFlowNode } from "@/lib/variant-flow";
+import type { VariantFlowNode } from "@/features/variants/model";
 import { cn } from "@/lib/utils";
 
 export function VariantLayerNode({ data, selected }: NodeProps<VariantFlowNode>) {

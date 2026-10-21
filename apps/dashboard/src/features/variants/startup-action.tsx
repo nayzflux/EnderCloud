@@ -4,7 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { RotateCcwIcon, TriangleAlertIcon } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { useCluster } from "@/components/cluster-provider";
+import { useCluster } from "@/features/cluster/provider";
 import {
   AlertDialog,
   AlertDialogCancel,

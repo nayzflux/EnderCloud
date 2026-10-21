@@ -3,8 +3,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
 import { useState, type ReactNode } from "react";
-import { ClusterProvider } from "@/components/cluster-provider";
-import { DetailPanelProvider } from "@/components/detail-panel";
+import { ClusterProvider } from "@/features/cluster/provider";
+import { DetailPanelProvider } from "@/features/inspection/panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 

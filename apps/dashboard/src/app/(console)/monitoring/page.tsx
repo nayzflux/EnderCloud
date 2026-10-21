@@ -12,7 +12,7 @@ import {
   YAxis,
   type TooltipContentProps,
 } from "recharts";
-import { useCluster } from "@/components/cluster-provider";
+import { useCluster } from "@/features/cluster/provider";
 import { FilterBar, FilterSelect } from "@/components/filter-bar";
 import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -49,7 +49,7 @@ import {
   sampleKey,
   type StartupMetric,
   type TpsMetric,
-} from "@/lib/monitoring-charts";
+} from "@/features/monitoring/charts";
 
 const rangeOptions: readonly { readonly value: MonitoringRange; readonly label: string }[] = [
   { value: "1h", label: "1h" },
@@ -198,7 +198,7 @@ export default function MonitoringPage() {
 
   const query = useQuery({
     queryKey: ["monitoring", groupId, range],
-    queryFn: () => fetchGroupMonitoring(groupId, range),
+    queryFn: ({signal}) => fetchGroupMonitoring(groupId, range, signal),
     enabled: groupId.length > 0,
     refetchInterval:
       refreshInterval === 0 ? false : Math.max(30_000, refreshInterval),

@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ActivityIcon, GaugeIcon } from "lucide-react";
 import Link from "next/link";
-import { useCluster } from "@/components/cluster-provider";
+import { useCluster } from "@/features/cluster/provider";
 import {
   Alert,
   AlertAction,

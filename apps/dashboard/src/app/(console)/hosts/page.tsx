@@ -9,8 +9,8 @@ import {
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ClusterGate } from "@/components/cluster-gate";
-import { useCluster } from "@/components/cluster-provider";
+import { ClusterGate } from "@/features/cluster/gate";
+import { useCluster } from "@/features/cluster/provider";
 import { CopyableId } from "@/components/copyable-id";
 import { DataTable, type Column } from "@/components/data-table";
 import { RelativeTime } from "@/components/live-time";

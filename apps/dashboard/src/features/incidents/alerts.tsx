@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangleIcon, CircleAlertIcon } from "lucide-react";
 import Link from "next/link";
-import { useCluster } from "@/components/cluster-provider";
+import { useCluster } from "@/features/cluster/provider";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { fetchIncidents } from "@/lib/api";
@@ -13,7 +13,7 @@ export function OverviewIncidentAlerts() {
   const activeCount = snapshot?.summary.activeIncidentCount ?? 0;
   const query = useQuery({
     queryKey: ["incidents", "overview"],
-    queryFn: () => fetchIncidents({ status: "active", limit: 5 }),
+    queryFn: ({signal}) => fetchIncidents({ status: "active", limit: 5 }, signal),
     enabled: activeCount > 0,
     refetchInterval: refreshInterval === 0 ? false : Math.max(5_000, refreshInterval),
     refetchIntervalInBackground: false,
