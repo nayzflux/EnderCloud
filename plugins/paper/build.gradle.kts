@@ -17,27 +17,6 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-tasks {
-    register("copyJarToServer1", Copy::class) {
-        from(shadowJar.get().archiveFile)
-        into("${System.getenv("USERPROFILE")}/Documents/Code/Minecraft/EnderCloud/templates/hub/plugins")
-    }
-
-    register("copyJarToServer2", Copy::class) {
-        from(shadowJar.get().archiveFile)
-        into("${System.getenv("USERPROFILE")}/Documents/Code/Minecraft/EnderCloud/templates/skywars-solo-japan/plugins")
-    }
-
-    register("copyJarToServer3", Copy::class) {
-        from(shadowJar.get().archiveFile)
-        into("${System.getenv("USERPROFILE")}/Documents/Code/Minecraft/EnderCloud/templates/skywars-solo-dome/plugins")
-    }
-
-    register("copyJarToServer4", Copy::class) {
-        from(shadowJar.get().archiveFile)
-        into("${System.getenv("USERPROFILE")}/Documents/Code/Minecraft/EnderCloud/templates/skywars-duo-dome/plugins")
-    }
-}
 
 tasks.processResources {
     inputs.property("version", project.version)
@@ -62,7 +41,3 @@ publishing {
     }
 }
 
-tasks.build {
-    dependsOn(tasks.publishToMavenLocal)
-    finalizedBy("copyJarToServer1", "copyJarToServer2", "copyJarToServer3", "copyJarToServer4")
-}

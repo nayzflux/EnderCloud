@@ -2,8 +2,8 @@
 jackson = "2.20.1"
 junit = "5.14.1"
 lettuce = "6.8.1.RELEASE"
-paper = "26.2.build.+"
-velocity = "4.1.0-SNAPSHOT"
+paper = "26.2.build.71-beta"
+velocity = "4.1.0-20260814.105711-13"
 shadow = "9.3.1"
 
 [libraries]

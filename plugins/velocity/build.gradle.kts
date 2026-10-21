@@ -28,17 +28,7 @@ tasks.shadowJar {
     relocate("reactor", "fr.endercloud.libs.reactor")
 }
 
-tasks.build {
-    dependsOn(tasks.publishToMavenLocal)
-    finalizedBy("copyJarToServer")
-}
 
-tasks {
-    register("copyJarToServer", Copy::class) {
-        from(shadowJar.get().archiveFile)
-        into("${System.getenv("USERPROFILE")}/Documents/Minecraft/proxy/proxy/plugins")
-    }
-}
 
 publishing {
     publications {
