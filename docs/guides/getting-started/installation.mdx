@@ -1,0 +1,67 @@
+---
+title: Installation
+description: Install the release stack, initialize its administrator and provision execution hosts.
+---
+
+## Requirements
+
+Use Docker Engine with Compose, Git, and private connectivity between control services.
+Source development also needs Bun 1.4.2, Node.js 24.13.0 and JDK 25; the Gradle wrapper is included.
+
+## Prepare the stack
+
+Clone the repository and copy `.env.example` to `.env`. On Linux, `bash install.sh`
+can generate a master, worker or combined deployment, validate Compose and initialize credentials.
+
+For manual setup, replace the PostgreSQL password and its URL, and generate four independent secrets:
+
+```bash
+bun -e "console.log(crypto.randomUUID()+crypto.randomUUID())" # AUTH_SECRET
+bun -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))" # CREDENTIAL_ENCRYPTION_KEY
+bun -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))" # REDIS_PUBLISHER_PASSWORD
+bun -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))" # REDIS_PROXY_PASSWORD
+```
+
+Set `DASHBOARD_PUBLIC_URL` to the browser origin. Use HTTPS for production; loopback HTTP
+is available for local development. Keep generated secrets and `.env` out of Git.
+
+## Start central services
+
+```bash
+docker compose config --quiet
+docker compose up --build -d --wait
+```
+
+This starts PostgreSQL, Redis, the orchestrator and dashboard. It initializes an empty release
+database, or reopens this release's existing schema. A legacy database is rejected without changes.
+Use a separate empty database for the new release and retain the old data for an explicit migration.
+
+Follow [Authentication and credentials](/docs/configure/authentication) to create the local
+administrator and provision the primary agent. Then start its separate profile:
+
+```bash
+docker compose --profile agents up --build -d agent
+```
+
+Configure the agent's advertised game address, resources and absolute Docker-visible runtime
+directory before this step. Each agent needs its own protected credential file. Remote hosts follow
+[Multi-host deployment](/docs/configure/multi-host).
+
+## Open the console
+
+The local defaults are dashboard `http://127.0.0.1:3000/login` and orchestrator
+`http://127.0.0.1:8080/health/ready`. The OpenAPI reference at `/openapi` requires an
+administrator session. Sign in through the dashboard. Health probes are public on the private
+control interface; other routes require an administrator session or a correctly scoped service key.
+
+## Define runnable servers
+
+Define [groups](/docs/configure/groups) and [template layers and variants](/docs/configure/variants)
+under the root `groups/` and `templates/` directories. Supply the required fixed server
+JARs and freshly built EnderCloud plugins yourself. Restart the orchestrator after changing
+configuration. Increase a final variant's revision when its effective content changes.
+
+Check both host health and Paper readiness before admitting players. Docker liveness alone does
+not establish application health. Preserve PostgreSQL, secrets, configuration, templates and each
+agent's persistent runtime directory when upgrading or restarting.
+

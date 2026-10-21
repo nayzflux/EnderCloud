@@ -1,0 +1,43 @@
+---
+title: Live proxy smoke test
+description: Optional end-to-end checks using supplied fixed Paper and Velocity server JARs.
+---
+
+## Supply server artifacts
+
+First build the plugins with strict Gradle verification. Supply compatible, fixed server JARs;
+record their versions and SHA-256 hashes with your deployment assets. EnderCloud does not download
+an arbitrary server release during this check.
+
+Run from `apps/orchestrator/` with Docker available:
+
+```powershell
+$env:TEST_VELOCITY_JAR = "C:\servers\velocity.jar"
+$env:TEST_PAPER_JAR = "C:\servers\paper.jar"
+bun test/smoke/proxies.ts
+```
+
+The script creates a disposable PostgreSQL database, Redis, a Paper hub and two managed Velocity
+instances. It checks discovery, plugin readiness and an empty proxy drain. The local smoke
+configuration uses offline authentication for isolation; it must never be published as a player-facing
+deployment. Container ports use a dedicated test range. Temporary templates are retained under
+`.cache/` for inspection, while Docker resources are cleaned on exit.
+
+## Verify a deployed player path
+
+For a real deployment, use [managed proxy configuration](/docs/configure/proxies), online
+authentication and modern forwarding with a private shared forwarding secret.
+
+Sign in to the dashboard and read the current proxy endpoints; ports may change after replacement.
+Connect a Minecraft Java client compatible with the supplied Paper build. Confirm automatic hub
+selection, presence, matchmaking, transfer acknowledgement and game lifecycle reporting.
+
+To test drain, connect one player, disable the proxy group and restart only the orchestrator.
+New admissions must stop while the connected player remains able to use its current backend.
+After the player disconnects, verify physical removal and released reservations. Restore the group
+and restart to restore configured capacity.
+
+Repeat across separate physical hosts to validate private routing, advertised addresses, firewall
+rules and load-balancer health. The automated two-agent recovery test uses one Docker daemon and
+does not establish these network properties.
+

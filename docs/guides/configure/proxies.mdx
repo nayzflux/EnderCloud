@@ -1,0 +1,165 @@
+---
+title: Managed Velocity proxies
+description: EnderCloud release operations and integration.
+---
+
+
+EnderCloud can run Velocity as managed instances alongside Paper. A `proxy` group maintains a
+fixed number of instances. Agents deploy its template layers, reserve CPU and memory, allocate
+proxy ports, and recover failed processes using the existing instance lifecycle.
+
+## Enable an execution host
+
+Configure all three values on every agent that may host proxies:
+
+```dotenv
+AGENT_ADVERTISED_PROXY_ADDRESS=10.20.0.12
+AGENT_PROXY_PORT_START=25700
+AGENT_PROXY_PORT_END=25709
+```
+
+The address must be reachable by your external TCP load balancer. The range must not overlap
+`AGENT_GAME_PORT_START` through `AGENT_GAME_PORT_END`. Omitting all three values keeps the agent
+Paper-only. Proxies use container port 25565 and an allocated host port from the dedicated range.
+
+Managed proxies must reach the orchestrator, Redis, and every Paper endpoint advertised by the
+agents. Configure central `PROXY_REDIS_URL` with the subscriber-only Redis URL reachable from
+those containers. The orchestrator injects it together with a per-instance API key. Agents inject
+`ENDERCLOUD_INSTANCE_ID` and `ENDERCLOUD_ORCHESTRATOR_URL` automatically. Templates contain no control credentials.
+
+If the Paper plugins use HydrogenAPI, deploy `HydrogenVelocity` on every proxy as well.
+It maintains the shared player presence used to authorize matchmaking. Configure the same
+`HYDROGEN_DB_*` and `HYDROGEN_REDIS_*` values on Paper and Velocity. HydrogenVelocity can use
+the injected `ENDERCLOUD_INSTANCE_ID` when `HYDROGEN_PROXY_ID` is absent, giving each managed
+proxy its own identity. External proxies still need an explicit `HYDROGEN_PROXY_ID`.
+
+## Group and template
+
+Create `groups/proxy.yml`:
+
+```yaml
+id: edge-proxies
+type: proxy
+enabled: true
+variants:
+  - id: velocity-main
+    weight: 100
+capacity:
+  minimum_instances: 2
+  maximum_instances: 2
+timeouts:
+  startup: 90s
+  drain: 15m
+  shutdown: 20s
+  player_stale: 30s
+```
+
+The minimum and maximum must match. Warm limits are optional and normalized to the fixed count.
+Proxy groups cannot declare matchmaking, hub routing, or `instance_lifetime`. Removing or disabling
+a group drains its running proxies. Maintenance can temporarily add one replacement per group.
+
+Create this directory with a pinned Velocity JAR and the newly built EnderCloud plugin:
+
+```text
+templates/velocity-main/
+  variant.yml
+  velocity.jar
+  velocity.toml
+  forwarding.secret
+  plugins/
+    EnderCloudVelocity-0.1.0.jar
+```
+
+Example `variant.yml`:
+
+```yaml
+id: velocity-main
+revision: 1
+docker:
+  image: itzg/mc-proxy:java25
+  data_directory: /server
+  memory: 1G
+  cpu: 1
+environment:
+  TYPE: CUSTOM
+  CUSTOM_FAMILY: velocity
+  BUNGEE_JAR_FILE: /server/velocity.jar
+  SERVER_PORT: "25565"
+  MEMORY: 768m
+```
+
+Use a specific compatible Velocity build for `velocity.jar` and record its version and
+checksum with your deployment assets. Keeping the JAR in the template avoids automatic downloads
+of newer builds. The Java 25 image and `/server` working directory follow the
+[itzg image documentation](https://github.com/itzg/docker-mc-proxy/blob/main/README.md).
+Set `SERVER_PORT` explicitly so the image's health check uses the Minecraft listener port
+when `TYPE` is `CUSTOM`.
+
+Minimal `velocity.toml`:
+
+```toml
+config-version = "2.7"
+bind = "0.0.0.0:25565"
+motd = "EnderCloud"
+show-max-players = 500
+online-mode = true
+player-info-forwarding-mode = "modern"
+forwarding-secret-file = "forwarding.secret"
+
+[servers]
+try = []
+
+[forced-hosts]
+```
+
+The plugin registers Paper backends dynamically and selects the initial hub. Put the same secret
+in `forwarding.secret` and Paper's `proxies.velocity.secret`, enable modern Velocity forwarding
+on Paper, and run Paper with online mode disabled. EnderCloud deploys these files without generating
+or changing the secret. Existing templates without `docker.data_directory` still mount at `/data`.
+
+## Discovery, health and drain
+
+`GET /api/v1/proxies` returns active managed proxies with `instanceId`, `groupId`, `variantId`,
+`endpoint`, `lifecycleState`, `playerCount`, `lastHeartbeatAt`, `ready`, and `acceptingConnections`.
+Use only entries with `acceptingConnections: true`. This operations endpoint requires an
+administrator session; use an authenticated operator-side discovery adapter for your load balancer.
+EnderCloud does not configure the load balancer or DNS.
+
+The plugin sends `PUT /api/v1/proxies/:instanceId/heartbeat` every ten seconds with:
+
+```json
+{"ready": true, "playerCount": 12, "acceptingConnections": true}
+```
+
+The response contains `lifecycleState`, desired `acceptingConnections`, and `controlLeaseMs`.
+Readiness requires an open Minecraft listener and a synchronized Redis/HTTP backend registry.
+Discovery additionally requires the plugin to have applied admission permission and a heartbeat
+newer than `player_stale`. Use a value such as `30s` to tolerate a delayed ten-second heartbeat.
+
+During drain, discovery immediately closes admissions. The plugin applies that decision on its
+next successful heartbeat. Existing players can still change Paper backends and receive transfer
+commands. New logins are rejected. The instance stops when a fresh heartbeat confirms zero players
+and closed admissions after drain started, or when `drain` expires. At expiry, remaining players
+are disconnected. A stale heartbeat preserves the last known player count and cannot authorize
+early shutdown. Losing control permission also closes new logins locally until control recovers.
+
+Proxy counts never enter Paper presence or session tables. The dashboard shows them separately
+and excludes them from the global Paper player total. Proxies never appear in the backend registry
+or as transfer destinations. External Velocity installations without `ENDERCLOUD_INSTANCE_ID`
+keep their existing registry, transfer, and hub fallback behavior.
+
+## Upgrade and verification
+
+Upgrade the orchestrator, agents, and core/Velocity plugin together before enabling proxy groups.
+The orchestrator applies the database migration at startup. Old CREATE commands without an
+instance type remain Paper commands, and older agents advertise no proxy capability.
+
+Run orchestrator typechecks, unit and integration tests, Gradle core/Velocity checks and JAR builds,
+and dashboard lint/typecheck/tests/build. The proxy integration suite covers two proxies and a hub,
+backend isolation, player totals, drain confirmation, stale heartbeats, runtime replacement, and
+maintenance. After building the plugin JARs, set `TEST_VELOCITY_JAR` and `TEST_PAPER_JAR` to pinned
+local server JARs and run `bun run test:proxies:live` in `apps/orchestrator/`. This opt-in check creates
+two real Velocity containers and a Paper hub, verifies readiness, backend isolation and empty
+drain, then removes its Docker resources. It requires Docker and free host ports 29165–29179.
+A live deployment check should additionally verify hub login and transfer,
+then drain one proxy while observing existing and new player connections.

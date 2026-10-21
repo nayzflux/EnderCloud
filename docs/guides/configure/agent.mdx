@@ -7,8 +7,8 @@ Run one EnderCloud agent on every Docker host that may run Minecraft instances. 
 small HTTP service with no placement or matchmaking policy. It carries out commands for its own
 stable host identifier and reports enough information for the orchestrator to reconcile state.
 
-The entry point is `orchestrator/src/agent/index.ts`. The central and standalone Compose files
-build it from the same image as the orchestrator but use a different command.
+The entry point is `apps/agent/src/index.ts`. It has its own dependencies, bootstrap and Docker
+image. It persists operation admission in a host-local SQLite journal under the runtime directory.
 
 ## Responsibilities
 
@@ -29,10 +29,11 @@ or transfer target.
 
 ## Start an agent
 
-The primary agent starts with the root stack:
+Provision credentials first through the [local security CLI](/docs/configure/authentication).
+The primary agent uses a separate Compose profile:
 
 ```powershell
-docker compose up --build
+docker compose --profile agents up --build -d agent
 ```
 
 For a remote host, copy `.env.agent.example` to `.env.agent`, set the private addresses and host
@@ -45,9 +46,8 @@ docker compose --env-file .env.agent -f compose.agent.yml up --build -d
 To run the agent directly during development:
 
 ```powershell
-cd orchestrator
-bun install --frozen-lockfile
-bun run agent
+cd apps/agent
+bun run dev
 ```
 
 A direct process still needs Docker access, writable runtime and cache directories, and a reachable
@@ -69,7 +69,9 @@ runtime state, then marks it `ONLINE`.
 
 ## HTTP API
 
-The agent API is private and unauthenticated.
+The agent API is private. Control routes require this host's `AGENT_CONTROL_TOKEN`; health probes
+remain public on that private interface. Heartbeats and template downloads use its distinct
+`AGENT_ORCHESTRATOR_TOKEN`.
 
 | Method and path | Purpose |
 | --- | --- |
@@ -87,7 +89,8 @@ request identifier and includes both values in structured logs.
 
 ## Template cache
 
-The cache key is `<layer-id>/<checksum>`. A cache hit requires that exact directory. On a miss, the
+The cache key is `<layer-id>/<checksum>`. Every cache hit is rehashed and checked against quotas.
+On a miss, the
 agent:
 
 1. Requests `/api/v1/template-layers/{id}/archive?checksum=<sha256>` from the orchestrator.
@@ -99,6 +102,10 @@ agent:
 Concurrent requests for the same layer and checksum share one download. The current agent does
 not evict valid cached layers. Monitor or rotate the cache volume on long-lived hosts after old
 revisions are no longer needed.
+
+The total deadline includes queueing, download, extraction and hashing. Idle downloads are aborted;
+expanded bytes and entry counts are bounded. Consumers cancel independently and the last cancelled
+consumer aborts the shared transfer. Interrupted staging directories are removed at startup.
 
 ## Runtime materialization
 
@@ -141,7 +148,7 @@ refuses any path that is not one direct child of the configured `instances` dire
 ## Environment variables
 
 This table lists every variable read by the agent process. Defaults come from
-`orchestrator/src/agent/config.ts`.
+`apps/agent/src/config.ts`.
 
 Durations require an integer and one of `ms`, `s`, `m`, `h`, or `d`.
 
@@ -149,6 +156,8 @@ Durations require an integer and one of `ms`, `s`, `m`, `h`, or `d`.
 | --- | :---: | --- | --- |
 | `ORCHESTRATOR_URL` | Yes | None | `http:` or `https:` base URL used for heartbeats and template downloads. Also injected into managed containers |
 | `AGENT_ID` | Yes | None | 2 to 63 lowercase letters, digits, or dashes. Stable host identity |
+| `AGENT_ORCHESTRATOR_TOKEN` | Yes | None | Provisioned outgoing API key, scoped to this host |
+| `AGENT_CONTROL_TOKEN` | Yes | None | Separate inbound control secret, at least 32 characters |
 | `AGENT_VERSION` | No | `0.1.0` | Version reported in heartbeats and logs |
 | `AGENT_LISTEN_PORT` | No | `8090` | Integer from 1 to 65535. Internal HTTP listen port |
 | `AGENT_ADVERTISED_CONTROL_URL` | Yes | None | `http:` or `https:` URL that the orchestrator can reach |
@@ -161,6 +170,14 @@ Durations require an integer and one of `ms`, `s`, `m`, `h`, or `d`.
 | `AGENT_RUNTIME_DIRECTORY` | No | `/data/runtime` | Runtime directory visible to the agent process |
 | `AGENT_RUNTIME_HOST_DIRECTORY` | Yes | None | Matching absolute runtime directory as seen by the Docker daemon |
 | `AGENT_TEMPLATE_CACHE_DIRECTORY` | No | `/data/template-cache` | Persistent checksum-keyed layer cache |
+| `AGENT_TEMPLATE_DOWNLOAD_TIMEOUT` | No | `5m` | Total template acquisition deadline |
+| `AGENT_TEMPLATE_IDLE_TIMEOUT` | No | `30s` | Maximum time without download progress |
+| `AGENT_TEMPLATE_MAX_EXPANDED_BYTES` | No | `8589934592` | Maximum expanded bytes per layer |
+| `AGENT_TEMPLATE_MAX_ENTRIES` | No | `100000` | Maximum archive and cache entries |
+| `AGENT_TEMPLATE_DOWNLOAD_CONCURRENCY` | No | `4` | Concurrent layer preparations, from 1 to 32 |
+| `AGENT_ADVERTISED_PROXY_ADDRESS` | With proxy ports | None | Proxy endpoint reachable by players or a load balancer |
+| `AGENT_PROXY_PORT_START` | With proxy address | None | First dedicated proxy port |
+| `AGENT_PROXY_PORT_END` | With proxy address | None | Last dedicated proxy port, disjoint from Paper ports |
 | `AGENT_GAME_PORT_START` | No | `25565` | First port in the inclusive allocation range, from 1 to 65535 |
 | `AGENT_GAME_PORT_END` | No | `25664` | Last port in the inclusive range. Must be at least the start and at most 65535 |
 | `AGENT_LOG_LEVEL` | No | `info` | One of `debug`, `info`, `warn`, or `error` |

@@ -1,0 +1,48 @@
+---
+title: Authentication and credentials
+description: Local administrator, persisted sessions, scoped service keys and recovery.
+---
+
+The dashboard and control API require authentication, including demo data. Keep control endpoints on a private network and expose the dashboard through HTTPS. Only loopback HTTP is accepted as a production development exception.
+
+## Initialize a release
+
+Configure `AUTH_SECRET` with at least 32 random characters, `CREDENTIAL_ENCRYPTION_KEY` with 32 random bytes encoded as base64, and `DASHBOARD_PUBLIC_URL` with the dashboard origin. Preserve the encryption key in backups: changing it prevents decryption of existing agent and instance credentials.
+
+Start PostgreSQL, Redis, the orchestrator and dashboard first. The default Compose invocation does this; agents use a separate profile.
+
+```bash
+docker compose up --build -d
+read -r -s -p 'Administrator password (14–128 characters): ' password; printf '\n'
+printf '%s' "$password" | docker compose exec -T orchestrator bun src/security/cli.ts admin:create admin@example.com
+unset password
+```
+
+Open `/login`. Public registration and API-key management endpoints are disabled. The database enforces one administrator. Passwords are hashed by Better Auth; sessions expire after eight hours, use HttpOnly SameSite=Strict cookies, and are checked against PostgreSQL. Production cookies require HTTPS. Five login attempts per minute are allowed. No SMTP server is required.
+
+## Provision an agent
+
+Each host receives one outgoing API key and a distinct inbound control token. Provision its stable id on the central host, then copy the protected file to the worker through your normal secure deployment channel.
+
+```bash
+umask 077
+mkdir -p deployment
+docker compose exec -T orchestrator bun src/security/cli.ts agent:provision primary-host --stdout > deployment/agent.env
+docker compose --profile agents up --build -d agent
+```
+
+The generated file contains `AGENT_ID`, `AGENT_ORCHESTRATOR_TOKEN` and `AGENT_CONTROL_TOKEN`. Remote workers use the same values with `compose.agent.yml`. Never commit this file. Agent keys grant only that host's heartbeat and template reads. Per-instance Paper and Velocity keys are injected automatically and grant only their runtime operations. A service key never opens an administrator session. An inactive instance's key cannot control the cluster.
+
+## Reset, rotate and revoke
+
+Pipe a replacement password into `admin:reset`; it invalidates all administrator sessions. Use `agent:rotate HOST --stdout` to generate replacement agent credentials, replace the worker's protected file, and recreate the worker. `agent:revoke HOST` disables its outgoing key immediately. Removing a host from the deployment also requires stopping its agent and revoking access to the private control network.
+
+API keys are hashed by Better Auth. Recoverable API and control secrets are stored with AES-256-GCM, bound to their credential identity and a random nonce. Back up the encryption key separately from PostgreSQL. Backups must include PostgreSQL, the control secrets, group/template sources and each agent's SQLite journal and runtime volume.
+
+For a runtime, `instance:rotate ID` revokes the old key and retires that identity. The control plane confirms physical removal before restoring configured capacity with a new instance and key. `instance:revoke ID` performs the same emergency retirement. These commands interrupt that runtime; persisted session recovery follows the normal failure policy. An admitted CREATE is never rewritten with another token.
+
+## Redis and private networking
+
+Redis disables its default user. The orchestrator may publish only the registry and transfer channels. Proxies may only subscribe to those channels; they cannot write keys or publish. Configure `PROXY_REDIS_URL` with the subscriber URL reachable from every managed proxy. The orchestrator injects it; templates do not contain Redis credentials. Rotating Redis credentials requires restarting the affected clients and managed proxies.
+
+Dashboard requests use their administrator cookie and validated origin. Request ids propagate through the dashboard, orchestrator, agents and Java clients. Unauthenticated health probes remain available on the private control interface.

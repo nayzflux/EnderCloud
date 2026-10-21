@@ -1,0 +1,88 @@
+---
+title: Test reference
+description: Fast checks, disposable integration tests, browser validation, Java builds and deployment recovery.
+---
+
+## Root commands
+
+Run from the repository root after `bun install --frozen-lockfile`:
+
+| Command | Coverage | Requirements |
+| --- | --- | --- |
+| `bun run check` | Boundaries, types, frontend lint, formatter and unit suites | Bun and Node |
+| `bun run typecheck` | All application and shared-package types | Bun and Node |
+| `bun run test` | Orchestrator, agent and dashboard unit suites | Bun |
+| `bun run check:compose` | Central, standalone-agent and two-host Compose interpolation | Docker Compose |
+| `bun run check:release` | All checks below, including Docker images and recovery | Docker, Chromium; JDK 25 or Docker fallback |
+
+Install Chromium with `bun run browsers:install`. On Linux also run
+`bunx --no-install playwright install-deps chromium` from `apps/dashboard`.
+The browser binaries and temporary test artifacts live under ignored `.cache/`.
+
+## PostgreSQL and Redis
+
+`bun run --cwd apps/orchestrator test:integration` starts disposable PostgreSQL 18.1
+containers. It never uses an external `TEST_DATABASE_URL`. Scenarios cover transactional
+outbox replay, probe recovery, session races, offline hosts, retained-runtime cleanup, health leases,
+transfer generations, authentication and refusal of legacy databases without modification.
+
+The Redis deployment test starts Redis 8.4.0 with the actual ACL script. It verifies the disabled
+default user, publisher/subscriber separation and forbidden keys or channels.
+
+Unit suites inject network, worker, filesystem and cancellation failures without requiring Docker.
+The agent suite exercises the durable SQLite journal across reopen, concurrent operations,
+superseded CREATEs, bounded extraction and shared-download cancellation.
+
+## Browser tests
+
+The dashboard suite uses a real Better Auth API and disposable PostgreSQL database. Cluster data
+is synthetic, but login, cookie/session validation, origin checks and logout follow the real path.
+It covers desktop and mobile Chromium, navigation, actions, inspection, topology and accessibility.
+The website suite covers the landing page, canonical documentation, search and accessibility.
+
+Each application's `test:e2e` builds and starts its production server automatically.
+Do not run its type generation or another build concurrently. Stop conflicting local listeners
+on the test ports before running a suite.
+
+```bash
+bun run --cwd apps/dashboard test:e2e
+bun run --cwd apps/web test:e2e
+```
+
+## Java
+
+From `plugins/` run:
+
+```bash
+./gradlew --no-daemon --dependency-verification=strict build
+```
+
+On Windows use `.\gradlew.bat`. This compiles core, Paper and Velocity for Java 25, runs
+JUnit regressions and builds shaded plugin JARs. Checks cover shared JSON fixtures, assignment
+ordering, registry snapshots and transfer fencing. Dynamic dependency selectors are forbidden;
+the two Velocity timestamped artifacts are pinned by exact coordinates and verified hashes.
+Do not regenerate dependency locks or verification hashes during normal validation.
+
+## Deployment and recovery
+
+`bun run check:release` builds the four production Docker images, validates Compose and tests
+the Linux installer. On Windows it runs Bash installer checks inside `docker:29-cli` and Java
+inside `eclipse-temurin:25-jdk` when no local JDK is available.
+
+`bun run test:two-agents` uses the freshly built agent image, real agents, authenticated HTTP,
+PostgreSQL and Redis on a disposable Docker network. It materializes templates and starts one
+lightweight runtime per host, restarts the control plane and an agent, checks durable deletion
+fencing, and reconciles physical cleanup without losing reservations. Every resource is scoped
+to that run and removed on exit.
+
+These lightweight runtimes simulate Paper callbacks. This test does not establish Minecraft
+client compatibility or physical cross-host routing. The optional
+[live proxy procedure](/docs/develop/proxy-smoke) uses supplied fixed Paper and Velocity server
+JARs for that additional validation.
+
+## CI
+
+The release workflow pins tool versions and actions, installs Chromium system dependencies and
+runs `bun run check:release`. It does not publish images or push commits. A missing prerequisite
+or skipped mandatory suite is a failed validation, not a release success.
+

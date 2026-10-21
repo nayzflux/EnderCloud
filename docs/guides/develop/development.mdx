@@ -1,0 +1,85 @@
+---
+title: Development
+description: Workspace commands, application boundaries, migrations and protocol changes.
+---
+
+## Toolchain and installation
+
+Use Bun 1.4.2, Node.js 24.13.0, Docker with Compose and JDK 25. Install JavaScript dependencies
+once at the repository root:
+
+```bash
+bun install --frozen-lockfile
+bun run check
+```
+
+The root Bun workspace has one lockfile. Every application declares its own dependencies.
+The Java plugins use the included Gradle 9.6.1 wrapper, dependency locks and SHA-256 verification.
+On Windows use `plugins/gradlew.bat`; elsewhere use `plugins/gradlew` from its directory.
+
+## Applications
+
+| Command from root | Application |
+| --- | --- |
+| `bun run dev:orchestrator` | Central control plane |
+| `bun run dev:agent` | Host-local Docker agent |
+| `bun run dev:dashboard` | Authenticated operations console |
+| `bun run dev:web` | Public website and canonical documentation |
+
+The orchestrator needs PostgreSQL, Redis and the required [security environment](/docs/configure/authentication).
+Its default group/template paths resolve from the repository; explicit relative overrides resolve
+from the working directory. It reads configuration once at startup.
+
+The agent runs from `apps/agent`. Provision a unique development identity and private port
+range, load its API and control tokens into its environment, and configure Docker plus matching
+local/daemon runtime paths. It has no PostgreSQL, Redis or central configuration dependency.
+
+Copy `apps/dashboard/.env.example` to `apps/dashboard/.env.local`. The dashboard's
+public origin must match the orchestrator's `DASHBOARD_PUBLIC_URL`. Synthetic data remains
+behind a real administrator session. The website requires no control-plane credentials.
+
+For an integrated stack, follow [Installation](/docs/getting-started/installation).
+`docker compose down` stops it while retaining named data volumes.
+
+## Source organization
+
+The orchestrator's `src/bootstrap.ts` owns startup and resource cleanup.
+`src/modules/` contains configuration, capacity, hosts, instances, sessions, matchmaking,
+transfers, proxies, dashboard projections and monitoring. Pure decisions belong in `src/domain/`.
+Use Drizzle transactions for decisions and their related durable writes; perform remote work through
+persisted commands or the outbox after commit.
+
+`packages/contracts` contains browser-safe DTOs, enums, Zod schemas, HTTP errors and transport.
+`packages/runtime` contains server utilities. Applications never import another application's
+production source. The boundary checker follows transitive browser imports and rejects server dependencies.
+
+Dashboard features live in `src/features/`, reusable UI in `src/components/`, and
+authenticated routes in `src/app/(console)/`. Demo generation is server-only.
+
+## Database changes
+
+The release schema is `apps/orchestrator/src/db/schema.ts`; authentication tables are
+defined in `src/security/schema.ts`. The initial release migration lives in
+`apps/orchestrator/migrations/`. Do not restore the removed legacy migration chain.
+
+Generate schema changes with the application's `db:generate` script, inspect the SQL and
+snapshot, then run the PostgreSQL suite. Never edit a database marker to bypass legacy refusal.
+Startup holds a database advisory leadership lock; a second active orchestrator is rejected.
+Migration ownership and resource cleanup also have independent failure tests.
+
+## Protocol changes
+
+Update TypeScript, Java, OpenAPI route schemas and `contracts/fixtures/` together.
+Registry and transfer envelopes use protocol version 2. Registry snapshots carry a monotone revision.
+Transfer commands carry player generations, source and expiration; obsolete work is explicitly abandoned.
+Agent operations carry generations and persist their admission in SQLite.
+
+Preserve idempotence and crash recovery when changing a transaction or command. Add a regression
+that injects the relevant failure between stages. Run the focused checks, then
+[release validation](/docs/develop/testing).
+
+## Documentation
+
+Edit only `docs/guides/**/*.mdx` for published guides. Fumadocs in `apps/web` reads these
+sources directly. Old root Markdown filenames are links to the canonical guides.
+

@@ -28,28 +28,30 @@ flowchart LR
     AgentB --> Orchestrator
 ```
 
-All arrows in this diagram belong on trusted networks. The current APIs do not authenticate
-callers.
+Control traffic uses private networks. The dashboard checks persisted Better Auth administrator
+sessions; agents and managed runtimes use resource-scoped service keys. Every agent has its own
+inbound control token. See [Authentication](/docs/configure/authentication).
 
 ## Components
 
 | Component | Responsibility | State it owns |
 | --- | --- | --- |
 | Orchestrator | Configuration sync, placement, capacity, matchmaking, sessions, transfers, deadlines, incidents, and reconciliation | Durable control state in PostgreSQL |
-| Host agent | Template cache, runtime materialization, port allocation, Docker lifecycle, inventory, inspection, and logs | Host-local cache and generated runtime files |
+| Host agent | Template cache, runtime materialization, port allocation, Docker lifecycle, inventory, inspection, and logs | SQLite operation journal, cache and generated runtime files |
 | PostgreSQL | Transactions, locks, reservations, state machines, commands, deadlines, metrics, and incidents | Authoritative state |
 | Redis | Proxy registry notifications and transfer notifications | Ephemeral events only |
 | Velocity plugin | Dynamic Minecraft server registry, transfer execution, initial hub selection, and kicked-server fallback | In-memory registry rebuilt from the orchestrator snapshot |
 | Paper plugin | Readiness, player presence, TPS heartbeat, assignment cache, and game lifecycle events | In-memory assignment cache |
 | Dashboard | Operational reads and confirmed maintenance or startup-retry actions | Browser state only |
 
-The orchestrator and agent are two entry points in the same Bun package. They share contracts and
-Docker executor code but run as separate processes. The orchestrator does not mount the Docker
-socket.
+The Bun workspace contains four independent applications: orchestrator, agent, dashboard and web.
+They share browser-safe contracts and narrowly scoped server utilities through packages.
+Production applications never import each other's source. The orchestrator has no Docker socket;
+the agent has no PostgreSQL, Redis or central configuration dependency.
 
 ## Orchestrator structure
 
-`orchestrator/src/index.ts` is the composition root. It loads configuration, migrates the
+`apps/orchestrator/src/bootstrap.ts` is the testable composition root. It loads configuration, migrates the
 database, synchronizes YAML configuration, connects Redis, constructs services, performs an
 initial convergence pass, starts the HTTP API, then starts the periodic control loops.
 
@@ -59,12 +61,12 @@ The source tree has these roles:
 | --- | --- |
 | `src/domain/` | Pure state transitions and selection, capacity, matchmaking, routing, placement, and retry rules |
 | `src/db/` | Drizzle schema, PostgreSQL client, JSON helpers, and migration runner |
-| `src/configuration/` | YAML parsing, validation, layer checksums, inheritance resolution, and database synchronization |
-| `src/services/` | Use cases and control loops for instances, hosts, queues, sessions, transfers, monitoring, and incidents |
-| `src/executor/` | Executor contract, HTTP client for agents, and the agent's local Docker implementation |
-| `src/events/` | Redis event bus used by Velocity |
+| `src/modules/configuration/` | Descriptor parsing, validation, template resolution, streamed checksums and SQL synchronization |
+| `src/modules/` | Domain services for instances, hosts, queues, sessions, transfers, monitoring, and incidents |
+| `src/executor/` | Authenticated HTTP client for agents |
+| `src/events/` | Transactional registry outbox and Redis publisher |
 | `src/api/` | Elysia HTTP API, validation schemas, request identifiers, and OpenAPI generation |
-| `src/agent/` | Agent configuration, HTTP API, heartbeat process, and remote template cache |
+| `src/security/` | Administrator sessions, scoped identities, encryption and local management CLI |
 
 The project is a modular monolith, not a set of central microservices. Service classes may use
 Drizzle transactions directly. That keeps multi-row state changes in one process and one
@@ -81,19 +83,21 @@ Redis is deliberately non-authoritative. It publishes two schema-versioned event
 - `minecraft:proxy:registry` announces server registration changes.
 - `minecraft:proxy:transfers` tells Velocity to connect players to a selected instance.
 
-Velocity subscribes before loading `GET /api/v1/proxy/servers`. It reloads that snapshot after a
-Redis reconnect or an invalid event. Losing an event can delay an update, but it does not erase
-the durable decision.
+Registry changes and their monotone revisions are persisted in an outbox in the same transaction
+as the state transition. Publication follows commit and tolerates duplicate delivery. Velocity
+subscribes before loading `GET /api/v1/proxy/servers`, buffers events during the snapshot and
+reloads on reconnect or a revision gap. Transfer commands additionally carry player generations,
+source and expiration; stale commands are explicitly abandoned.
 
 ## Configuration flow
 
 At orchestrator startup:
 
-1. The migration runner applies every pending SQL migration.
+1. The migration runner initializes or reopens the release schema; legacy databases are rejected unchanged.
 2. The configuration loader reads each group YAML file and each immediate template directory.
 3. It validates identifiers, capacity limits, timeouts, group-specific policies, layer
    inheritance, Docker settings, environment values, files, and image tags.
-4. It computes a SHA-256 checksum for every layer and a resolved checksum for every final variant.
+4. It streams a framed, locale-independent v2 SHA-256 checksum for every layer and resolves final variants.
 5. One database transaction synchronizes groups, layers, variants, and group-to-variant links.
 
 Configuration is not watched. Restart the orchestrator after changing a group or template.
@@ -130,8 +134,10 @@ with row locks and bounded concurrency. Agent create operations are idempotent f
 instance identifier because the agent reuses a correctly labelled container after an uncertain
 response.
 
-Only port selection and Docker container creation are serialized inside one agent. Template
-materialization and image checks may run concurrently.
+All operations for one instance are serialized. Admission and irreversible operation generations
+are persisted in SQLite before work starts, so an old CREATE cannot resurrect a deleted runtime
+after a restart. Independent instances may prepare concurrently; port selection and Docker creation
+also share an agent-wide allocation lock.
 
 ## Capacity and matchmaking flow
 
@@ -172,15 +178,18 @@ deleting unrelated containers.
 ## Failure boundaries
 
 - Each scheduled loop prevents overlapping runs of the same task.
+- A database advisory lock permits only one active orchestrator. Startup failure closes already acquired resources.
 - A failed loop writes a structured log and can open an operational incident.
 - Host control failures update host health without converting a network error into a successful
   Docker decision.
 - Transfer commands remain pending and retry with backoff until their persisted expiry.
+- Paper readiness has its own persisted health lease: 30 seconds before withdrawal, then 30 seconds of confirmation by default. Docker liveness does not override this lease.
+- Logical session recovery proceeds independently of physical cleanup; physical reservations remain until confirmed deletion. Retained diagnostic files do not prevent repeated container stop attempts.
 - Repeated startup failures apply to one group, variant, and revision. The policy backs off,
   blocks the revision after its retry limit, retains the final failed runtime for diagnosis, and
   requires an operator reset or a new revision.
-- Shutdown first fails readiness, stops new scheduler work, waits for active work, closes the HTTP
-  server and Redis, then closes PostgreSQL.
+- Shutdown fails readiness, closes admission, stops scheduled work and waits for or interrupts active
+  tasks. Idempotent cleanup closes HTTP, Redis, leadership and PostgreSQL within a shared time budget.
 
 ## Network boundaries
 

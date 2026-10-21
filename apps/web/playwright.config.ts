@@ -1,4 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
+import { resolve } from "node:path";
+process.env.PLAYWRIGHT_BROWSERS_PATH ??= resolve(import.meta.dirname, "../../.cache/playwright");
 
 export default defineConfig({
   testDir: "./e2e",

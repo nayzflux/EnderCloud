@@ -25,6 +25,11 @@ import { TemplateArchiveService } from "../../src/modules/configuration/archives
 import { TransferService } from "../../src/modules/transfers/service.ts";
 import { VariantSelector } from "../../src/modules/instances/variant-selector.ts";
 import { eq } from "drizzle-orm";
+import { createAuth } from "../../src/security/auth.ts";
+import { createAdministrator } from "../../src/security/cli.ts";
+import { createAuthorizer } from "../../src/security/authorize.ts";
+import { Credentials } from "../../src/security/credentials.ts";
+import { inspectTemplateDirectory } from "@endercloud/runtime/templates";
 
 // Explicit opt-in smoke check. Every Docker resource belongs to this run and is cleaned below.
 const velocityJar = process.env.TEST_VELOCITY_JAR;
@@ -33,8 +38,9 @@ if (!velocityJar || !paperJar) {
   throw new Error("Set TEST_VELOCITY_JAR and TEST_PAPER_JAR to fixed local server JAR paths");
 }
 const runId = "proxy-smoke-" + Date.now();
-const root = resolve("../runtime", runId);
-const pluginRoot = resolve("../plugins");
+const repository = resolve(import.meta.dirname, "../../../..");
+const root = join(repository, ".cache", runId);
+const pluginRoot = join(repository, "plugins");
 const logger = new Logger("warn");
 const socketPath = process.platform === "win32" ? "//./pipe/docker_engine" : "/var/run/docker.sock";
 const docker = new Docker({ socketPath });
@@ -58,13 +64,21 @@ async function waitFor(label: string, predicate: () => Promise<boolean>, timeout
 
 try {
   network = await docker.createNetwork({ Name: runId });
-  postgres = await new PostgreSqlContainer("postgres:15-alpine").start();
+  const gateway = (await network.inspect()).IPAM?.Config?.[0]?.Gateway;
+  if (!gateway) throw new Error("Smoke network has no host gateway");
+  const callbackHost = process.platform === "win32" || process.platform === "darwin" ? "host.docker.internal" : gateway;
+  postgres = await new PostgreSqlContainer("postgres:18.1-alpine").start();
   redis = await new GenericContainer("redis:8.4.0-alpine").withExposedPorts(6379).start();
   database = createDatabase(postgres.getConnectionUri());
   bus = new RedisEventBus("redis://127.0.0.1:" + redis.getMappedPort(6379), logger);
   await migrateDatabase(postgres.getConnectionUri());
   await bus.connect();
   const db = database.db;
+  const security = { secret: "live-smoke-only-secret-at-least-32-bytes", encryptionKey: Buffer.alloc(32, 4), origin: "http://localhost:3000",
+    proxyRedisUrl: `redis://${callbackHost}:${redis.getMappedPort(6379)}` };
+  await createAdministrator(db, security, "live-smoke@example.test", "live-smoke-password-12345");
+  const auth = createAuth(db, security);
+  const credentials = new Credentials(db, auth, security);
   const hosts = new HostService(db, logger);
   const transfers = new TransferService(db, bus, logger);
   const hubs = new HubRouter(db, transfers);
@@ -73,8 +87,8 @@ try {
   const executorConfig = {
     hostId, publicUrl: "", dockerSocket: socketPath, dockerNetwork: runId,
     runtimeRoot: join(root, "runtime"), runtimeHostRoot: join(root, "runtime"),
-    gameAddress: "host.docker.internal", portStart: 29165, portEnd: 29169,
-    proxy: { address: "host.docker.internal", portStart: 29170, portEnd: 29179 },
+    gameAddress: callbackHost, portStart: 29165, portEnd: 29169,
+    proxy: { address: callbackHost, portStart: 29170, portEnd: 29179 },
   };
   executor = new LocalDockerExecutor(executorConfig, logger);
   // Production agents resolve immutable layers through their cache before calling LocalDockerExecutor.
@@ -85,18 +99,18 @@ try {
       ...layer, templatePath: join(root, "templates", layer.id),
     })),
   });
-  const instances = new InstanceController(db, executor, new VariantSelector(db), bus, transfers, hubs, logger, monitoring, hosts);
+  const instances = new InstanceController(db, executor, new VariantSelector(db), bus, transfers, hubs, logger, monitoring, hosts, undefined, 30_000, credentials);
   const proxies = new ProxyService(db, instances);
   const config = loadConfig({ DATABASE_URL: postgres.getConnectionUri() });
   app = createApp({
-    authorize: () => {},
+    authorize: createAuthorizer(db, auth),
     instances, proxies, hosts, hubs, queues: new QueueService(db),
     dashboard: new DashboardService(db), monitoring,
     templates: new TemplateArchiveService(db), incidents: new IncidentController(db, config, logger),
     logger, isReady: () => true,
   });
   app.listen({ hostname: "0.0.0.0", port: 0 });
-  executorConfig.publicUrl = "http://host.docker.internal:" + app.server!.port;
+  executorConfig.publicUrl = `http://${callbackHost}:${app.server!.port}`;
   await db.insert(schema.executionHosts).values({
     id: hostId, controlUrl: executorConfig.publicUrl, gameAddress: executorConfig.gameAddress,
     proxyAddress: executorConfig.proxy.address, proxyPortStart: 29170, proxyPortEnd: 29179,
@@ -114,7 +128,6 @@ try {
     const environment: Record<string, string> = type === "proxy" ? {
       TYPE: "CUSTOM", CUSTOM_FAMILY: "velocity", BUNGEE_JAR_FILE: "/server/server.jar", MEMORY: "512m",
       SERVER_PORT: "25565",
-      ENDERCLOUD_REDIS_URL: "redis://host.docker.internal:" + redis.getMappedPort(6379),
     } : {
       TYPE: "CUSTOM", CUSTOM_SERVER: "/data/server.jar", EULA: "TRUE", ONLINE_MODE: "FALSE",
       ENFORCE_SECURE_PROFILE: "FALSE", MEMORY: "1536m", VERSION: "26.2", VIEW_DISTANCE: "2", SIMULATION_DISTANCE: "2",
@@ -136,7 +149,8 @@ try {
       shutdownTimeoutMs: 10_000, transferTimeoutMs: 20_000, playerStaleTimeoutMs: 30_000,
       ...(type === "hub" ? { maximumPlayersPerInstance: 100, targetPlayersPerInstance: 70 } : {}),
     });
-    await db.insert(schema.templateLayers).values({ id, templatePath, checksum: "smoke", runtimePatch: spec, fileSummary: { fileCount: 2, totalBytes: 0, roots: ["plugins"] } });
+    const inspected = await inspectTemplateDirectory(templatePath);
+    await db.insert(schema.templateLayers).values({ id, templatePath, checksum: inspected.checksum, runtimePatch: spec, fileSummary: inspected.files });
     await db.insert(schema.serverVariants).values({ id, revision: 1, checksum: "smoke", runtimeSpec: spec });
     await db.insert(schema.serverVariantLayers).values({ variantId: id, layerId: id, ordinal: 0 });
     await db.insert(schema.serverGroupVariants).values({ groupId: id, variantId: id, selectionWeight: 100 });

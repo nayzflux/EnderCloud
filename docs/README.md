@@ -1,30 +1,20 @@
 # Documentation
 
-Use this page as the documentation index for EnderCloud.
+Canonical guides live in [guides/](guides/index.mdx). The website in `apps/web` reads
+these MDX files directly; edit the source once.
 
-## Start here
+- [Installation](guides/getting-started/installation.mdx)
+- [Architecture](guides/getting-started/architecture.mdx)
+- [Authentication and credentials](guides/configure/authentication.mdx)
+- [Environment](guides/configure/environment.mdx)
+- [Groups](guides/configure/groups.mdx) and [variants](guides/configure/variants.mdx)
+- [Orchestrator](guides/configure/orchestrator.mdx), [agent](guides/configure/agent.mdx), [dashboard](guides/configure/dashboard.mdx)
+- [Managed proxies](guides/configure/proxies.mdx) and [multi-host deployment](guides/configure/multi-host.mdx)
+- [Development](guides/develop/development.mdx) and [test reference](guides/develop/testing.mdx)
+- [Minigame integration](guides/develop/minigame-integration.mdx)
+- [Workspace layout](REPOSITORY_LAYOUT.md)
+- [Release implementation and validation](RELEASE_PROGRESS.md)
+- [Original reliability audit](AUDIT_FIABILITE_2026-10-21.md)
 
-- [Project overview](../README.md)
-- [Architecture](ARCHITECTURE.md)
-- [Concepts](CONCEPTS.md)
+The orchestrator's generated OpenAPI schema is at `/openapi` and requires an administrator session.
 
-## Configure and operate
-
-- [Server groups](../groups/GROUP.md)
-- [Template layers and variants](../templates/VARIANT.md)
-- [Orchestrator](ORCHESTRATOR.md)
-- [Execution agent](AGENT.md)
-- [Managed Velocity proxies](PROXIES.md)
-- [Tester les proxys sur le cluster local](LOCAL_PROXY_TEST.md)
-- [Environment configuration](ENVIRONMENT.md)
-- [Timeouts and deadlines](TIMEOUTS.md)
-- [Multi-host execution](MULTI_HOST.md)
-- [Dashboard](../dashboard/README.md)
-
-## Integrate and develop
-
-- [Minigame plugin integration](MINIGAME_PLUGIN_INTEGRATION.md)
-- [Development guide](DEVELOPMENT.md)
-- [Test reference](TEST.md)
-
-The generated HTTP schema is available at `/openapi` on a running orchestrator.

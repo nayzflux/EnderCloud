@@ -1,0 +1,15 @@
+{
+  "title": "Configure and operate",
+  "pages": [
+    "groups",
+    "variants",
+    "orchestrator",
+    "agent",
+    "environment",
+    "timeouts",
+    "multi-host",
+    "dashboard",
+    "authentication",
+    "proxies"
+  ]
+}

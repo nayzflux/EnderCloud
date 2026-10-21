@@ -11,8 +11,10 @@ PostgreSQL and Redis stay central. Remote agents do not connect to either servic
 
 ## Network requirements
 
-The current MVP has no API authentication. Connect hosts through a private routed network, VPN,
-or overlay network and restrict each control port with a firewall.
+Control APIs use resource-scoped service credentials. Connect hosts through a private routed
+network, VPN or overlay network and restrict each control port with a firewall. Provision each
+agent's outgoing key and separate inbound token through the
+[local security CLI](/docs/configure/authentication); copy its protected file to that worker.
 
 | Source | Destination | Purpose |
 | --- | --- | --- |
@@ -78,6 +80,11 @@ Start the central stack:
 docker compose up --build -d
 ```
 
+Initialize the local administrator, provision `primary-host`, then run
+`docker compose --profile agents up --build -d agent`. The agent does not start from the default
+central invocation. Every managed proxy also needs a subscriber-only `PROXY_REDIS_URL` reachable
+from its Docker network; publish Redis only on a private interface for remote proxies.
+
 If remote agents must reach the orchestrator, publish it on the central machine's private
 interface:
 
@@ -117,7 +124,8 @@ AGENT_GAME_PORT_END=25664
 ORCHESTRATOR_URL=http://10.20.0.10:8080
 ```
 
-Start only the agent:
+Start only the agent after setting `AGENT_CREDENTIALS_FILE` to the protected file provisioned
+for this exact `AGENT_ID`:
 
 ```powershell
 docker compose --env-file .env.agent -f compose.agent.yml up --build -d
@@ -237,6 +245,10 @@ Start the combined files:
 ```powershell
 docker compose -f compose.yml -f compose.multi-host.test.yml up --build
 ```
+
+Use `--profile agents` to enable both execution services, and set `SECONDARY_AGENT_CREDENTIALS_FILE`
+to credentials provisioned for the secondary host id. For an isolated automated scenario, run
+`bun run test:two-agents` instead.
 
 The primary uses ports 25565 through 25664 by default. The secondary uses 25665 through 25764.
 Both advertised game addresses must be reachable by the Velocity process used for the test.

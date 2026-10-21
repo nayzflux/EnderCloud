@@ -45,9 +45,11 @@ Browser component
             -> EnderCloud orchestrator
 ```
 
-The proxy adds no authentication. Deploy the dashboard on a trusted operator network and keep the
-orchestrator private. `ORCHESTRATOR_URL` is server-side and must never be exposed through a
-`NEXT_PUBLIC_` variable.
+Every console page and data route requires a persisted administrator session, including synthetic
+data. Sign in at `/login`; sign out from the header. State-changing requests also validate their
+origin. Follow [Authentication and credentials](/docs/configure/authentication) to initialize the
+administrator. Keep the orchestrator private and serve the dashboard through HTTPS.
+`ORCHESTRATOR_URL` is server-side and must never be exposed through a `NEXT_PUBLIC_` variable.
 
 Upstream requests time out after eight seconds. The proxy preserves the orchestrator's
 `x-request-id` response header for diagnosis and returns HTTP 502 when the upstream cannot be
@@ -64,7 +66,8 @@ Copy-Item .env.example .env.local
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `ORCHESTRATOR_URL` | `http://localhost:8080` | Server-side orchestrator base URL |
-| `DASHBOARD_MOCK_DATA` | Disabled | Serve a deterministic synthetic cluster |
+| `DASHBOARD_PUBLIC_URL` | Local request origin | Public dashboard origin, matching the orchestrator's security configuration |
+| `DASHBOARD_MOCK_DATA` | Disabled | Serve a deterministic synthetic cluster after session validation |
 
 Mock mode accepts `1`, `true`, `yes`, or `on`, ignoring case and surrounding spaces.
 
@@ -74,15 +77,14 @@ Published dashboard address and port are Compose-only values documented in
 
 ## Local development
 
-From `dashboard/`:
+From `apps/dashboard/`:
 
 ```powershell
-bun install --frozen-lockfile
 Copy-Item .env.example .env.local
 bun run dev
 ```
 
-The console listens on `http://localhost:3000`.
+Install dependencies once at the repository root. The console listens on `http://localhost:3000`.
 
 Run the orchestrator on `http://localhost:8080`, or enable synthetic data in `.env.local`:
 
@@ -94,7 +96,7 @@ The sidebar displays a `Synthetic data` marker while mock mode is active.
 
 ## Synthetic cluster
 
-`src/lib/mock-data.ts` builds a fixed cluster on every request. Identifiers stay stable across
+`src/features/demo/data.server.ts` builds a fixed cluster on every request. Identifiers stay stable across
 refreshes, while ages, deadlines, queue waits, and monitoring timestamps move with the current
 time.
 
@@ -130,12 +132,13 @@ Rendered `<time>` elements retain the exact UTC timestamp in `dateTime` and thei
 | Path | Role |
 | --- | --- |
 | `src/app/` | Next.js pages, layout, global styles, and server route handlers |
-| `src/components/` | Operational components shared across pages |
+| `src/components/shell/` | Shared application shell and session actions |
+| `src/features/` | Cluster, inspection, monitoring, incidents, topology, variants and server-only demo data |
 | `src/components/ui/` | shadcn/ui primitives managed by the CLI |
 | `src/lib/api.ts` | Browser-facing data functions and clock synchronization |
-| `src/lib/contracts.ts` | Dashboard view contracts |
+| `packages/contracts` | Shared browser-safe dashboard and HTTP contracts |
 | `src/lib/orchestrator-proxy.ts` | Server-side upstream boundary and timeout |
-| `src/lib/mock-data.ts` | Deterministic synthetic cluster |
+| `src/features/demo/data.server.ts` | Deterministic synthetic cluster |
 | `test/` | Bun unit and route tests |
 | `e2e/` | Playwright browser suite |
 
@@ -170,11 +173,12 @@ bun run build
 Install Chromium once, then run the browser suite:
 
 ```powershell
-npx playwright install chromium
+bun run --cwd ../.. browsers:install
 bun run test:e2e
 ```
 
-Playwright builds the dashboard and starts it on port 3100 with synthetic data. It runs desktop
+Playwright builds the dashboard and starts it on port 3100 with synthetic data and a real
+authentication backend backed by disposable PostgreSQL. Docker is required. It runs desktop
 Chromium and a mobile viewport.
 
 See [the project test reference](/docs/develop/testing) for the full repository validation sequence.
