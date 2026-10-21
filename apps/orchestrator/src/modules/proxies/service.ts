@@ -1,3 +1,4 @@
+import { ApplicationError } from "@endercloud/contracts/errors";
 import type { ProxyControl,ProxyHeartbeat,ProxySnapshot } from "@endercloud/contracts/domain";
 import { and,eq,inArray,sql } from "drizzle-orm";
 import type { Database } from "../../db/client.ts";
@@ -18,7 +19,7 @@ export class ProxyService {
       .from(serverInstances)
       .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
       .where(and(eq(serverInstances.id, instanceId), eq(serverGroups.type, "proxy")));
-    if (!instance) throw new Error(`Proxy ${instanceId} is unavailable`);
+    if (!instance) throw new ApplicationError("CONFLICT", 409, `Proxy ${instanceId} is unavailable`);
     if (instance.lifecycleState === "STARTING" && heartbeat.ready) {
       await this.instances.markReady(instanceId);
     }
@@ -30,7 +31,7 @@ export class ProxyService {
         .where(eq(serverInstances.id, instanceId))
         .for("update");
       if (!current || !["CREATING", "STARTING", "RUNNING", "DRAINING"].includes(current.lifecycleState)) {
-        throw new Error(`Proxy ${instanceId} is unavailable`);
+        throw new ApplicationError("CONFLICT", 409, `Proxy ${instanceId} is unavailable`);
       }
       await tx.insert(proxyHeartbeats).values({
         proxyId: instanceId,

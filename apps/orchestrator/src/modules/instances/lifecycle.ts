@@ -1,3 +1,4 @@
+import { ApplicationError } from "@endercloud/contracts/errors";
 import type {
 InstanceType,
 ServerSnapshot,
@@ -119,6 +120,8 @@ export class InstanceController {
     details: Readonly<Record<string, unknown>> = {},
   ): Promise<boolean> {
     const changed = await this.db.transaction(async (tx) => {
+      await tx.select({ id: serverGroups.id }).from(serverGroups)
+        .where(sql`${serverGroups.id} = (SELECT group_id FROM server_instances WHERE id = ${instanceId})`).for("update");
       const rows = await tx.update(serverInstances).set({
         lifecycleState: "FAILED",
         failedAt: sql`now()`,
@@ -558,7 +561,10 @@ export class InstanceController {
 
   // Promote a starting instance to RUNNING and register it with proxies.
   public async markReady(instanceId: string, reportedEndpoint?: string): Promise<void> {
-    const rows = (await this.db
+    const rows = await this.db.transaction(async tx => {
+      await tx.select({ id: serverGroups.id }).from(serverGroups)
+        .where(sql`${serverGroups.id} = (SELECT group_id FROM server_instances WHERE id = ${instanceId})`).for("update");
+      const rows = (await tx
       .update(serverInstances)
       .set({
         lifecycleState: "RUNNING",
@@ -594,12 +600,13 @@ export class InstanceController {
         replacesInstanceId: serverInstances.replacesInstanceId,
         replacementReason: serverInstances.replacementReason,
       })) as unknown as ReadyRow[];
-    if (rows[0]) {
-      await this.startPolicy?.markReady(instanceId);
-      // Publish registration only for the transaction that actually performed STARTING -> RUNNING.
-      if (rows[0].groupType !== "proxy") {
-        await this.publishRegistry("SERVER_REGISTERED", rows[0]);
+      if (rows[0]) {
+        await this.startPolicy?.markReady(instanceId, tx);
+        if (rows[0].groupType !== "proxy") await enqueueRegistryEvent(tx, "SERVER_REGISTERED", rows[0]);
       }
+      return rows;
+    });
+    if (rows[0]) {
       this.logger.info("instance.lifecycle.ready", "Instance reported server readiness", {
         instanceId,
         groupId: rows[0].groupId,
@@ -620,7 +627,7 @@ export class InstanceController {
       .from(serverInstances)
       .where(eq(serverInstances.id, instanceId));
     if (current[0]?.lifecycle_state !== "RUNNING") {
-      throw new Error(`Instance ${instanceId} is unavailable`);
+      throw new ApplicationError("CONFLICT", 409, `Instance ${instanceId} is unavailable`);
     }
     if (current[0].replaces_instance_id) {
       await this.completeReplacement(instanceId);

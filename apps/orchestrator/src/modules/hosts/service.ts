@@ -1,3 +1,4 @@
+import { ApplicationError } from "@endercloud/contracts/errors";
 import type { InstanceType,VariantRuntimeSpec } from "@endercloud/contracts/domain";
 import { nanoid } from "@endercloud/runtime/id";
 import type { Logger } from "@endercloud/runtime/logger";
@@ -72,7 +73,7 @@ export class HostService {
 
   public async heartbeat(hostId: string, heartbeat: HostHeartbeat): Promise<void> {
     if (heartbeat.proxy && heartbeat.proxy.portEnd < heartbeat.proxy.portStart) {
-      throw new Error("Proxy port range is unavailable: portEnd must be >= portStart");
+      throw new ApplicationError("INVALID_REQUEST", 400, "Proxy port range is unavailable: portEnd must be >= portStart");
     }
     const proxy = {
       proxyAddress: heartbeat.proxy?.address ?? null,
@@ -120,7 +121,7 @@ export class HostService {
       gameAddress: executionHosts.gameAddress,
     }).from(executionHosts).where(eq(executionHosts.id, hostId)).limit(1);
     const host = rows[0];
-    if (!host) throw new Error(`Execution host ${hostId} is unavailable`);
+    if (!host) throw new ApplicationError("CONFLICT", 409, `Execution host ${hostId} is unavailable`);
     return host;
   }
 

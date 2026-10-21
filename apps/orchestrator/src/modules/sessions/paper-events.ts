@@ -1,3 +1,4 @@
+import { ApplicationError } from "@endercloud/contracts/errors";
 import type {
 PaperEvent
 } from "@endercloud/contracts/domain";
@@ -44,7 +45,7 @@ export class PaperEvents {
       .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
       .where(eq(serverInstances.id, instanceId));
     if (!instance || instance.type === "proxy") {
-      throw new Error(`Paper instance ${instanceId} is unavailable`);
+      throw new ApplicationError("CONFLICT", 409, `Paper instance ${instanceId} is unavailable`);
     }
     // Dispatch by protocol event so every event type has one state mutation path.
     switch (event.type) {
@@ -360,7 +361,7 @@ export class PaperEvents {
         paperHealthDeadline: new Date(Date.now() + this.paperHealthLeaseMs), healthSuspectedAt: null,
       }).where(and(eq(serverInstances.id, instanceId), inArray(serverInstances.lifecycleState, ["RUNNING", "DRAINING"])))
         .returning({ id: serverInstances.id });
-      if (!alive.length) throw new Error(`Paper instance ${instanceId} is unavailable`);
+      if (!alive.length) throw new ApplicationError("CONFLICT", 409, `Paper instance ${instanceId} is unavailable`);
       const effectiveSessionId = await this.validateEventSession(tx, instanceId);
       let assignmentChanged = false;
       // Refresh every reported player before removing stale rows, making the heartbeat authoritative.
@@ -688,7 +689,7 @@ export class PaperEvents {
       .for("share");
     const instance = rows[0];
     if (!instance) {
-      throw new Error(`Instance ${instanceId} is unavailable`);
+      throw new ApplicationError("CONFLICT", 409, `Instance ${instanceId} is unavailable`);
     }
     if (providedSessionId && providedSessionId !== instance.session_id) {
       throw this.invalidSessionEvent(instanceId, providedSessionId);

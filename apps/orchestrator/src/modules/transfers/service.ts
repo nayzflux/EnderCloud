@@ -1,3 +1,4 @@
+import { ApplicationError } from "@endercloud/contracts/errors";
 import { nanoid } from "@endercloud/runtime/id";
 import type { Logger } from "@endercloud/runtime/logger";
 import { and,asc,eq,gt,inArray,lte,sql } from "drizzle-orm";
@@ -54,7 +55,7 @@ export class TransferService {
         inArray(schema.serverGroups.type, ["hub", "minigame"]),
       ))
       .limit(1);
-    if (!target[0]) throw new Error(`Transfer target ${payload.instanceId} is unavailable`);
+    if (!target[0]) throw new ApplicationError("CONFLICT", 409, `Transfer target ${payload.instanceId} is unavailable`);
     // Store transfer intent in the caller's transaction. Publishing happens later,
     // so a committed session assignment cannot be lost during a Redis outage.
     await tx.insert(schema.transferCommands).values({

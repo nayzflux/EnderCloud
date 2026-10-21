@@ -1,3 +1,4 @@
+import { ApplicationError } from "@endercloud/contracts/errors";
 import { nanoid } from "@endercloud/runtime/id";
 import { and,desc,eq,inArray,isNull,notInArray,or,sql } from "drizzle-orm";
 import type { Database,Transaction } from "../../db/client.ts";
@@ -20,7 +21,7 @@ export class QueueService {
   // Validate a party and add it to matchmaking without duplicating active players.
   public async enqueue(request: EnqueueRequest): Promise<{ entryId: string; state: string }> {
     if (request.players.length === 0 || new Set(request.players).size !== request.players.length) {
-      throw new Error("A party must contain distinct players");
+      throw new ApplicationError("INVALID_REQUEST", 400, "A party must contain distinct players");
     }
     // Validation and insertion share one transaction so concurrent requests cannot interleave.
     return this.db.transaction(async (tx) => {
@@ -35,10 +36,10 @@ export class QueueService {
         .for("share");
       const groupRecord = groups[0];
       if (!groupRecord || groupRecord.type !== "minigame" || !groupRecord.enabled) {
-        throw new Error("The requested matchmaking group is unavailable");
+        throw new ApplicationError("CONFLICT", 409, "The requested matchmaking group is unavailable");
       }
       if (!groupRecord.team_size || request.players.length > groupRecord.team_size) {
-        throw new Error("The party is larger than a team");
+        throw new ApplicationError("CONFLICT", 409, "The party is larger than a team");
       }
 
       // The conflict query alone cannot exclude a concurrent insertion that has
@@ -90,7 +91,7 @@ export class QueueService {
         ) {
           return { entryId: existingEntry.id, state: existingEntry.state };
         }
-        throw new Error(`Party ${request.partyId} is already queued with different members`);
+        throw new ApplicationError("CONFLICT", 409, `Party ${request.partyId} is already queued with different members`);
       }
       if (existingEntry?.state === "SELECTED" && existingEntry.sessionId) {
         const activeMembers = await tx.select({ playerId: sessionPlayers.playerId })
@@ -142,7 +143,7 @@ export class QueueService {
           );
 
         const conflicts = await tx.execute(sql`SELECT EXISTS (${queueConflicts}) OR EXISTS (${sessionConflicts}) AS exists`) as unknown as { exists: boolean }[];
-        if (conflicts[0]?.exists) throw new Error(`Player ${playerId} is already matchmaking`);
+        if (conflicts[0]?.exists) throw new ApplicationError("CONFLICT", 409, `Player ${playerId} is already matchmaking`);
       }
       // Create the parent before membership rows; the transaction hides partial parties.
       const entryId = nanoid();

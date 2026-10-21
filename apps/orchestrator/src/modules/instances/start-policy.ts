@@ -1,10 +1,13 @@
 import type { Executor } from "@endercloud/contracts/executor";
 import type { Logger } from "@endercloud/runtime/logger";
+import { nanoid } from "@endercloud/runtime/id";
+import { enqueueRegistryEvent } from "../../events/registry-outbox.ts";
 import { and,eq,inArray,ne,notInArray,sql } from "drizzle-orm";
 import type { AppConfig } from "../../config.ts";
 import type { Database } from "../../db/client.ts";
 import {
 commands,
+events,
 serverGroups,
 serverGroupVariants,
 serverInstances,
@@ -247,15 +250,16 @@ export class VariantStartController {
     return status;
   }
 
-  public async markReady(instanceId: string): Promise<void> {
-    const rows = await this.db.select({
+  public async markReady(instanceId: string, transaction?: Transaction): Promise<void> {
+    const executor = transaction ?? this.db;
+    const rows = await executor.select({
       groupId: serverInstances.groupId,
       variantId: serverInstances.variantId,
       revision: serverInstances.variantRevision,
     }).from(serverInstances).where(eq(serverInstances.id, instanceId)).limit(1);
     const instance = rows[0];
     if (!instance) return;
-    const removed = await this.db.delete(variantStartStates).where(and(
+    const removed = await executor.delete(variantStartStates).where(and(
       eq(variantStartStates.groupId, instance.groupId),
       eq(variantStartStates.variantId, instance.variantId),
       eq(variantStartStates.variantRevision, instance.revision),
@@ -369,6 +373,8 @@ export class VariantStartController {
     const probes = await this.db.select().from(variantStartStates).where(eq(variantStartStates.state, "PROBING"));
     for (const candidate of probes) {
       await this.db.transaction(async tx => {
+        await tx.select({ id: serverGroups.id }).from(serverGroups).where(eq(serverGroups.id, candidate.groupId)).for("update");
+        if (candidate.probeInstanceId) await tx.select({ id: serverInstances.id }).from(serverInstances).where(eq(serverInstances.id, candidate.probeInstanceId)).for("update");
         const [state] = await tx.select().from(variantStartStates).where(and(
           eq(variantStartStates.groupId, candidate.groupId), eq(variantStartStates.variantId, candidate.variantId),
           eq(variantStartStates.variantRevision, candidate.variantRevision), eq(variantStartStates.state, "PROBING"),
@@ -390,6 +396,9 @@ export class VariantStartController {
           await tx.update(serverInstances).set({ lifecycleState: "FAILED", failedAt: sql`now()`,
             failureReason: "STARTUP_TIMEOUT", updatedAt: sql`now()` }).where(eq(serverInstances.id, probe.id));
           await this.recordFailure(probe.id, "STARTUP_TIMEOUT", tx);
+          await tx.insert(events).values({ id: nanoid(), aggregateType: "instance", aggregateId: probe.id,
+            type: "INSTANCE_FAILED", payload: { reason: "STARTUP_TIMEOUT" } });
+          await enqueueRegistryEvent(tx, "SERVER_UNREGISTERED", { instanceId: probe.id });
           return;
         }
         await tx.update(variantStartStates).set({ state: "BACKING_OFF", probeInstanceId: null, probeDeadline: null,
