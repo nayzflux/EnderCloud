@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 /**
  * The suite runs against the synthetic cluster served when DASHBOARD_MOCK_DATA
  * is enabled (see playwright.config.ts), so it exercises the real proxy routes
- * without an orchestrator behind them.
+ * with real persisted administrator sessions supplied by the test backend.
  */
 
 const desktopOnly = (page: Page) => page.viewportSize()!.width >= 768;
@@ -24,9 +24,11 @@ async function openRow(page: Page, index = 0) {
  * cluster snapshot lands, so each test waits on the content it actually needs.
  */
 async function visit(page: Page, path: string) {
+  const snapshot = page.waitForResponse(response => new URL(response.url()).pathname === "/api/cluster" && response.ok(), { timeout: 20_000 });
   // `load` guarantees the client bundle is in, so clicks land on a hydrated
   // tree rather than on the server-rendered markup.
   await page.goto(path, { waitUntil: "load" });
+  await snapshot;
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
 }
 

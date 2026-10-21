@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { refreshIntervals, useCluster } from "@/components/cluster-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { SignOut } from "@/components/sign-out";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -181,6 +182,7 @@ export function SiteHeader() {
         <LiveIndicator />
         <RefreshControls />
         <ThemeToggle />
+        <SignOut />
       </div>
     </header>
   );

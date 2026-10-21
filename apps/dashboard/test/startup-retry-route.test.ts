@@ -1,3 +1,4 @@
+import { authenticatedRequest, installAuthenticatedFetch, restoreFetch } from "./authenticated-request";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { POST } from "../src/app/api/groups/[groupId]/variants/[variantId]/revisions/[revision]/startup-retry/route";
 
@@ -5,16 +6,18 @@ describe("dashboard startup retry route", () => {
   const original = process.env.DASHBOARD_MOCK_DATA;
 
   beforeAll(() => {
+    installAuthenticatedFetch();
     process.env.DASHBOARD_MOCK_DATA = "true";
   });
 
   afterAll(() => {
+    restoreFetch();
     if (original === undefined) delete process.env.DASHBOARD_MOCK_DATA;
     else process.env.DASHBOARD_MOCK_DATA = original;
   });
 
   test("returns the asynchronous resetting state in mock mode", async () => {
-    const response = await POST(new Request("http://dashboard"), {
+    const response = await POST(authenticatedRequest("http://dashboard"), {
       params: Promise.resolve({
         groupId: "skywars-solo",
         variantId: "skywars-nordic",
@@ -26,7 +29,7 @@ describe("dashboard startup retry route", () => {
   });
 
   test("rejects invalid path identifiers before proxying", async () => {
-    const response = await POST(new Request("http://dashboard"), {
+    const response = await POST(authenticatedRequest("http://dashboard"), {
       params: Promise.resolve({ groupId: "invalid!", variantId: "variant", revision: "0" }),
     });
     expect(response.status).toBe(400);

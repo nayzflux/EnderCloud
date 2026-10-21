@@ -10,6 +10,7 @@
     "./executor": "./src/executor.ts"
     ,"./errors": "./src/errors.ts"
     ,"./schemas": "./src/schemas.ts"
+    ,"./http": "./src/http.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

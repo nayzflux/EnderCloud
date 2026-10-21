@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { dashboardRequest } from "./server-session";
 
 const fallbackOrchestratorUrl = "http://localhost:8080";
 
@@ -25,26 +26,28 @@ export async function proxyOrchestrator(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8_000);
   try {
+    const incoming = dashboardRequest.getStore();
+    const requestId = incoming?.headers.get("x-request-id") ?? crypto.randomUUID();
     const response = await fetch(new URL(path, `${baseUrl.replace(/\/+$/, "")}/`), {
       cache: "no-store",
       method: init.method ?? "GET",
       body: init.body,
       headers: {
         accept: "application/json",
+        "x-request-id": requestId,
+        ...(incoming?.headers.get("cookie") ? { cookie: incoming.headers.get("cookie")! } : {}),
+        ...(incoming?.headers.get("origin") ? { origin: incoming.headers.get("origin")! } : {}),
         ...(init.body ? { "content-type": "application/json" } : {}),
       },
-      signal: controller.signal,
+      signal: incoming ? AbortSignal.any([controller.signal, incoming.signal]) : controller.signal,
     });
-    const body = await response.text();
-    const requestId = response.headers.get("x-request-id");
+    const body = [204, 205, 304].includes(response.status) ? null : await response.text();
+    const headers = new Headers({ ...noStore, "x-request-id": response.headers.get("x-request-id") ?? requestId });
+    if (response.headers.has("content-type")) headers.set("content-type", response.headers.get("content-type")!);
+    for (const cookie of response.headers.getSetCookie()) headers.append("set-cookie", cookie);
     return new NextResponse(body, {
       status: response.status,
-      headers: {
-        "content-type":
-          response.headers.get("content-type") ?? "application/json",
-        ...noStore,
-        ...(requestId ? { "x-request-id": requestId } : {}),
-      },
+      headers,
     });
   } catch {
     return jsonResponse(
@@ -52,7 +55,7 @@ export async function proxyOrchestrator(
         error: "UPSTREAM_UNAVAILABLE",
         message: "The EnderCloud orchestrator is currently unreachable.",
       },
-      502,
+      controller.signal.aborted ? 504 : 502,
     );
   } finally {
     clearTimeout(timeout);

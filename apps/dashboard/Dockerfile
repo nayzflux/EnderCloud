@@ -1,4 +1,5 @@
-FROM oven/bun:1.4.2-alpine AS builder
+FROM node:24.13.0-bookworm-slim AS builder
+COPY --from=oven/bun:1.4.2 /usr/local/bin/bun /usr/local/bin/bun
 WORKDIR /workspace
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY package.json bun.lock ./
@@ -12,15 +13,17 @@ RUN bun install --frozen-lockfile --filter @endercloud/dashboard
 COPY packages ./packages
 COPY apps/dashboard ./apps/dashboard
 WORKDIR /workspace/apps/dashboard
-RUN bun run build
+RUN mkdir -p public && bun run build
 
-FROM oven/bun:1.4.2-alpine AS runner
+FROM node:24.13.0-bookworm-slim AS runner
 WORKDIR /workspace
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
-COPY --from=builder /workspace/apps/dashboard/.next/standalone ./
-COPY --from=builder /workspace/apps/dashboard/.next/static ./apps/dashboard/.next/static
+COPY --from=builder --chown=node:node /workspace/apps/dashboard/.next/standalone ./
+COPY --from=builder --chown=node:node /workspace/apps/dashboard/.next/static ./apps/dashboard/.next/static
+COPY --from=builder --chown=node:node /workspace/apps/dashboard/public ./apps/dashboard/public
+USER node
 EXPOSE 3000
-CMD ["bun", "apps/dashboard/server.js"]
+CMD ["node", "apps/dashboard/server.js"]

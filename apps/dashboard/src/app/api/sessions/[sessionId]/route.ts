@@ -1,3 +1,4 @@
+import { withDashboardSession } from "@/lib/server-session";
 import { isMockEnabled, mockSession } from "@/lib/mock-data";
 import {
   jsonResponse,
@@ -10,10 +11,10 @@ export const dynamic = "force-dynamic";
 
 const internalIdPattern = /^[A-Za-z0-9]{16}$/;
 
-export async function GET(
+export const GET = withDashboardSession(async (
   _request: Request,
   context: { params: Promise<{ sessionId: string }> },
-) {
+) => {
   const { sessionId } = await context.params;
   if (!internalIdPattern.test(sessionId)) {
     return validationErrorResponse("Invalid session identifier.");
@@ -27,4 +28,4 @@ export async function GET(
   return proxyOrchestrator(
     `/api/v1/dashboard/sessions/${encodeURIComponent(sessionId)}`,
   );
-}
+});

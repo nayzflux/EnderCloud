@@ -14,56 +14,17 @@ import type {
   VariantStartupStatus,
 } from "@endercloud/contracts";
 
-export class DashboardApiError extends Error {
-  public constructor(
-    message: string,
-    public readonly status: number,
-  ) {
-    super(message);
-    this.name = "DashboardApiError";
-  }
-}
-
-async function readJson<T>(path: string): Promise<T> {
-  const response = await fetch(path, {
-    headers: { accept: "application/json" },
-  });
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as {
-      message?: string;
-    } | null;
-    throw new DashboardApiError(
-      payload?.message ?? "The cluster is not responding.",
-      response.status,
-    );
-  }
-  const payload = (await response.json()) as T;
-  // Every dashboard payload is stamped with the orchestrator's instant. Doing
-  // this here — rather than in an effect — means the shared clock is already
-  // corrected by the time React renders the data that came with it.
-  syncClock((payload as { generatedAt?: string }).generatedAt);
+export { HttpResponseError as DashboardApiError } from "@endercloud/contracts/http";
+import { requestJson } from "@endercloud/contracts/http";
+async function readJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const payload = await requestJson<T>(path, { signal });
+  if (typeof payload === "object" && payload !== null && "generatedAt" in payload && typeof payload.generatedAt === "string") syncClock(payload.generatedAt);
   return payload;
 }
+function postJson<T>(path: string): Promise<T> { return requestJson(path, {method: "POST"}); }
 
-async function postJson<T>(path: string): Promise<T> {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { accept: "application/json" },
-  });
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as {
-      message?: string;
-    } | null;
-    throw new DashboardApiError(
-      payload?.message ?? "The operation could not be completed.",
-      response.status,
-    );
-  }
-  return response.json() as Promise<T>;
-}
-
-export function fetchCluster(): Promise<DashboardClusterSnapshot> {
-  return readJson("/api/cluster");
+export function fetchCluster(context?: {signal?: AbortSignal}): Promise<DashboardClusterSnapshot> {
+  return readJson("/api/cluster", context?.signal);
 }
 
 export function fetchQueue(

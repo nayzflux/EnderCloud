@@ -1,3 +1,4 @@
+import { withDashboardSession } from "@/lib/server-session";
 import { isMockEnabled } from "@/lib/mock-data";
 import {
   jsonResponse,
@@ -10,10 +11,10 @@ export const dynamic = "force-dynamic";
 const idPattern = /^[a-z0-9][a-z0-9-]{1,62}$/;
 const revisionPattern = /^[1-9][0-9]*$/;
 
-export async function POST(
+export const POST = withDashboardSession(async (
   _request: Request,
   context: { readonly params: Promise<{ groupId: string; variantId: string; revision: string }> },
-) {
+) => {
   const { groupId, variantId, revision } = await context.params;
   if (!idPattern.test(groupId) || !idPattern.test(variantId) || !revisionPattern.test(revision)) {
     return validationErrorResponse("Invalid group, variant or revision identifier.");
@@ -33,4 +34,4 @@ export async function POST(
     `/api/v1/groups/${encodeURIComponent(groupId)}/variants/${encodeURIComponent(variantId)}/revisions/${encodeURIComponent(revision)}/startup-retry`,
     { method: "POST" },
   );
-}
+});

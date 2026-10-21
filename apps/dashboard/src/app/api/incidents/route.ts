@@ -1,3 +1,4 @@
+import { withDashboardSession } from "@/lib/server-session";
 import { isMockEnabled, mockIncidents } from "@/lib/mock-data";
 import { jsonResponse, proxyOrchestrator, validationErrorResponse } from "@/lib/orchestrator-proxy";
 
@@ -5,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 const allowed = new Set(["status", "severity", "kind", "groupId", "scopeId", "cursor", "limit"]);
 
-export function GET(request: Request) {
+export const GET = withDashboardSession(async (request: Request) => {
   const query = new URL(request.url).searchParams;
   if ([...query.keys()].some((key) => !allowed.has(key))) {
     return validationErrorResponse("Unsupported incident filter.");
@@ -45,4 +46,4 @@ export function GET(request: Request) {
   }
   const suffix = query.size > 0 ? `?${query}` : "";
   return proxyOrchestrator(`/api/v1/dashboard/incidents${suffix}`);
-}
+});

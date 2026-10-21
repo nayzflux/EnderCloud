@@ -1,3 +1,4 @@
+import { withDashboardSession } from "@/lib/server-session";
 import type { MonitoringRange } from "@endercloud/contracts";
 import { isMockEnabled, mockGroupMonitoring } from "@/lib/mock-data";
 import {
@@ -12,10 +13,10 @@ export const dynamic = "force-dynamic";
 const groupIdPattern = /^[a-z0-9][a-z0-9-]{1,62}$/;
 const validRanges = new Set<MonitoringRange>(["1h", "6h", "24h", "7d"]);
 
-export async function GET(
+export const GET = withDashboardSession(async (
   request: Request,
   context: { params: Promise<{ groupId: string }> },
-) {
+) => {
   const { groupId } = await context.params;
   if (!groupIdPattern.test(groupId)) {
     return validationErrorResponse("Invalid group identifier.");
@@ -31,4 +32,4 @@ export async function GET(
   return proxyOrchestrator(
     `/api/v1/dashboard/groups/${encodeURIComponent(groupId)}/monitoring?range=${range}`,
   );
-}
+});

@@ -1,3 +1,4 @@
+import { withDashboardSession } from "@/lib/server-session";
 import { isMockEnabled, mockInstance } from "@/lib/mock-data";
 import {
   jsonResponse,
@@ -10,10 +11,10 @@ export const dynamic = "force-dynamic";
 
 const internalIdPattern = /^[A-Za-z0-9]{16}$/;
 
-export async function GET(
+export const GET = withDashboardSession(async (
   _request: Request,
   context: { params: Promise<{ instanceId: string }> },
-) {
+) => {
   const { instanceId } = await context.params;
   if (!internalIdPattern.test(instanceId)) {
     return validationErrorResponse("Invalid instance identifier.");
@@ -27,4 +28,4 @@ export async function GET(
   return proxyOrchestrator(
     `/api/v1/dashboard/instances/${encodeURIComponent(instanceId)}`,
   );
-}
+});

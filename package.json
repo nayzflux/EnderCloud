@@ -5,7 +5,8 @@
   "type": "module",
   "packageManager": "bun@1.4.2",
   "engines": {
-    "bun": ">=1.4.2"
+    "bun": ">=1.4.2",
+    "node": ">=24.13.0"
   },
   "workspaces": [
     "apps/*",
@@ -20,7 +21,8 @@
     "dev:orchestrator": "bun run --cwd apps/orchestrator dev",
     "dev:agent": "bun run --cwd apps/agent dev",
     "dev:dashboard": "bun run --cwd apps/dashboard dev",
-    "dev:web": "bun run --cwd apps/web dev"
+    "dev:web": "bun run --cwd apps/web dev",
+    "browsers:install": "bun scripts/install-browsers.ts"
   },
   "devDependencies": {
     "typescript": "5.9.3",

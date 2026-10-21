@@ -3,11 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "bun --bun next dev",
-    "build": "bun --bun next build",
-    "start": "bun --bun next start",
+    "dev": "next dev",
+    "build": "next build --webpack",
+    "start": "bun ../../scripts/start-next.ts dashboard",
     "lint": "eslint",
-    "typecheck": "bun --bun next typegen && tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "test": "bun test",
     "test:e2e": "playwright test"
   },
@@ -51,5 +51,10 @@
     "sharp",
     "unrs-resolver"
   ],
-  "packageManager": "bun@1.4.2"
+  "packageManager": "bun@1.4.2",
+  "engines": {
+    "node": ">=24.13.0",
+    "bun": ">=1.4.2"
+  },
+  "type": "module"
 }
