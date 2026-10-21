@@ -25,12 +25,13 @@ export const serviceCredentials = pgTable("service_credentials", {
   authKeyId: text("auth_key_id").notNull(),
   encryptedSecret: text("encrypted_secret").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-}, table => [uniqueIndex("service_credentials_identity_unique").on(table.kind, table.principalId)]);
+}, table => [uniqueIndex("service_credentials_identity_unique").on(table.kind, table.principalId),
+  check("service_credentials_kind_check", sql`${table.kind} IN ('agent', 'paper', 'proxy')`)]);
 
 export const releaseMetadata = pgTable("release_metadata", {
   id: integer("id").primaryKey().default(1),
   schemaVersion: integer("schema_version").notNull().default(1),
-});
+}, table => [check("release_metadata_singleton", sql`${table.id} = 1`)]);
 import {
 bigint,
 boolean,
@@ -411,8 +412,8 @@ export const sessionPlayers = pgTable(
       .references(() => gameSessions.id, { onDelete: "cascade" }),
     playerId: uuid("player_id").notNull(),
     partyId: text("party_id").notNull(),
-    queueEntryId: text("queue_entry_id").references(() => queueEntries.id, {
-      onDelete: "set null",
+    queueEntryId: text("queue_entry_id").notNull().references(() => queueEntries.id, {
+      onDelete: "restrict",
     }),
     state: sessionPlayerStateEnum("state").notNull().default("SELECTED"),
     selectedAt: timestamp("selected_at", { withTimezone: true }).defaultNow().notNull(),
@@ -518,7 +519,7 @@ export const commands = pgTable(
 export const registryState = pgTable("registry_state", {
   id: integer("id").primaryKey().default(1),
   revision: bigint("revision", { mode: "number" }).notNull().default(0),
-});
+}, table => [check("registry_state_singleton", sql`${table.id} = 1`), check("registry_revision_positive", sql`${table.revision} >= 0`)]);
 
 export const registryOutbox = pgTable("registry_outbox", {
   id: text("id").primaryKey(),

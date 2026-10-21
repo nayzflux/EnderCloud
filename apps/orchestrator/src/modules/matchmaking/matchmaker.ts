@@ -286,7 +286,7 @@ export class Matchmaker {
       : (await tx
           .select({
             session_id: sessionPlayers.sessionId,
-            ticket_id: sql<string>`COALESCE(${sessionPlayers.queueEntryId}, 'legacy:' || ${sessionPlayers.partyId})`,
+            ticket_id: sql<string>`${sessionPlayers.queueEntryId}`,
             player_count: sql<number>`count(*)::integer`,
           })
           .from(sessionPlayers)
@@ -298,7 +298,7 @@ export class Matchmaker {
           )
           .groupBy(
             sessionPlayers.sessionId,
-            sql`COALESCE(${sessionPlayers.queueEntryId}, 'legacy:' || ${sessionPlayers.partyId})`,
+            sql`${sessionPlayers.queueEntryId}`,
           )
           .orderBy(asc(sessionPlayers.sessionId))) as unknown as {
             session_id: string;

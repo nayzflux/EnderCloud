@@ -280,13 +280,7 @@ export class QueueService {
       .where(
         and(
           eq(sessionPlayers.sessionId, sessionId),
-          or(
-            eq(sessionPlayers.queueEntryId, entryId),
-            and(
-              isNull(sessionPlayers.queueEntryId),
-              eq(sessionPlayers.partyId, partyId),
-            ),
-          ),
+          eq(sessionPlayers.queueEntryId, entryId),
           sql`${sessionPlayers.state} <> 'LEFT'`,
         ),
       )
@@ -313,7 +307,7 @@ export class QueueService {
       SELECT count(*)::integer AS size
       FROM session_players
       WHERE session_id = ${sessionId} AND state <> 'LEFT'
-      GROUP BY COALESCE(queue_entry_id, 'legacy:' || party_id)
+      GROUP BY queue_entry_id
     `)) as unknown as { size: number }[];
     const ticketSizes = sizes.map((row) => Number(row.size));
     const playerCount = ticketSizes.reduce((sum, size) => sum + size, 0);

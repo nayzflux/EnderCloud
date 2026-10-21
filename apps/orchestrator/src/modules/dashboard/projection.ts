@@ -17,24 +17,8 @@ LifecycleState,
 SessionState,
 VariantRuntimeSpec
 } from "@endercloud/contracts/domain";
-import { sql } from "drizzle-orm";
-import {
-serverGroups,
-serverInstances
-} from "../../db/schema.ts";
 
 export type DatabaseTimestamp = Date | string;
-
-// Keep proxy observations separate from Paper's instance_players and session presence.
-export const proxyProjection = {
-  proxy_last_seen_at: sql<Date | null>`(SELECT p.last_seen_at FROM proxy_heartbeats p WHERE p.proxy_id = ${serverInstances.id})`,
-  proxy_ready: sql<boolean>`COALESCE((SELECT p.ready FROM proxy_heartbeats p WHERE p.proxy_id = ${serverInstances.id}), false)`,
-  proxy_accepting_connections: sql<boolean>`COALESCE((
-    SELECT ${serverInstances.lifecycleState} = 'RUNNING' AND p.ready AND p.accepting_connections
-      AND p.last_seen_at > now() - (${serverGroups.playerStaleTimeoutMs} * interval '1 millisecond')
-    FROM proxy_heartbeats p WHERE p.proxy_id = ${serverInstances.id}
-  ), false)`,
-};
 
 export interface GroupRow {
   id: string;

@@ -34,7 +34,18 @@ computeFeasibleProfiles,
 selectRecommendedProfile,
 } from "../../domain/matchmaking.ts";
 
-import { activeInstanceDeadline,activeSessionDeadline,assembleClusterSnapshot,type DashboardRows,type DatabaseTimestamp,type GroupRow,type HostRow,type InstanceRow,iso,normalizeDashboardLimit,proxyProjection,type QueueSummaryRow,requiredIso,type SessionRow,toInstance,toSession,type VariantRow } from "./projection.ts";
+import { activeInstanceDeadline,activeSessionDeadline,assembleClusterSnapshot,type DashboardRows,type DatabaseTimestamp,type GroupRow,type HostRow,type InstanceRow,iso,normalizeDashboardLimit,type QueueSummaryRow,requiredIso,type SessionRow,toInstance,toSession,type VariantRow } from "./projection.ts";
+
+// Keep proxy observations separate from Paper's instance_players and session presence.
+const proxyProjection = {
+  proxy_last_seen_at: sql<Date | null>`(SELECT p.last_seen_at FROM proxy_heartbeats p WHERE p.proxy_id = ${serverInstances.id})`,
+  proxy_ready: sql<boolean>`COALESCE((SELECT p.ready FROM proxy_heartbeats p WHERE p.proxy_id = ${serverInstances.id}), false)`,
+  proxy_accepting_connections: sql<boolean>`COALESCE((
+    SELECT ${serverInstances.lifecycleState} = 'RUNNING' AND p.ready AND p.accepting_connections
+      AND p.last_seen_at > now() - (${serverGroups.playerStaleTimeoutMs} * interval '1 millisecond')
+    FROM proxy_heartbeats p WHERE p.proxy_id = ${serverInstances.id}
+  ), false)`,
+};
 
 export class DashboardService {
   public constructor(
@@ -406,7 +417,7 @@ export class DashboardService {
         players: (DashboardSessionDetail["tickets"][number]["players"][number])[];
       }>();
       for (const player of players) {
-        const ticketId = player.queue_entry_id ?? `legacy:${player.party_id}`;
+        const ticketId = player.queue_entry_id;
         const ticket = byTicket.get(ticketId) ?? {
           partyId: player.party_id,
           players: [],

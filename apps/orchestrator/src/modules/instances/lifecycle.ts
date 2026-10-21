@@ -38,16 +38,14 @@ interface CreateRow {
   group_id: string;
   variant_id: string;
   session_id: string | null;
-  runtime_spec: VariantRuntimeSpec;
   variant_revision: number;
-  current_revision: number;
   reserved_cpu: number | null;
   reserved_memory_bytes: number | null;
   command_payload: unknown;
 }
 
 interface CreateCommandPayload {
-  readonly instanceType?: InstanceType;
+  readonly instanceType: InstanceType;
   readonly version: 1;
   readonly variantRevision: number;
   readonly variantChecksum: string;
@@ -59,7 +57,7 @@ function isCreateCommandPayload(value: unknown): value is CreateCommandPayload {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Partial<CreateCommandPayload>;
   return candidate.version === 1 &&
-    (candidate.instanceType === undefined || candidate.instanceType === "paper" || candidate.instanceType === "proxy") &&
+    (candidate.instanceType === "paper" || candidate.instanceType === "proxy") &&
     Number.isInteger(candidate.variantRevision) &&
     typeof candidate.variantChecksum === "string" &&
     typeof candidate.runtime?.image === "string" &&
@@ -349,15 +347,7 @@ export class InstanceController {
       .where(and(eq(commands.instanceId, instanceId), eq(commands.operation, "CREATE")))
       .orderBy(desc(commands.createdAt))
       .limit(1);
-    const commandId = cmds[0]?.id ?? nanoid();
-    if (cmds.length === 0) {
-      await this.db.insert(commands).values({
-        id: commandId,
-        instanceId: instanceId,
-        operation: "CREATE",
-        state: "PENDING",
-      });
-    }
+    if (!cmds[0]) await this.failInstance(instanceId, "MISSING_CREATE_COMMAND");
   }
 
   // Execute the recoverable database-to-Docker creation workflow.
@@ -374,11 +364,9 @@ export class InstanceController {
         variant_id: serverInstances.variantId,
         session_id: serverInstances.sessionId,
         variant_revision: serverInstances.variantRevision,
-        current_revision: serverVariants.revision,
         reserved_cpu: serverInstances.reservedCpu,
         reserved_memory_bytes: serverInstances.reservedMemoryBytes,
         command_payload: commands.payload,
-        runtime_spec: serverVariants.runtimeSpec,
       })
       .from(serverInstances)
       .innerJoin(serverVariants, eq(serverVariants.id, serverInstances.variantId))
@@ -410,7 +398,7 @@ export class InstanceController {
       .where(inArray(templateLayers.id, frozen.templateLayers.map((layer) => layer.id))) : [];
     const layerChecksums = new Map(availableLayers.map((layer) => [layer.id, layer.checksum]));
     if (
-      (row.command_payload !== null && !frozen) ||
+      !frozen ||
       (frozen && (
         frozen.variantRevision !== row.variant_revision ||
         frozen.runtime.cpu !== row.reserved_cpu ||
@@ -418,11 +406,6 @@ export class InstanceController {
       )) ||
       (frozen && frozen.templateLayers.some((layer) =>
         layerChecksums.get(layer.id) !== layer.checksum
-      )) ||
-      (!frozen && (
-        row.variant_revision !== row.current_revision ||
-        row.runtime_spec.cpu !== row.reserved_cpu ||
-        row.runtime_spec.memoryBytes !== row.reserved_memory_bytes
       ))
     ) {
       await this.db.transaction(async (tx) => {
@@ -444,30 +427,19 @@ export class InstanceController {
       return;
     }
     try {
-      const templateLayersForVariant = frozen?.templateLayers ?? await this.db
-        .select({
-          id: templateLayers.id,
-          checksum: templateLayers.checksum,
-        })
-        .from(serverVariantLayers)
-        .innerJoin(templateLayers, eq(templateLayers.id, serverVariantLayers.layerId))
-        .where(eq(serverVariantLayers.variantId, row.variant_id))
-        .orderBy(asc(serverVariantLayers.ordinal));
-      if (templateLayersForVariant.length === 0) {
-        throw new Error(`Variant ${row.variant_id} has no materialization layers`);
-      }
+      const templateLayersForVariant = frozen.templateLayers;
       // Executor creation is idempotent: an existing managed container is reused
       // when reconciliation resumes a partially completed CREATE command.
       const created = await this.executor.createInstance({
-        instanceType: frozen?.instanceType ?? "paper",
+        instanceType: frozen.instanceType,
         hostId: row.host_id,
         instanceId: row.id,
         groupId: row.group_id,
         variantId: row.variant_id,
         ...(row.session_id ? { sessionId: row.session_id } : {}),
         templateLayers: templateLayersForVariant,
-        runtime: frozen?.runtime ?? row.runtime_spec,
-        environment: this.credentials ? { ENDERCLOUD_API_TOKEN: (await this.credentials.ensure(frozen?.instanceType === "proxy" ? "proxy" : "paper", instanceId)).apiToken } : {},
+        runtime: frozen.runtime,
+        environment: this.credentials ? await this.credentials.runtimeEnvironment(frozen.instanceType, instanceId) : {},
       });
       await this.db.transaction(async (tx) => {
         await tx

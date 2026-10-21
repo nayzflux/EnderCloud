@@ -122,9 +122,9 @@ export class PaperEvents {
     for (const player of players) {
       if (player.state === "CONNECTED") {
         connectedTicketSizes.set(
-          player.queue_entry_id ?? `legacy:${player.party_id}`,
+          player.queue_entry_id,
           (connectedTicketSizes.get(
-            player.queue_entry_id ?? `legacy:${player.party_id}`,
+            player.queue_entry_id,
           ) ?? 0) + 1,
         );
       }
@@ -162,7 +162,7 @@ export class PaperEvents {
       players: players.map((player) => ({
         playerId: player.player_id,
         partyId: player.party_id,
-        ticketId: player.queue_entry_id ?? `legacy:${player.party_id}`,
+        ticketId: player.queue_entry_id,
         state: player.state,
       })),
     };

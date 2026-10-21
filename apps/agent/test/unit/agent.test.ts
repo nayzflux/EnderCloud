@@ -105,6 +105,7 @@ test("agent API delegates idempotent instance operations to the local executor",
   const app = createAgentApp(config, executor, templates, logger, () => {});
 
   const body = {
+    instanceType: "paper",
     hostId: "host-paris-01",
     instanceId,
     groupId: "skywars-solo",
@@ -208,6 +209,7 @@ test("agent refuses a create request addressed to another host", async () => {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        instanceType: "paper",
         hostId: "host-paris-02",
         instanceId,
         groupId: "skywars-solo",

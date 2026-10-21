@@ -114,6 +114,9 @@ async function seedCreates(count: number, state: "PENDING" | "RUNNING" = "PENDIN
       id: `startup-command-${index}`,
       instanceId,
       operation: "CREATE",
+      payload: { version: 1, instanceType: "paper", variantRevision: 1, variantChecksum: "checksum",
+        runtime: { image: "itzg/minecraft-server:java25", cpu: 1, memoryBytes: 1024 ** 3, environment: {} },
+        templateLayers: [{ id: variantId, checksum: "checksum" }] },
       state,
       createdAt: new Date(createdAt + index * 100),
       ...(state === "RUNNING" ? { startedAt: new Date() } : {}),
@@ -355,8 +358,9 @@ describe("durable instance startup", () => {
     expect(commandState[0]?.state).toBe("CANCELLED");
   });
 
-  test("a legacy CREATE without a snapshot is cancelled when its revision changed", async () => {
+  test("a CREATE without a frozen snapshot is refused", async () => {
     await seedCreates(1);
+    await db.update(commands).set({ payload: null }).where(eq(commands.id, "startup-command-0"));
     await db.update(serverVariants).set({ revision: 2 })
       .where(eq(serverVariants.id, variantId));
     const received: InstanceSpec[] = [];

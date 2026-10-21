@@ -1,5 +1,5 @@
 {
-  "id": "cd9a711d-0402-460f-94a6-0e508f1c969a",
+  "id": "0d454df2-0324-4199-b657-fa66d2fe0eb5",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1188,7 +1188,16 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "registry_state_singleton": {
+          "name": "registry_state_singleton",
+          "value": "\"registry_state\".\"id\" = 1"
+        },
+        "registry_revision_positive": {
+          "name": "registry_revision_positive",
+          "value": "\"registry_state\".\"revision\" >= 0"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.release_metadata": {
@@ -1215,7 +1224,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "release_metadata_singleton": {
+          "name": "release_metadata_singleton",
+          "value": "\"release_metadata\".\"id\" = 1"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.server_group_variants": {
@@ -2217,7 +2231,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "service_credentials_kind_check": {
+          "name": "service_credentials_kind_check",
+          "value": "\"service_credentials\".\"kind\" IN ('agent', 'paper', 'proxy')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.session_players": {
@@ -2246,7 +2265,7 @@
           "name": "queue_entry_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "state": {
           "name": "state",
@@ -2344,7 +2363,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
+          "onDelete": "restrict",
           "onUpdate": "no action"
         }
       },

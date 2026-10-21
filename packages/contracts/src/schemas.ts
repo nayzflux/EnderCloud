@@ -28,7 +28,7 @@ export const paperEventSchema = z.discriminatedUnion("type", [
 ]);
 
 export const instanceCreateSchema = z.object({
-  instanceType: z.enum(["paper", "proxy"]).optional(),
+  instanceType: z.enum(["paper", "proxy"]),
   hostId: groupIdSchema, instanceId: internalIdSchema, groupId: groupIdSchema, variantId: groupIdSchema,
   sessionId: internalIdSchema.optional(),
   templateLayers: z.array(z.object({ id: groupIdSchema, checksum: checksumSchema })).min(1).max(128),

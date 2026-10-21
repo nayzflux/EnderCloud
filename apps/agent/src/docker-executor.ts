@@ -6,7 +6,7 @@ import type { Logger } from "@endercloud/runtime/logger";
 import type {
   CreatedInstance,
   Executor,
-  InstanceSpec,
+  ResolvedInstanceSpec,
   InstanceTarget,
   OrphanCleanupResult,
   RuntimeInstance,
@@ -68,7 +68,7 @@ export function decodeDockerLogBuffer(buffer: Buffer): Buffer {
 }
 
 export async function materializeLayers(
-  layers: InstanceSpec["templateLayers"],
+  layers: ResolvedInstanceSpec["templateLayers"],
   destination: string,
 ): Promise<void> {
   for (const layer of layers) {
@@ -89,7 +89,7 @@ export async function materializeLayers(
   }
 }
 
-export class LocalDockerExecutor implements Executor {
+export class LocalDockerExecutor implements Omit<Executor, "createInstance"> {
   private readonly docker: Docker;
   private readonly operations: OperationJournal;
   private creationQueue: Promise<void> = Promise.resolve();
@@ -103,13 +103,13 @@ export class LocalDockerExecutor implements Executor {
   }
 
   // Materialize a template, create its container, and return the proxy endpoint.
-  public async createInstance(spec: InstanceSpec): Promise<CreatedInstance> {
+  public async createInstance(spec: ResolvedInstanceSpec): Promise<CreatedInstance> {
     this.assertHost(spec.hostId);
     const fingerprint = { ...spec, templateLayers: spec.templateLayers.map(({ id, checksum }) => ({ id, checksum })) };
     return this.operations.run(spec.instanceId, 1, fingerprint, assertCurrent => this.create(spec, assertCurrent));
   }
 
-  private async create(spec: InstanceSpec, assertCurrent: () => void): Promise<CreatedInstance> {
+  private async create(spec: ResolvedInstanceSpec, assertCurrent: () => void): Promise<CreatedInstance> {
     const startedAt = performance.now();
     const isProxy = spec.instanceType === "proxy";
     if (isProxy && !this.config.proxy) throw new Error("Agent does not support proxy instances");
@@ -165,7 +165,7 @@ export class LocalDockerExecutor implements Executor {
       });
       const labels: Record<string, string> = {
         "orchestrator.managed": "true",
-        "orchestrator.instance-type": spec.instanceType ?? "paper",
+        "orchestrator.instance-type": spec.instanceType,
         "orchestrator.instance-id": spec.instanceId,
         "orchestrator.group-id": spec.groupId,
         "orchestrator.variant-id": spec.variantId,

@@ -1029,7 +1029,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
       .where(eq(gameSessions.id, emptySessionId));
     await db.update(gameSessions).set({ instanceId: activeInstanceId })
       .where(eq(gameSessions.id, activeSessionId));
-    await db.insert(sessionPlayers).values({
+    await seedSessionPlayers({
       sessionId: activeSessionId,
       playerId: crypto.randomUUID(),
       partyId: "occupied-party",
@@ -1149,7 +1149,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const secondPlayerId = crypto.randomUUID();
     
     // Simulate player attached to the waiting session
-    await db.insert(sessionPlayers).values([
+    await seedSessionPlayers([
       {
         sessionId,
         playerId,
@@ -1265,7 +1265,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
 
     const partyId1 = nanoid();
     const playerId1 = crypto.randomUUID();
-    await db.insert(sessionPlayers).values({
+    await seedSessionPlayers({
       sessionId,
       playerId: playerId1,
       partyId: partyId1,
@@ -1327,7 +1327,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
 
     const partyId1 = nanoid();
     const playerId1 = crypto.randomUUID();
-    await db.insert(sessionPlayers).values({
+    await seedSessionPlayers({
       sessionId,
       playerId: playerId1,
       partyId: partyId1,
@@ -1404,7 +1404,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     await db.update(serverInstances)
       .set({ sessionId, availabilityState: "RESERVED" })
       .where(eq(serverInstances.id, instanceId));
-    await db.insert(sessionPlayers).values([
+    await seedSessionPlayers([
       {
         sessionId,
         playerId: crypto.randomUUID(),
@@ -1471,7 +1471,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     await db.update(serverInstances)
       .set({ sessionId, availabilityState: "RESERVED" })
       .where(eq(serverInstances.id, instanceId));
-    await db.insert(sessionPlayers).values([
+    await seedSessionPlayers([
       {
         sessionId,
         playerId: eliminatedPlayerId,
@@ -1589,7 +1589,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     await db.update(serverInstances)
       .set({ sessionId, availabilityState: "RESERVED" })
       .where(eq(serverInstances.id, instanceId));
-    await db.insert(sessionPlayers).values({
+    await seedSessionPlayers({
       sessionId,
       playerId,
       partyId: "waiting-party",
@@ -1688,7 +1688,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     await db.update(serverInstances)
       .set({ sessionId, availabilityState: "RESERVED" })
       .where(eq(serverInstances.id, sourceInstanceId));
-    await db.insert(sessionPlayers).values(playerIds.map((playerId) => ({
+    await seedSessionPlayers(playerIds.map((playerId) => ({
       sessionId,
       playerId,
       partyId: `party-${playerId}`,
@@ -2424,3 +2424,20 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     expect(buckets.map((bucket) => bucket.groupId)).toEqual(["new-group"]);
   });
 });
+
+// Fixtures follow the release invariant: every selected player has a durable ticket.
+async function seedSessionPlayers(input: (Omit<typeof sessionPlayers.$inferInsert, "queueEntryId"> & {queueEntryId?: string}) | (Omit<typeof sessionPlayers.$inferInsert, "queueEntryId"> & {queueEntryId?: string})[]) {
+  const rows = Array.isArray(input) ? input : [input];
+  const tickets = new Map<string, string>();
+  for (const row of rows) {
+    let ticket = row.queueEntryId ?? tickets.get(row.sessionId + ":" + row.partyId);
+    if (!ticket) {
+      const [session] = await db.select().from(gameSessions).where(eq(gameSessions.id, row.sessionId));
+      const [existing] = await db.select().from(queueEntries).where(and(eq(queueEntries.sessionId, row.sessionId), eq(queueEntries.partyId, row.partyId)));
+      ticket = existing?.id ?? nanoid();
+      if (!existing) await db.insert(queueEntries).values({id: ticket, partyId: row.partyId, groupId: session!.groupId, sessionId: row.sessionId, state: "SELECTED"});
+      tickets.set(row.sessionId + ":" + row.partyId, ticket);
+    }
+    await db.insert(sessionPlayers).values({...row, queueEntryId: ticket});
+  }
+}

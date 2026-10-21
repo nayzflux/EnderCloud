@@ -154,10 +154,8 @@ export class TransferService {
       }
       // Publish sequentially to avoid flooding Redis and to preserve deterministic retry updates.
       for (const command of commands) {
-        const commandReceipts = byCommand.get(command.id);
-        const players = commandReceipts
-          ? commandReceipts.filter((receipt) => receipt.state === "PENDING").map((receipt) => receipt.playerId)
-          : command.payload.players;
+        const commandReceipts = byCommand.get(command.id) ?? [];
+        const players = commandReceipts.filter(receipt => receipt.state === "PENDING").map(receipt => receipt.playerId);
         if (players.length > 0) await this.publish(command, players, Object.fromEntries((commandReceipts ?? []).map(receipt => [receipt.playerId, receipt.generation])));
       }
     } finally {
@@ -198,42 +196,8 @@ export class TransferService {
       .where(
         and(
           eq(schema.transferCommands.state, "PENDING"),
-          // New commands use durable per-player receipts. Older manually inserted
-          // commands without receipts retain the previous observation rule.
-          sql`((
-            EXISTS (
-              SELECT 1 FROM transfer_command_players receipt
-              WHERE receipt.command_id = ${schema.transferCommands.id}
-            ) AND NOT EXISTS (
-              SELECT 1 FROM transfer_command_players receipt
-              WHERE receipt.command_id = ${schema.transferCommands.id}
-                AND receipt.state = 'PENDING'
-            )
-          ) OR (
-            NOT EXISTS (
-              SELECT 1 FROM transfer_command_players receipt
-              WHERE receipt.command_id = ${schema.transferCommands.id}
-            ) AND NOT EXISTS (
-              SELECT 1
-              FROM jsonb_array_elements_text(${schema.transferCommands.payload}->'players') AS expected(player_id)
-              WHERE NOT EXISTS (
-                SELECT 1
-                FROM instance_players ip
-                WHERE ip.instance_id = ${schema.transferCommands.instanceId}
-                  AND ip.player_id = expected.player_id::uuid
-              )
-              AND NOT (
-                ${schema.transferCommands.sessionId} IS NOT NULL
-                AND EXISTS (
-                  SELECT 1
-                  FROM session_players sp
-                  WHERE sp.session_id = ${schema.transferCommands.sessionId}
-                    AND sp.player_id = expected.player_id::uuid
-                    AND sp.state = 'LEFT'
-                )
-              )
-            )
-          ))`
+          sql`NOT EXISTS (SELECT 1 FROM transfer_command_players receipt
+            WHERE receipt.command_id = ${schema.transferCommands.id} AND receipt.state = 'PENDING')`
         )
       );
   }

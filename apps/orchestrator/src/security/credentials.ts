@@ -79,6 +79,12 @@ export class Credentials {
     return secret.controlToken;
   }
 
+  public async runtimeEnvironment(kind: "paper" | "proxy", instanceId: string): Promise<Record<string, string>> {
+    if (kind === "proxy" && !this.config.proxyRedisUrl) throw new Error("PROXY_REDIS_URL is required for managed proxies");
+    return { ENDERCLOUD_API_TOKEN: (await this.ensure(kind, instanceId)).apiToken,
+      ...(kind === "proxy" ? { ENDERCLOUD_REDIS_URL: this.config.proxyRedisUrl! } : {}) };
+  }
+
   public async revoke(kind: ServicePrincipal["kind"], principalId: string): Promise<void> {
     const [record] = await this.db.select().from(serviceCredentials).where(and(eq(serviceCredentials.kind, kind), eq(serviceCredentials.principalId, principalId)));
     if (record) await this.db.update(apikey).set({ enabled: false }).where(eq(apikey.id, record.authKeyId));

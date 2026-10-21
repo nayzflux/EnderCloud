@@ -1,7 +1,7 @@
 import type { InstanceType, VariantRuntimeSpec } from "@endercloud/contracts/domain";
 
 export interface InstanceSpec {
-  readonly instanceType?: InstanceType | undefined;
+  readonly instanceType: InstanceType;
   readonly hostId: string;
   readonly instanceId: string;
   readonly groupId: string;
@@ -10,10 +10,14 @@ export interface InstanceSpec {
   readonly templateLayers: readonly {
     readonly id: string;
     readonly checksum: string;
-    readonly templatePath?: string;
   }[];
   readonly runtime: VariantRuntimeSpec;
   readonly environment: Readonly<Record<string, string>>;
+}
+
+/** Agent-local materialization; never transmitted by the orchestrator. */
+export interface ResolvedInstanceSpec extends Omit<InstanceSpec, "templateLayers"> {
+  readonly templateLayers: readonly { readonly id: string; readonly checksum: string; readonly templatePath: string }[];
 }
 
 export interface CreatedInstance {

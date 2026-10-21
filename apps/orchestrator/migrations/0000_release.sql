@@ -154,12 +154,15 @@ CREATE TABLE "registry_outbox" (
 --> statement-breakpoint
 CREATE TABLE "registry_state" (
 	"id" integer PRIMARY KEY DEFAULT 1 NOT NULL,
-	"revision" bigint DEFAULT 0 NOT NULL
+	"revision" bigint DEFAULT 0 NOT NULL,
+	CONSTRAINT "registry_state_singleton" CHECK ("registry_state"."id" = 1),
+	CONSTRAINT "registry_revision_positive" CHECK ("registry_state"."revision" >= 0)
 );
 --> statement-breakpoint
 CREATE TABLE "release_metadata" (
 	"id" integer PRIMARY KEY DEFAULT 1 NOT NULL,
-	"schema_version" integer DEFAULT 1 NOT NULL
+	"schema_version" integer DEFAULT 1 NOT NULL,
+	CONSTRAINT "release_metadata_singleton" CHECK ("release_metadata"."id" = 1)
 );
 --> statement-breakpoint
 CREATE TABLE "server_group_variants" (
@@ -292,14 +295,15 @@ CREATE TABLE "service_credentials" (
 	"principal_id" text NOT NULL,
 	"auth_key_id" text NOT NULL,
 	"encrypted_secret" text NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "service_credentials_kind_check" CHECK ("service_credentials"."kind" IN ('agent', 'paper', 'proxy'))
 );
 --> statement-breakpoint
 CREATE TABLE "session_players" (
 	"session_id" text NOT NULL,
 	"player_id" uuid NOT NULL,
 	"party_id" text NOT NULL,
-	"queue_entry_id" text,
+	"queue_entry_id" text NOT NULL,
 	"state" "session_player_state" DEFAULT 'SELECTED' NOT NULL,
 	"selected_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"transferring_at" timestamp with time zone,
@@ -459,7 +463,7 @@ ALTER TABLE "server_variant_layers" ADD CONSTRAINT "server_variant_layers_varian
 ALTER TABLE "server_variant_layers" ADD CONSTRAINT "server_variant_layers_layer_id_template_layers_id_fk" FOREIGN KEY ("layer_id") REFERENCES "public"."template_layers"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "server_variants" ADD CONSTRAINT "server_variants_id_template_layers_id_fk" FOREIGN KEY ("id") REFERENCES "public"."template_layers"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "session_players" ADD CONSTRAINT "session_players_session_id_game_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "public"."game_sessions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "session_players" ADD CONSTRAINT "session_players_queue_entry_id_queue_entries_id_fk" FOREIGN KEY ("queue_entry_id") REFERENCES "public"."queue_entries"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "session_players" ADD CONSTRAINT "session_players_queue_entry_id_queue_entries_id_fk" FOREIGN KEY ("queue_entry_id") REFERENCES "public"."queue_entries"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "transfer_command_players" ADD CONSTRAINT "transfer_command_players_command_id_transfer_commands_id_fk" FOREIGN KEY ("command_id") REFERENCES "public"."transfer_commands"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "transfer_commands" ADD CONSTRAINT "transfer_commands_instance_id_server_instances_id_fk" FOREIGN KEY ("instance_id") REFERENCES "public"."server_instances"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "transfer_commands" ADD CONSTRAINT "transfer_commands_session_id_game_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "public"."game_sessions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
