@@ -41,7 +41,8 @@ services:
   orchestrator:
     <<: *service-defaults
     build:
-      context: ./orchestrator
+      context: .
+      dockerfile: apps/orchestrator/Dockerfile
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       REDIS_URL: redis://redis:6379
@@ -78,8 +79,9 @@ services:
   agent:
     <<: *service-defaults
     build:
-      context: ./orchestrator
-    command: ["bun", "src/agent/index.ts"]
+      context: .
+      dockerfile: apps/agent/Dockerfile
+
     environment:
       AGENT_ID: ${AGENT_ID:?Set a stable AGENT_ID}
       AGENT_VERSION: ${AGENT_VERSION:-0.1.0}
@@ -117,7 +119,8 @@ services:
   dashboard:
     <<: *service-defaults
     build:
-      context: ./dashboard
+      context: .
+      dockerfile: apps/dashboard/Dockerfile
     environment:
       ORCHESTRATOR_URL: http://orchestrator:8080
       DASHBOARD_MOCK_DATA: "false"

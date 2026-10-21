@@ -1,0 +1,41 @@
+{
+  "name": "@endercloud/orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "bun": ">=1.4.2"
+  },
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "test:unit": "bun test test/unit",
+    "test:integration": "bun test test/integration",
+    "test:proxies:live": "bun test/smoke/proxies.ts",
+    "test:coverage": "bun test --coverage",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "bun src/db/migrate.ts"
+  },
+  "dependencies": {
+    "@elysiajs/openapi": "1.4.15",
+    "drizzle-orm": "0.44.7",
+    "elysia": "1.4.29",
+    "ioredis": "5.11.1",
+    "postgres": "3.4.9",
+    "tar-stream": "3.2.0",
+    "yaml": "2.9.0",
+    "@endercloud/contracts": "workspace:*",
+    "@endercloud/runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "12.0.4",
+    "@types/bun": "1.3.14",
+    "drizzle-kit": "0.31.10",
+    "testcontainers": "12.0.4",
+    "typescript": "5.9.3",
+    "dockerode": "4.0.12",
+    "@types/dockerode": "3.3.47"
+  }
+}

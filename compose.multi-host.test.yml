@@ -3,8 +3,9 @@ name: endercloud
 services:
   agent-secondary:
     build:
-      context: ./orchestrator
-    command: ["bun", "src/agent/index.ts"]
+      context: .
+      dockerfile: apps/agent/Dockerfile
+
     restart: unless-stopped
     init: true
     stop_grace_period: 20s

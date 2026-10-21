@@ -54,7 +54,7 @@ run_case() {
   local directory="$TEMPORARY_ROOT/$name"
   local fake_bin="$TEMPORARY_ROOT/bin-$name"
 
-  mkdir -p "$directory/orchestrator" "$directory/dashboard" "$directory/groups" "$directory/templates"
+  mkdir -p "$directory/apps/orchestrator" "$directory/apps/agent" "$directory/apps/dashboard" "$directory/groups" "$directory/templates"
   cp "$SOURCE_ROOT/install.sh" "$SOURCE_ROOT/compose.yml" "$directory/"
   create_fake_docker "$fake_bin"
   PATH="$fake_bin:$PATH" /usr/bin/env bash "$directory/install.sh" <<< "$answers" >/dev/null 2>&1

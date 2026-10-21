@@ -49,4 +49,7 @@ Each implementation commit includes focused validation. Record completed work, d
 
 ## Remaining release work
 
-The workspace/package extraction, domain service decomposition, shared Zod schemas, lifecycle/HTTP cleanup, authentication, fresh schema, canonical documentation, frontend organization and final deployment/CI validation are still required. Existing passing checks do not yet establish release readiness.
+The domain service decomposition, shared Zod schemas, lifecycle/HTTP cleanup, authentication, fresh schema, canonical documentation, frontend organization and final deployment/CI validation are still required. Existing passing checks do not yet establish release readiness.
+
+- Workspace extraction complete: four applications, browser-safe shared contracts, shared server runtime and no agent dependency on control-plane configuration/database code. One pinned Bun lockfile, root check commands and import-boundary enforcement. Images use root build contexts and filtered application dependency graphs. Root `bun run check` and Compose configuration validation pass after extraction.
+- Coordinated Java build/check/shadowJar validation passed for core, Paper and Velocity, including assignment, registry ordering and transfer-fence regressions.

@@ -1,0 +1,22 @@
+{
+  "name": "@endercloud/runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./logger": "./src/logger.ts",
+    "./env": "./src/env.ts",
+    "./id": "./src/id.ts",
+    "./templates": "./src/template-files.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@endercloud/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/bun": "1.3.14"
+  }
+}

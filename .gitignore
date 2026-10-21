@@ -28,3 +28,10 @@ runtime/*
 
 *.log
 hs_err_pid*
+
+# Workspace dependencies and generated caches
+**/node_modules/
+.cache/
+**/coverage/
+**/dist/
+**/*.tsbuildinfo

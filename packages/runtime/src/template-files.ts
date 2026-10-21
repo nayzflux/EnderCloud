@@ -1,0 +1,57 @@
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { readdir, stat } from 'node:fs/promises';
+import { join, relative, sep } from 'node:path';
+import type { TemplateFileSummary } from '@endercloud/contracts/domain';
+
+export interface InspectedTemplate {
+  readonly checksum: string;
+  readonly files: TemplateFileSummary;
+  readonly manifest: ReadonlyMap<string, "directory" | "file">;
+}
+
+// Hash a layer and collect bounded metadata used by validation and the dashboard.
+export async function inspectTemplateDirectory(root: string): Promise<InspectedTemplate> {
+  const hasher = createHash("sha256").update("endercloud-template-v2\0");
+  const manifest = new Map<string, "directory" | "file">();
+  const roots = new Set<string>();
+  let fileCount = 0;
+  let totalBytes = 0;
+  async function visit(directory: string): Promise<void> {
+    const entries = await readdir(directory, { withFileTypes: true });
+    // Filesystem enumeration order is unstable; sorting makes the checksum reproducible.
+    entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    // Hash both relative paths and bytes so renames and content changes alter the revision.
+    for (const entry of entries) {
+      const path = join(directory, entry.name);
+      const relativePath = relative(root, path).split(sep).join("/");
+      if (entry.isSymbolicLink()) {
+        throw new Error(`Template symlinks are forbidden: ${path}`);
+      }
+      if (entry.isDirectory()) {
+        hasher.update(`D${Buffer.byteLength(relativePath)}:${relativePath};`);
+        manifest.set(relativePath, "directory");
+        roots.add(relativePath.split("/")[0]!);
+        await visit(path);
+      }
+      else if (entry.isFile()) {
+        const metadata = await stat(path);
+        hasher.update(`F${Buffer.byteLength(relativePath)}:${relativePath}:${metadata.size}:`);
+        for await (const chunk of createReadStream(path)) hasher.update(chunk);
+        if (relativePath !== "variant.yml") {
+          manifest.set(relativePath, "file");
+          roots.add(relativePath.split("/")[0]!);
+          fileCount += 1;
+          totalBytes += (await stat(path)).size;
+        }
+      }
+    }
+  }
+  await visit(root);
+  return {
+    checksum: hasher.digest("hex"),
+    files: { fileCount, totalBytes, roots: [...roots].sort() },
+    manifest,
+  };
+}
+

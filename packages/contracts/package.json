@@ -1,0 +1,22 @@
+{
+  "name": "@endercloud/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./domain": "./src/domain.ts",
+    "./dashboard": "./src/dashboard.ts",
+    "./executor": "./src/executor.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/bun": "1.3.14"
+  }
+}

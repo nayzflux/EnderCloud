@@ -372,7 +372,8 @@ services:
   orchestrator:
     <<: *service-defaults
     build:
-      context: ../orchestrator
+      context: ..
+      dockerfile: apps/orchestrator/Dockerfile
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       REDIS_URL: redis://redis:6379
@@ -398,7 +399,8 @@ services:
   dashboard:
     <<: *service-defaults
     build:
-      context: ../dashboard
+      context: ..
+      dockerfile: apps/dashboard/Dockerfile
     environment:
       ORCHESTRATOR_URL: http://orchestrator:8080
       DASHBOARD_MOCK_DATA: "false"
@@ -529,7 +531,7 @@ start_services() {
 
 main() {
   [[ "$(uname -s)" == "Linux" ]] || error "Cet installateur cible Linux."
-  [[ -f "$SCRIPT_DIRECTORY/compose.yml" && -d "$SCRIPT_DIRECTORY/orchestrator" && -d "$SCRIPT_DIRECTORY/dashboard" ]] || error "Exécutez ce script depuis un clone EnderCloud complet."
+  [[ -f "$SCRIPT_DIRECTORY/compose.yml" && -d "$SCRIPT_DIRECTORY/apps/orchestrator" && -d "$SCRIPT_DIRECTORY/apps/dashboard" ]] || error "Exécutez ce script depuis un clone EnderCloud complet."
   [[ ! -e "$DEPLOYMENT_DIRECTORY" ]] || error "Le répertoire $DEPLOYMENT_DIRECTORY existe déjà. Aucun fichier n'a été modifié."
 
   print_banner
