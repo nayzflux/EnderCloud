@@ -483,6 +483,27 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     expect(expired[0]?.state).toBe("CANCELLED");
   });
 
+  test.each([false, true])("session recovery during STOPPING preserves concurrent cancellation: %s", async cancel => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = nanoid();
+    const sessionId = nanoid();
+    await db.insert(serverInstances).values({ id: instanceId, hostId: TEST_HOST_ID, groupId, variantId,
+      lifecycleState: "STOPPING", availabilityState: "OPEN", failureReason: "RUNTIME_MISSING", reservedCpu: 1, reservedMemoryBytes: 1024 });
+    await db.insert(gameSessions).values({ id: sessionId, groupId, instanceId, state: "TRANSFERRING" });
+    const boundary = new Proxy(db, { get(target, key) {
+      if (key === "transaction") return async (operation: Parameters<Database["transaction"]>[0]) => {
+        if (cancel) await db.update(gameSessions).set({ state: "CANCELLED" }).where(eq(gameSessions.id, sessionId));
+        return db.transaction(operation);
+      };
+      return Reflect.get(target, key);
+    } });
+    const controller = new SessionController(boundary, {} as InstanceController, {} as TransferService, {} as HubRouter, mockLogger);
+    await (controller as unknown as { recoverFailedInstances(): Promise<void> }).recoverFailedInstances();
+    const [result] = await db.select().from(gameSessions).where(eq(gameSessions.id, sessionId));
+    expect(result?.state).toBe(cancel ? "CANCELLED" : "WAITING_FOR_INSTANCE");
+    expect((await db.select().from(serverInstances).where(eq(serverInstances.id, instanceId)))[0]?.reservedCpu).toBe(1);
+  });
+
   test("a legacy session receives a deadline when its instance fails", async () => {
     const { groupId, variantId } = await seedGroup();
     const instanceId = nanoid();

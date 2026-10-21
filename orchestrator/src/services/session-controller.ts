@@ -198,84 +198,38 @@ export class SessionController {
 
   // Requeue safe pre-start failures or fail sessions that can no longer be reassigned.
   private async recoverFailedInstances(): Promise<void> {
-    const failures = await this.db.select({
-      session_id: gameSessions.id,
-      instance_id: serverInstances.id,
-      session_state: gameSessions.state,
-      connected_players: sql<number>`count(${sessionPlayers.playerId}) FILTER (WHERE ${sessionPlayers.state} = 'CONNECTED')::int`,
-    })
-    .from(gameSessions)
-    .innerJoin(serverInstances, eq(serverInstances.id, gameSessions.instanceId))
-    .leftJoin(sessionPlayers, eq(sessionPlayers.sessionId, gameSessions.id))
-    .where(and(
-      or(
-        eq(serverInstances.lifecycleState, "FAILED"),
-        and(
-          eq(serverInstances.lifecycleState, "STOPPED"),
-          isNotNull(serverInstances.failureReason),
-        ),
-      ),
-      notInArray(gameSessions.state, ["FINISHED", "CANCELLED", "FAILED"])
-    ))
-    .groupBy(gameSessions.id, serverInstances.id) as unknown as 
-      {
-        session_id: string;
-        instance_id: string;
-        session_state: SessionState;
-        connected_players: number;
-      }[];
-    // Each failed instance owns at most one active session, so recover them independently.
-    for (const failure of failures) {
-      const preStart = (
-        failure.session_state === "FORMING" ||
-        failure.session_state === "WAITING_FOR_INSTANCE" ||
-        failure.session_state === "TRANSFERRING" ||
-        failure.session_state === "WAITING"
-      ) && failure.connected_players === 0;
-      if (preStart) {
-        this.logger.warn("session.instance.released", "Session returned to instance waiting after a startup failure", {
-          sessionId: failure.session_id,
-          instanceId: failure.instance_id,
-        });
-        await this.transfers.cancelForInstance(failure.instance_id);
-        // Reset the session and its players atomically so no observer sees mixed retry state.
-        await this.db.transaction(async (tx: any) => {
-          await tx.update(gameSessions)
-            .set({
-              state: "WAITING_FOR_INSTANCE",
-              instanceId: null,
-              transferStartedAt: null,
-              lobbyStaleDeadline: null,
-              instanceAcquisitionDeadline: sql`COALESCE(
-                ${gameSessions.instanceAcquisitionDeadline},
-                now() + (
-                  SELECT acquisition_group.instance_acquisition_timeout_ms * interval '1 millisecond'
-                  FROM server_groups acquisition_group
-                  WHERE acquisition_group.id = ${gameSessions.groupId}
-                )
-              )`,
-              updatedAt: sql`now()`
-            })
-            .where(eq(gameSessions.id, failure.session_id));
-          await tx.update(sessionPlayers)
-            .set({ state: "SELECTED", transferringAt: null, transferDeadline: null })
-            .where(and(
-              eq(sessionPlayers.sessionId, failure.session_id),
-              eq(sessionPlayers.state, "TRANSFERRING")
-            ));
-        });
-      } else {
-        this.logger.warn("session.instance.failed", "Session failed after losing its active instance", {
-          sessionId: failure.session_id,
-          instanceId: failure.instance_id,
-          state: failure.session_state,
-          connectedPlayers: failure.connected_players,
-        });
-        await this.db.update(gameSessions)
-          .set({ state: "FAILED", updatedAt: sql`now()` })
-          .where(eq(gameSessions.id, failure.session_id));
-        await this.transfers.cancelForInstance(failure.instance_id);
-      }
+    const failures = await this.db.select({ sessionId: gameSessions.id, instanceId: serverInstances.id })
+      .from(gameSessions).innerJoin(serverInstances, eq(serverInstances.id, gameSessions.instanceId))
+      .where(and(notInArray(gameSessions.state, ["FINISHED", "CANCELLED", "FAILED"]),
+        or(eq(serverInstances.lifecycleState, "FAILED"), and(
+          inArray(serverInstances.lifecycleState, ["STOPPING", "STOPPED"]), isNotNull(serverInstances.failureReason)))));
+    for (const candidate of failures) {
+      await this.db.transaction(async tx => {
+        const [session] = await tx.select().from(gameSessions).where(eq(gameSessions.id, candidate.sessionId)).for("update");
+        if (!session || session.instanceId !== candidate.instanceId ||
+          ["FINISHED", "CANCELLED", "FAILED"].includes(session.state)) return;
+        const [instance] = await tx.select().from(serverInstances).where(eq(serverInstances.id, candidate.instanceId));
+        if (!instance || !(instance.lifecycleState === "FAILED" ||
+          (instance.failureReason && ["STOPPING", "STOPPED"].includes(instance.lifecycleState)))) return;
+        const players = await tx.select().from(sessionPlayers).where(eq(sessionPlayers.sessionId, session.id)).for("update");
+        const preStart = ["FORMING", "WAITING_FOR_INSTANCE", "TRANSFERRING", "WAITING"].includes(session.state) &&
+          !players.some(player => player.state === "CONNECTED");
+        await tx.update(transferCommands).set({ state: "CANCELLED", completedAt: sql`now()` })
+          .where(and(eq(transferCommands.instanceId, instance.id), eq(transferCommands.state, "PENDING")));
+        const condition = and(eq(gameSessions.id, session.id), eq(gameSessions.instanceId, instance.id), eq(gameSessions.state, session.state));
+        if (preStart) {
+          await tx.update(gameSessions).set({ state: "WAITING_FOR_INSTANCE", instanceId: null,
+            transferStartedAt: null, lobbyStaleDeadline: null,
+            instanceAcquisitionDeadline: sql`COALESCE(${gameSessions.instanceAcquisitionDeadline}, now() + (
+              SELECT instance_acquisition_timeout_ms FROM server_groups WHERE id = ${session.groupId}
+            ) * interval '1 millisecond')`, updatedAt: sql`now()`,
+          }).where(condition);
+          await tx.update(sessionPlayers).set({ state: "SELECTED", transferringAt: null, transferDeadline: null })
+            .where(and(eq(sessionPlayers.sessionId, session.id), eq(sessionPlayers.state, "TRANSFERRING")));
+        } else {
+          await tx.update(gameSessions).set({ state: "FAILED", updatedAt: sql`now()` }).where(condition);
+        }
+      });
     }
   }
 
