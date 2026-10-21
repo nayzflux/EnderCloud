@@ -144,6 +144,23 @@ describe("durable instance startup", () => {
     if (container) await container.stop();
   });
 
+  test.each(["HOST_OFFLINE", "HOST_MAINTENANCE"])("probe recovers after %s without consuming a variant retry", async reason => {
+    await seedCreates(1);
+    await db.update(serverInstances).set({ lifecycleState: "FAILED", failureReason: reason });
+    await db.insert(variantStartStates).values({ groupId, variantId, variantRevision: 1,
+      state: "PROBING", failureCount: 1, probeInstanceId: "startup-instance-0",
+      probeDeadline: new Date(Date.now() + 90_000),
+    });
+    const policy = new VariantStartController(db, {} as Executor, {
+      instanceStartRetryLimit: 5, instanceStartRetryBaseDelayMs: 1_000,
+    }, logger);
+    await policy.reconcile();
+    expect((await policy.getStatus(groupId, variantId, 1))?.state).toBe("BACKING_OFF");
+    expect((await policy.getStatus(groupId, variantId, 1))?.failureCount).toBe(1);
+    await db.update(variantStartStates).set({ nextRetryAt: new Date(0) });
+    expect(await new VariantSelector(db).select(groupId)).not.toBeNull();
+  });
+
   test("Redis outage cannot lose or double-count a startup failure", async () => {
     await seedCreates(1);
     const policy = new VariantStartController(db, {} as Executor, {

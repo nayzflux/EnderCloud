@@ -334,6 +334,7 @@ export const variantStartStates = pgTable(
     probeInstanceId: text("probe_instance_id").references(() => serverInstances.id, {
       onDelete: "set null",
     }),
+    probeDeadline: timestamp("probe_deadline", { withTimezone: true }),
     lastFailedInstanceId: text("last_failed_instance_id").references(() => serverInstances.id, {
       onDelete: "set null",
     }),

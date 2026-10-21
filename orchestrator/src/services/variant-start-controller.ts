@@ -76,6 +76,7 @@ export class VariantStartController {
     await tx.update(variantStartStates).set({
       state: "PROBING",
       probeInstanceId: instanceId,
+      probeDeadline: sql`now() + (SELECT startup_timeout_ms FROM server_groups WHERE id = ${groupId}) * interval '1 millisecond'`,
       nextRetryAt: null,
       updatedAt: sql`now()`,
     }).where(and(
@@ -291,7 +292,12 @@ export class VariantStartController {
       if (current.state === "RESETTING") {
         return { status: "ACCEPTED", startup: current, changed: false } as const;
       }
-      if (current.state !== "BLOCKED") {
+      if (current.state === "PROBING") {
+        const [probe] = row.probeInstanceId ? await tx.select({ state: serverInstances.lifecycleState })
+          .from(serverInstances).where(eq(serverInstances.id, row.probeInstanceId)) : [];
+        if (probe && ["CREATING", "STARTING", "RUNNING"].includes(probe.state) &&
+          row.probeDeadline && row.probeDeadline > new Date()) return { status: "CONFLICT", startup: current } as const;
+      } else if (current.state !== "BLOCKED") {
         return { status: "CONFLICT", startup: current } as const;
       }
       await tx.update(variantStartStates).set({
@@ -302,7 +308,7 @@ export class VariantStartController {
         eq(variantStartStates.groupId, groupId),
         eq(variantStartStates.variantId, variantId),
         eq(variantStartStates.variantRevision, revision),
-        eq(variantStartStates.state, "BLOCKED"),
+        inArray(variantStartStates.state, ["BLOCKED", "PROBING"]),
       ));
       return {
         status: "ACCEPTED",
@@ -341,6 +347,7 @@ export class VariantStartController {
         AND current_variant.revision <> ${variantStartStates.variantRevision}
     )`);
 
+    await this.reconcileProbes();
     const resetting = await this.db.select().from(variantStartStates)
       .where(eq(variantStartStates.state, "RESETTING"));
     for (const state of resetting) {
@@ -355,6 +362,41 @@ export class VariantStartController {
           error,
         });
       }
+    }
+  }
+
+  private async reconcileProbes(): Promise<void> {
+    const probes = await this.db.select().from(variantStartStates).where(eq(variantStartStates.state, "PROBING"));
+    for (const candidate of probes) {
+      await this.db.transaction(async tx => {
+        const [state] = await tx.select().from(variantStartStates).where(and(
+          eq(variantStartStates.groupId, candidate.groupId), eq(variantStartStates.variantId, candidate.variantId),
+          eq(variantStartStates.variantRevision, candidate.variantRevision), eq(variantStartStates.state, "PROBING"),
+        )).for("update");
+        if (!state) return;
+        const [probe] = state.probeInstanceId ? await tx.select().from(serverInstances)
+          .where(eq(serverInstances.id, state.probeInstanceId)).for("update") : [];
+        if (probe?.lifecycleState === "RUNNING") {
+          await tx.delete(variantStartStates).where(and(eq(variantStartStates.groupId, state.groupId),
+            eq(variantStartStates.variantId, state.variantId), eq(variantStartStates.variantRevision, state.variantRevision)));
+          return;
+        }
+        const terminal = !probe || ["FAILED", "STOPPING", "STOPPED", "ORPHANED"].includes(probe.lifecycleState);
+        const expired = !state.probeDeadline || state.probeDeadline <= new Date();
+        if (!terminal && !expired) return;
+        // An abandoned infrastructure attempt does not consume another variant retry.
+        // A still-live attempt that exceeds its persisted deadline is a startup failure.
+        if (!terminal && probe) {
+          await tx.update(serverInstances).set({ lifecycleState: "FAILED", failedAt: sql`now()`,
+            failureReason: "STARTUP_TIMEOUT", updatedAt: sql`now()` }).where(eq(serverInstances.id, probe.id));
+          await this.recordFailure(probe.id, "STARTUP_TIMEOUT", tx);
+          return;
+        }
+        await tx.update(variantStartStates).set({ state: "BACKING_OFF", probeInstanceId: null, probeDeadline: null,
+          nextRetryAt: new Date(Date.now() + this.config.instanceStartRetryBaseDelayMs), updatedAt: sql`now()`,
+        }).where(and(eq(variantStartStates.groupId, state.groupId), eq(variantStartStates.variantId, state.variantId),
+          eq(variantStartStates.variantRevision, state.variantRevision)));
+      });
     }
   }
 
