@@ -168,9 +168,10 @@ test("a stalled body expires and a later request for the same layer can succeed"
     idleTimeoutMs: 50,
   });
   try {
-    await expect(cache.resolveLayers([{ id: "base-layer", checksum }])).rejects.toBeInstanceOf(
-      Error,
-    );
+    await expect(cache.resolveLayers([{ id: "base-layer", checksum }])).rejects.toMatchObject({
+      status: 503,
+      code: "TEMPLATE_UNAVAILABLE",
+    });
     expect(await cache.resolveLayers([{ id: "base-layer", checksum }])).toHaveLength(1);
     expect(calls).toBe(2);
   } finally {
@@ -179,6 +180,31 @@ test("a stalled body expires and a later request for the same layer can succeed"
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test.each(["401", "503", "network"])(
+  "template transport failure %s is recoverable infrastructure",
+  async (failure) => {
+    const root = await mkdtemp(join(tmpdir(), "endercloud-transport-"));
+    const original = globalThis.fetch;
+    globalThis.fetch = Object.assign(
+      async () => {
+        if (failure === "network") throw new TypeError("Network connection failed");
+        return new Response(null, { status: Number(failure) });
+      },
+      { preconnect: original.preconnect },
+    );
+    const cache = new TemplateCache(root, "http://orchestrator");
+    try {
+      await expect(
+        cache.resolveLayers([{ id: "base-layer", checksum: "a".repeat(64) }]),
+      ).rejects.toMatchObject({ status: 503, code: "TEMPLATE_UNAVAILABLE" });
+    } finally {
+      globalThis.fetch = original;
+      await cache.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("cache corruption triggers a verified replacement", async () => {
   const root = await mkdtemp(join(tmpdir(), "endercloud-corrupt-cache-"));

@@ -7,6 +7,7 @@ import { createGunzip } from "node:zlib";
 import { extract } from "tar-stream";
 import { inspectTemplateDirectory } from "@endercloud/runtime/templates";
 import type { Logger } from "@endercloud/runtime/logger";
+import { ApplicationError } from "@endercloud/contracts/errors";
 
 export interface RemoteTemplateLayer {
   readonly id: string;
@@ -121,13 +122,22 @@ export class TemplateCache {
         this.options.timeoutMs ?? 300_000,
       );
       const created = { controller, consumers: 0, settled: false, promise: Promise.resolve("") };
-      created.promise = this.withSlot(signal, () => this.downloadLayer(layer, signal)).finally(
-        () => {
+      created.promise = this.withSlot(signal, () => this.downloadLayer(layer, signal))
+        .catch((error) => {
+          if (signal.aborted)
+            throw new ApplicationError(
+              "TEMPLATE_UNAVAILABLE",
+              503,
+              "Template acquisition was interrupted",
+              { cause: error },
+            );
+          throw error;
+        })
+        .finally(() => {
           clearTimeout(timer);
           created.settled = true;
           if (this.downloads.get(key) === created) this.downloads.delete(key);
-        },
-      );
+        });
       record = created;
       this.downloads.set(key, created);
     }
@@ -183,12 +193,25 @@ export class TemplateCache {
         this.orchestratorUrl,
       );
       url.searchParams.set("checksum", layer.checksum);
-      const response = await fetch(url, {
-        signal,
-        headers: this.options.token ? { authorization: `Bearer ${this.options.token}` } : undefined,
-      });
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          signal,
+          headers: this.options.token
+            ? { authorization: `Bearer ${this.options.token}` }
+            : undefined,
+        });
+      } catch (error) {
+        throw new ApplicationError("TEMPLATE_UNAVAILABLE", 503, "Template service is unreachable", {
+          cause: error,
+        });
+      }
       if (!response.ok || !response.body) {
-        throw new Error(`Template download failed with HTTP ${response.status}`);
+        throw new ApplicationError(
+          "TEMPLATE_UNAVAILABLE",
+          503,
+          `Template download failed with HTTP ${response.status}`,
+        );
       }
       await this.extractArchive(response.body, staging, signal);
       const inspected = await inspectTemplateDirectory(staging, {
@@ -212,6 +235,14 @@ export class TemplateCache {
       return destination;
     } catch (error) {
       await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+      if (signal.aborted || (error instanceof Error && error.name === "AbortError")) {
+        throw new ApplicationError(
+          "TEMPLATE_UNAVAILABLE",
+          503,
+          "Template acquisition was interrupted",
+          { cause: error },
+        );
+      }
       throw error;
     }
   }
