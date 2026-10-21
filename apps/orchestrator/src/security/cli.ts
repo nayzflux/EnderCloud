@@ -47,7 +47,7 @@ if (import.meta.main) {
       else {
         if (option !== "--stdout") throw new Error("Use --stdout and redirect to the worker's protected environment file");
         const values = await credentials.ensure("agent", identity, command === "agent:rotate");
-        console.log(`AGENT_HOST_ID=${identity}\nAGENT_ORCHESTRATOR_TOKEN=${values.apiToken}\nAGENT_CONTROL_TOKEN=${values.controlToken}`);
+        console.log(`AGENT_ID=${identity}\nAGENT_ORCHESTRATOR_TOKEN=${values.apiToken}\nAGENT_CONTROL_TOKEN=${values.controlToken}`);
       }
     } else throw new Error("Commands: admin:create <email>, admin:reset, agent:provision|rotate <host> --stdout, agent:revoke <host>");
   } finally {

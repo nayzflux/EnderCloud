@@ -11,11 +11,12 @@ export class ResourceScope {
   }
   private async dispose(timeoutMs: number): Promise<void> {
     const errors: unknown[] = [];
+    const deadline = Date.now() + timeoutMs;
     for (const resource of this.resources.reverse()) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([Promise.resolve().then(resource.close), new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error(`Timed out closing ${resource.name}`)), timeoutMs);
+          timer = setTimeout(() => reject(new Error(`Timed out closing ${resource.name}`)), Math.max(1, deadline - Date.now()));
         })]);
       } catch (error) { errors.push(error); }
       finally { if (timer) clearTimeout(timer); }

@@ -17,6 +17,7 @@ export class InstanceStartWorker {
   private claiming = false;
   private stopping = false;
   private readonly recoveries = new Map<string, string>();
+  private claimSettled: Promise<void> = Promise.resolve();
 
   public constructor(
     private readonly db: Database,
@@ -48,6 +49,8 @@ export class InstanceStartWorker {
       return;
     }
     this.claiming = true;
+    let finishClaim!: () => void;
+    this.claimSettled = new Promise(resolve => { finishClaim = resolve; });
     try {
       // A failed persistence attempt remains here until PostgreSQL accepts it.
       // Never turn a local command failure into an unhandled process rejection.
@@ -66,6 +69,11 @@ export class InstanceStartWorker {
         return;
       }
       const claimed = await this.claim(available);
+      if (!this.accepting) {
+        for (const command of claimed) await this.db.update(commands).set({ state: "PENDING", startedAt: null })
+          .where(and(eq(commands.id, command.commandId), eq(commands.state, "RUNNING")));
+        return;
+      }
       if (claimed.length > 0) {
         this.logger.debug("instance.worker.claimed", "Instance startup commands claimed", {
           commandCount: claimed.length,
@@ -78,6 +86,7 @@ export class InstanceStartWorker {
       }
     } finally {
       this.claiming = false;
+      finishClaim();
     }
   }
 
@@ -85,6 +94,9 @@ export class InstanceStartWorker {
     this.accepting = false;
     this.stopping = true;
     this.executor.cancelPending?.();
+    let claimTimeout: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([this.claimSettled, new Promise<void>(resolve => { claimTimeout = setTimeout(resolve, graceMs); })]);
+    if (claimTimeout) clearTimeout(claimTimeout);
     if (this.active.size > 0) {
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let timedOut = false;

@@ -2,11 +2,17 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { eq } from "drizzle-orm";
 import { createDatabase } from "../../src/db/client.ts";
+import { acquireLeadership } from "../../src/db/leadership.ts";
 import { migrateDatabase } from "../../src/db/migrate.ts";
 import { serviceCredentials, apikey } from "../../src/db/schema.ts";
 import { createAuth, authHttpHandler } from "../../src/security/auth.ts";
 import { createAuthorizer } from "../../src/security/authorize.ts";
 import { Credentials } from "../../src/security/credentials.ts";
+import { startOrchestrator } from "../../src/bootstrap.ts";
+import { loadConfig } from "../../src/config.ts";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createAdministrator, resetAdministrator } from "../../src/security/cli.ts";
 
 let container: StartedPostgreSqlContainer;
@@ -34,6 +40,24 @@ test("release schema can reopen; legacy database remains unchanged", async () =>
     expect((await legacy.sql`SELECT tablename FROM pg_tables WHERE schemaname='public'`).map(row => row.tablename)).toEqual(["sentinel"]);
   } finally { await legacy.sql.end(); }
 });
+
+test("database allows only one active orchestrator and releases ownership on shutdown", async () => {
+  const url = container.getConnectionUri();
+  const release = await acquireLeadership(url, () => {});
+  try { await expect(acquireLeadership(url, () => {})).rejects.toThrow("Another EnderCloud orchestrator"); }
+  finally { await release(); }
+  const next = await acquireLeadership(url, () => {}); await next();
+});
+
+test("failed startup releases database leadership and all previously opened resources", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "endercloud-bootstrap-"));
+  try {
+    const appConfig = loadConfig({ DATABASE_URL: container.getConnectionUri(), REDIS_URL: "redis://127.0.0.1:1",
+      ORCHESTRATOR_GROUPS_DIRECTORY: join(directory, "groups"), ORCHESTRATOR_TEMPLATES_DIRECTORY: join(directory, "templates"), ORCHESTRATOR_LOG_LEVEL: "error" });
+    await expect(startOrchestrator(appConfig, config)).rejects.toThrow();
+    const release = await acquireLeadership(container.getConnectionUri(), () => {}); await release();
+  } finally { await rm(directory, { recursive: true, force: true }); }
+}, 30_000);
 
 test("local administrator signs in, resets sessions and cannot register a second account", async () => {
   const auth = createAuth(database.db, config);

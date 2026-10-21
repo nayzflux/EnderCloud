@@ -1,8 +1,9 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { ApplicationError } from "@endercloud/contracts/errors";
 
-export class StaleOperationError extends Error {
-  public readonly status = 409;
+export class StaleOperationError extends ApplicationError {
+  public constructor(message: string) { super("STALE_OPERATION", 409, message); }
 }
 
 function canonical(value: unknown): string {
@@ -17,6 +18,7 @@ function canonical(value: unknown): string {
 export class OperationJournal {
   private readonly db: Database;
   private readonly queues = new Map<string, Promise<unknown>>();
+  private closing: Promise<void> | undefined;
 
   public constructor(path = ":memory:") {
     this.db = new Database(path, { create: true, strict: true });
@@ -24,6 +26,7 @@ export class OperationJournal {
   }
 
   public run<T>(instanceId: string, generation: number, specification: unknown, task: (assertCurrent: () => void) => Promise<T>): Promise<T> {
+    if (this.closing) return Promise.reject(new ApplicationError("SHUTTING_DOWN", 503, "Agent is shutting down"));
     if (!/^[A-Za-z0-9_-]+$/.test(instanceId) || !Number.isSafeInteger(generation) || generation < 1 || generation > 3) {
       return Promise.reject(new StaleOperationError("Invalid instance operation"));
     }
@@ -48,8 +51,7 @@ export class OperationJournal {
     return result;
   }
 
-  public async close(): Promise<void> {
-    await Promise.allSettled(this.queues.values());
-    this.db.close();
+  public close(): Promise<void> {
+    return this.closing ??= Promise.allSettled(this.queues.values()).then(() => { this.db.close(); });
   }
 }

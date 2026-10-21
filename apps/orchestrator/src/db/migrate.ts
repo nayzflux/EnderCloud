@@ -7,8 +7,9 @@ import { createDatabase } from "./client.ts";
 // Apply pending schema migrations before any service starts reading state.
 export async function migrateDatabase(databaseUrl: string, logger?: Logger): Promise<void> {
   const { db, sql } = createDatabase(databaseUrl);
-  const lock = await sql.reserve();
+  let lock: Awaited<ReturnType<typeof sql.reserve>> | undefined;
   try {
+    lock = await sql.reserve();
     await lock`SELECT pg_advisory_lock(18523417)`;
     const [marker] = await lock`SELECT to_regclass('public.release_metadata') AS name`;
     if (!marker?.name) {
@@ -22,8 +23,10 @@ export async function migrateDatabase(databaseUrl: string, logger?: Logger): Pro
       migrationsFolder: fileURLToPath(new URL("../../migrations", import.meta.url)),
     });
   } finally {
-    await lock`SELECT pg_advisory_unlock(18523417)`.catch(() => {});
-    lock.release();
+    if (lock) {
+      await lock`SELECT pg_advisory_unlock(18523417)`.catch(() => {});
+      lock.release();
+    }
     await sql.end({ timeout: 5 });
   }
   logger?.info("database.migrations.applied", "Database migrations applied");

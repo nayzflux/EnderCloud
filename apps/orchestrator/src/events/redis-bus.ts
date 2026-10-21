@@ -14,6 +14,8 @@ export class RedisEventBus {
       lazyConnect: true,
       maxRetriesPerRequest: 1,
       enableOfflineQueue: false,
+      connectTimeout: 3_000,
+      commandTimeout: 5_000,
       retryStrategy: (attempt) => Math.min(250 * 2 ** attempt, 5_000),
     });
     this.redis.on("error", (error) =>
@@ -26,7 +28,9 @@ export class RedisEventBus {
   }
 
   public async close(): Promise<void> {
-    await this.redis.quit();
+    try {
+      if (this.redis.status === "ready") await this.redis.quit();
+    } finally { this.redis.disconnect(); }
   }
 
   // Notify proxies when a backend becomes available or unavailable.

@@ -10,6 +10,7 @@ export function createDatabase(databaseUrl: string) {
     max: 10,
     idle_timeout: 20,
     connect_timeout: 10,
+    connection: { statement_timeout: 15_000, idle_in_transaction_session_timeout: 15_000 },
     onnotice: () => {},
   });
   const db = drizzle(sql, { schema });
