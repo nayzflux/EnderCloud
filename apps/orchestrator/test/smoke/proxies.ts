@@ -9,6 +9,7 @@ import { migrateDatabase } from "../../src/db/migrate.ts";
 import * as schema from "../../src/db/schema.ts";
 import { loadConfig } from "../../src/config.ts";
 import { RedisEventBus } from "../../src/events/redis-bus.ts";
+import { RegistryOutbox } from "../../src/events/registry-outbox.ts";
 import { LocalDockerExecutor } from "../../../agent/src/docker-executor.ts";
 import { Logger } from "@endercloud/runtime/logger";
 import { DashboardService } from "../../src/modules/dashboard/queries.ts";
@@ -77,6 +78,7 @@ try {
   await migrateDatabase(postgres.getConnectionUri());
   await bus.connect();
   const db = database.db;
+  const outbox = new RegistryOutbox(db, bus);
   const security = {
     secret: "live-smoke-only-secret-at-least-32-bytes",
     encryptionKey: Buffer.alloc(32, 4),
@@ -259,6 +261,7 @@ try {
     }
   }
   await waitFor("two ready proxies and a Paper hub", async () => {
+    await outbox.tick();
     const failed = await db
       .select()
       .from(schema.serverInstances)

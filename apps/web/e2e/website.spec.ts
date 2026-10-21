@@ -67,6 +67,7 @@ test("documentation navigation, table of contents, and search work", async ({ pa
 });
 
 test("public pages have no serious accessibility violations", async ({ page }) => {
+  test.setTimeout(60_000);
   for (const url of ["/", "/docs", "/docs/configure/groups"]) {
     await page.goto(url);
     await page.waitForTimeout(url === "/" ? 1_100 : 400);

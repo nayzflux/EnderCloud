@@ -69,6 +69,11 @@ Do not regenerate dependency locks or verification hashes during normal validati
 the Linux installer. On Windows it runs Bash installer checks inside `docker:29-cli` and Java
 inside `eclipse-temurin:25-jdk` when no local JDK is available.
 
+`bun run test:images` exercises the production images against disposable PostgreSQL and Redis:
+fresh-schema initialization, administrator creation, protected dashboard routes, persisted sessions
+after an orchestrator restart, non-root frontend processes and canonical documentation rendering.
+Run it after building the images, or use the complete release command.
+
 `bun run test:two-agents` uses the freshly built agent image, real agents, authenticated HTTP,
 PostgreSQL and Redis on a disposable Docker network. It materializes templates and starts one
 lightweight runtime per host, restarts the control plane and an agent, checks durable deletion
