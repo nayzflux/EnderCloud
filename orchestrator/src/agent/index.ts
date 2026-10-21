@@ -36,7 +36,11 @@ const templates = new TemplateCache(
   config.templateCacheRoot,
   config.orchestratorUrl,
   logger.child({ component: "template-cache" }),
+  { timeoutMs: config.templateDownloadTimeoutMs, idleTimeoutMs: config.templateIdleTimeoutMs,
+    maxExpandedBytes: config.templateMaxExpandedBytes, maxEntries: config.templateMaxEntries,
+    concurrency: config.templateDownloadConcurrency },
 );
+await templates.initialize();
 const app = createAgentApp(config, executor, templates, logger.child({ component: "http-api" }));
 app.listen({ port: config.port, hostname: "0.0.0.0" });
 
@@ -117,6 +121,7 @@ logger.info("agent.ready", "EnderCloud execution agent started", {
 async function shutdown(signal: string): Promise<void> {
   clearInterval(heartbeatTimer);
   logger.info("agent.shutdown.requested", "Agent shutdown requested", { signal });
+  await templates.close();
   await app.stop();
   await executor.close();
   logger.info("agent.shutdown.completed", "Agent shutdown completed", { signal });

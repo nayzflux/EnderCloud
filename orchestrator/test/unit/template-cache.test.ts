@@ -96,3 +96,42 @@ test("template cache rejects a corrupted archive", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a stalled body expires and a later request for the same layer can succeed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "endercloud-stall-"));
+  const source = join(root, "source");
+  await mkdir(source);
+  await writeFile(join(source, "variant.yml"), "id: base-layer\n");
+  const checksum = (await inspectTemplateDirectory(source)).checksum;
+  const bytes = await archive([{ name: "variant.yml", content: "id: base-layer\n" }]);
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => ++calls === 1
+    ? new Response(new ReadableStream<Uint8Array>({ start() {} })) : new Response(bytes)) as unknown as typeof fetch;
+  const cache = new TemplateCache(join(root, "cache"), "http://orchestrator", undefined, { timeoutMs: 1_000, idleTimeoutMs: 50 });
+  try {
+    await expect(cache.resolveLayers([{ id: "base-layer", checksum }])).rejects.toBeInstanceOf(Error);
+    expect(await cache.resolveLayers([{ id: "base-layer", checksum }])).toHaveLength(1);
+    expect(calls).toBe(2);
+  } finally { globalThis.fetch = original; await cache.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("cache corruption triggers a verified replacement", async () => {
+  const root = await mkdtemp(join(tmpdir(), "endercloud-corrupt-cache-"));
+  const source = join(root, "source");
+  await mkdir(source);
+  await writeFile(join(source, "variant.yml"), "id: base-layer\n");
+  const checksum = (await inspectTemplateDirectory(source)).checksum;
+  const bytes = await archive([{ name: "variant.yml", content: "id: base-layer\n" }]);
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => { calls += 1; return new Response(bytes); }) as unknown as typeof fetch;
+  const cache = new TemplateCache(join(root, "cache"), "http://orchestrator");
+  try {
+    const [layer] = await cache.resolveLayers([{ id: "base-layer", checksum }]);
+    await writeFile(join(layer!.templatePath, "variant.yml"), "corrupted");
+    await cache.resolveLayers([{ id: "base-layer", checksum }]);
+    expect(calls).toBe(2);
+    expect(await readFile(join(layer!.templatePath, "variant.yml"), "utf8")).toBe("id: base-layer\n");
+  } finally { globalThis.fetch = original; await cache.close(); await rm(root, { recursive: true, force: true }); }
+});

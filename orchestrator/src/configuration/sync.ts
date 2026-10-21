@@ -1,3 +1,4 @@
+import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
@@ -40,7 +41,7 @@ function string(value: unknown, context: string): string {
 }
 
 function integer(value: unknown, context: string, minimum = 0): number {
-  if (!Number.isInteger(value) || (value as number) < minimum) {
+  if (!Number.isSafeInteger(value) || (value as number) < minimum) {
     throw new Error(`${context} must be an integer >= ${minimum}`);
   }
   return value as number;
@@ -69,7 +70,9 @@ export function parseDuration(value: unknown, context: string): number {
   const amount = Number.parseInt(match[1]!, 10);
   if (amount <= 0) throw new Error(`${context} must be greater than zero`);
   const multipliers = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 } as const;
-  return amount * multipliers[match[2] as keyof typeof multipliers];
+  const milliseconds = amount * multipliers[match[2] as keyof typeof multipliers];
+  if (!Number.isSafeInteger(milliseconds) || milliseconds > 2_147_483_647) throw new Error(`${context} exceeds the supported duration`);
+  return milliseconds;
 }
 
 function timeoutValue(
@@ -381,7 +384,7 @@ export interface InspectedTemplate {
 
 // Hash a layer and collect bounded metadata used by validation and the dashboard.
 export async function inspectTemplateDirectory(root: string): Promise<InspectedTemplate> {
-  const hasher = createHash("sha256");
+  const hasher = createHash("sha256").update("endercloud-template-v2\0");
   const manifest = new Map<string, "directory" | "file">();
   const roots = new Set<string>();
   let fileCount = 0;
@@ -389,7 +392,7 @@ export async function inspectTemplateDirectory(root: string): Promise<InspectedT
   async function visit(directory: string): Promise<void> {
     const entries = await readdir(directory, { withFileTypes: true });
     // Filesystem enumeration order is unstable; sorting makes the checksum reproducible.
-    entries.sort((a, b) => a.name.localeCompare(b.name));
+    entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     // Hash both relative paths and bytes so renames and content changes alter the revision.
     for (const entry of entries) {
       const path = join(directory, entry.name);
@@ -398,13 +401,15 @@ export async function inspectTemplateDirectory(root: string): Promise<InspectedT
         throw new Error(`Template symlinks are forbidden: ${path}`);
       }
       if (entry.isDirectory()) {
+        hasher.update(`D${Buffer.byteLength(relativePath)}:${relativePath};`);
         manifest.set(relativePath, "directory");
         roots.add(relativePath.split("/")[0]!);
         await visit(path);
       }
       else if (entry.isFile()) {
-        hasher.update(relativePath);
-        hasher.update(await readFile(path));
+        const metadata = await stat(path);
+        hasher.update(`F${Buffer.byteLength(relativePath)}:${relativePath}:${metadata.size}:`);
+        for await (const chunk of createReadStream(path)) hasher.update(chunk);
         if (relativePath !== "variant.yml") {
           manifest.set(relativePath, "file");
           roots.add(relativePath.split("/")[0]!);
@@ -466,6 +471,7 @@ export async function loadConfiguration(
       parseGroup(parse(await readFile(path, "utf8")), path)
     ),
   );
+  if (new Set(groups.map(group => group.id)).size !== groups.length) throw new Error("Duplicate group ids");
   const layers: TemplateLayerSpec[] = [];
   const manifests = new Map<string, ReadonlyMap<string, "directory" | "file">>();
   // Each template directory is optional until it contains a valid variant.yml descriptor.

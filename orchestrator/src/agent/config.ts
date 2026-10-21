@@ -33,6 +33,11 @@ export interface AgentConfig extends LocalDockerConfig {
   readonly controlUrl: string;
   readonly orchestratorUrl: string;
   readonly templateCacheRoot: string;
+  readonly templateDownloadTimeoutMs: number;
+  readonly templateIdleTimeoutMs: number;
+  readonly templateMaxExpandedBytes: number;
+  readonly templateMaxEntries: number;
+  readonly templateDownloadConcurrency: number;
   readonly allocatableCpu: number;
   readonly allocatableMemoryBytes: number;
   readonly heartbeatIntervalMs: number;
@@ -79,6 +84,11 @@ export function loadAgentConfig(environment: Environment = process.env): AgentCo
     runtimeRoot,
     runtimeHostRoot: requiredString(environment, "AGENT_RUNTIME_HOST_DIRECTORY"),
     templateCacheRoot: resolve(optionalString(environment, "AGENT_TEMPLATE_CACHE_DIRECTORY", "/data/template-cache")),
+    templateDownloadTimeoutMs: duration(environment, "AGENT_TEMPLATE_DOWNLOAD_TIMEOUT", "5m"),
+    templateIdleTimeoutMs: duration(environment, "AGENT_TEMPLATE_IDLE_TIMEOUT", "30s"),
+    templateMaxExpandedBytes: integer(environment, "AGENT_TEMPLATE_MAX_EXPANDED_BYTES", 8 * 1024 ** 3),
+    templateMaxEntries: integer(environment, "AGENT_TEMPLATE_MAX_ENTRIES", 100_000),
+    templateDownloadConcurrency: integer(environment, "AGENT_TEMPLATE_DOWNLOAD_CONCURRENCY", 4, 1, 32),
     portStart,
     portEnd,
     logLevel: logLevel(environment, "AGENT_LOG_LEVEL"),
