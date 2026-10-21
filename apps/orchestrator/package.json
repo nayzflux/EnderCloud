@@ -16,7 +16,8 @@
     "test:proxies:live": "bun test/smoke/proxies.ts",
     "test:coverage": "bun test --coverage",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "bun src/db/migrate.ts"
+    "db:migrate": "bun src/db/migrate.ts",
+    "security": "bun src/security/cli.ts"
   },
   "dependencies": {
     "@better-auth/api-key": "1.7.12",

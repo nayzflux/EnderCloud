@@ -89,6 +89,7 @@ try {
   const proxies = new ProxyService(db, instances);
   const config = loadConfig({ DATABASE_URL: postgres.getConnectionUri() });
   app = createApp({
+    authorize: () => {},
     instances, proxies, hosts, hubs, queues: new QueueService(db),
     dashboard: new DashboardService(db), monitoring,
     templates: new TemplateArchiveService(db), incidents: new IncidentController(db, config, logger),

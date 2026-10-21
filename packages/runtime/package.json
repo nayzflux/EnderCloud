@@ -7,7 +7,9 @@
     "./logger": "./src/logger.ts",
     "./env": "./src/env.ts",
     "./id": "./src/id.ts",
-    "./templates": "./src/template-files.ts"
+    "./templates": "./src/template-files.ts",
+    "./bearer": "./src/bearer.ts",
+    "./lifecycle": "./src/lifecycle.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

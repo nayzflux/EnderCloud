@@ -62,6 +62,7 @@ function testApp(
     getSession: async () => null,
   } as unknown as DashboardService;
   return createApp({
+    authorize: () => {},
     proxies,
     dashboard,
     monitoring,
@@ -76,6 +77,13 @@ function testApp(
     isReady: () => true,
   });
 }
+
+test("control API denies anonymous access by default", async () => {
+  const app = createApp({ logger: new Logger("error", { sink: () => {} }), isReady: () => true } as unknown as import("../../src/api/app.ts").ApiDependencies);
+  expect((await app.handle(new Request("http://endercloud/health/live"))).status).toBe(200);
+  expect((await app.handle(new Request("http://endercloud/api/v1/proxy/servers"))).status).toBe(401);
+  expect((await app.handle(new Request("http://endercloud/openapi"))).status).toBe(401);
+});
 
 test("queue cancellation returns a normal response when transfer already started", async () => {
   const leaveParty = mock(async () => false);

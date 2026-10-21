@@ -13,6 +13,7 @@ import type { Logger } from "@endercloud/runtime/logger";
 import type { HostService } from "../modules/hosts/service.ts";
 
 export interface AgentExecutorConfig {
+  readonly getControlToken?: (hostId: string) => Promise<string>;
   readonly operationTimeoutMs: number;
   readonly probeTimeoutMs: number;
 }
@@ -130,6 +131,7 @@ export class AgentExecutor implements Executor {
     const context = this.logger?.currentContext() ?? {};
     const requestId = typeof context.requestId === "string" ? context.requestId : nanoid();
     const headers = new Headers(init?.headers);
+    if (this.config.getControlToken) headers.set("authorization", `Bearer ${await this.config.getControlToken(hostId)}`);
     headers.set("x-request-id", requestId);
     if (typeof context.commandId === "string") headers.set("x-command-id", context.commandId);
     try {

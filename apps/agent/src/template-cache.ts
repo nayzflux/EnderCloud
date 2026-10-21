@@ -18,6 +18,7 @@ export interface CachedTemplateLayer extends RemoteTemplateLayer {
 }
 
 export interface TemplateCacheOptions {
+  readonly token?: string;
   readonly timeoutMs?: number;
   readonly idleTimeoutMs?: number;
   readonly maxExpandedBytes?: number;
@@ -112,7 +113,7 @@ export class TemplateCache {
         this.orchestratorUrl,
       );
       url.searchParams.set("checksum", layer.checksum);
-      const response = await fetch(url, { signal });
+      const response = await fetch(url, { signal, headers: this.options.token ? { authorization: `Bearer ${this.options.token}` } : undefined });
       if (!response.ok || !response.body) {
         throw new Error(`Template download failed with HTTP ${response.status}`);
       }

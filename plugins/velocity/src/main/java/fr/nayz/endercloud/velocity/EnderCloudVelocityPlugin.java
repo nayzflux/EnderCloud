@@ -96,7 +96,7 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
                 environment("ENDERCLOUD_ORCHESTRATOR_URL", "http://localhost:8080")
         );
         String redisUrl = environment("ENDERCLOUD_REDIS_URL", "redis://localhost:6379");
-        orchestrator = new EnderCloudClient(orchestratorUrl);
+        orchestrator = new EnderCloudClient(orchestratorUrl, System.getenv("ENDERCLOUD_API_TOKEN"));
         redis = RedisClient.create(redisUrl);
         subscription = redis.connectPubSub();
         subscription.addListener(new RedisPubSubAdapter<>() {

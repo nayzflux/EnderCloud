@@ -1,4 +1,6 @@
 import { openapi } from "@elysiajs/openapi";
+import { ApplicationError, denyUnauthorized, type RequestAuthorizer } from "@endercloud/contracts/errors";
+import { paperEventSchema } from "@endercloud/contracts/schemas";
 import { nanoid } from "@endercloud/runtime/id";
 import type { Logger } from "@endercloud/runtime/logger";
 import { Elysia,t } from "elysia";
@@ -21,43 +23,9 @@ const tpsSnapshot = t.Object({
   fiveMinutes: t.Number({ minimum: 0, maximum: 100 }),
   fifteenMinutes: t.Number({ minimum: 0, maximum: 100 }),
 });
-const paperEventSchema = t.Union([
-  t.Object({ type: t.Literal("SERVER_READY"), endpoint: t.Optional(t.String()) }),
-  t.Object({
-    type: t.Literal("PLAYER_JOINED"),
-    playerId: playerUuid,
-    sessionId: t.Optional(internalId),
-  }),
-  t.Object({
-    type: t.Literal("PLAYER_LEFT"),
-    playerId: playerUuid,
-    sessionId: t.Optional(internalId),
-  }),
-  t.Object({
-    type: t.Literal("PLAYER_ELIMINATED"),
-    playerId: playerUuid,
-    sessionId: internalId,
-  }),
-  t.Object({
-    type: t.Literal("HEARTBEAT"),
-    playerIds: t.Array(playerUuid),
-    tps: t.Optional(tpsSnapshot),
-  }),
-  t.Object({ type: t.Literal("GAME_STARTING"), sessionId: internalId }),
-  t.Object({ type: t.Literal("GAME_STARTED"), sessionId: internalId }),
-  t.Object({
-    type: t.Literal("GAME_CANCELLED"),
-    sessionId: internalId,
-    reason: t.Optional(t.String({ maxLength: 512 })),
-  }),
-  t.Object({
-    type: t.Literal("GAME_FINISHED"),
-    sessionId: internalId,
-    results: t.Optional(t.Unknown()),
-  }),
-]);
-
 export interface ApiDependencies {
+  readonly authorize?: RequestAuthorizer;
+  readonly authentication?: (request: Request) => Promise<Response>;
   readonly proxies: ProxyService;
   readonly queues: QueueService;
   readonly instances: InstanceController;
@@ -100,13 +68,16 @@ export function createApp(dependencies: ApiDependencies) {
         },
       }),
     )
-    .onRequest(({ request }) => {
+    .onRequest(async ({ request }) => {
       const context = {
         requestId: request.headers.get("x-request-id") ?? nanoid(),
         startedAt: performance.now(),
       };
       requestContexts.set(request, context);
       dependencies.logger.enterContext({ requestId: context.requestId });
+      const path = new URL(request.url).pathname;
+      if (path.startsWith("/api/auth/")) return dependencies.authentication?.(request) ?? new Response(null, { status: 404 });
+      if (!path.startsWith("/health/")) await (dependencies.authorize ?? denyUnauthorized)(request);
     })
     .onAfterHandle(({ request, set }) => {
       set.headers["x-request-id"] = contextFor(request).requestId;
@@ -117,13 +88,17 @@ export function createApp(dependencies: ApiDependencies) {
       context.requestError = error;
       const message = error instanceof Error ? error.message : String(error);
       set.headers["x-request-id"] = requestId;
-      if (code === "VALIDATION") {
+      if (code === "NOT_FOUND") {
+        set.status = 404;
+        return { error: "NOT_FOUND", message: "Not found", requestId };
+      }
+      if (code === "VALIDATION" || code === "PARSE") {
         set.status = 400;
         return { error: "VALIDATION_ERROR", message, requestId };
       }
-      if (/unavailable|larger|already|distinct/i.test(message)) {
-        set.status = 409;
-        return { error: "CONFLICT", message, requestId };
+      if (error instanceof ApplicationError) {
+        set.status = error.status;
+        return { error: error.code, message, requestId };
       }
       set.status = 500;
       return { error: "INTERNAL_ERROR", message: "Internal server error", requestId };

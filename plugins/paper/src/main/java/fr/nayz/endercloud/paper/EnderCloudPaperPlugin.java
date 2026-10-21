@@ -52,7 +52,7 @@ public final class EnderCloudPaperPlugin extends JavaPlugin
             return;
         }
 
-        orchestrator = new EnderCloudClient(URI.create(orchestratorUrl));
+        orchestrator = new EnderCloudClient(URI.create(orchestratorUrl), System.getenv("ENDERCLOUD_API_TOKEN"));
         getServer().getPluginManager().registerEvents(this, this);
         getServer().getServicesManager().register(
                 EnderCloudPaperApi.class,

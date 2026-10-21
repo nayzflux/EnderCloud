@@ -16,6 +16,21 @@ sessionPlayerStates,
 sessionStates,
 } from "@endercloud/contracts/domain";
 import { sql } from "drizzle-orm";
+export * from "../security/schema.ts";
+
+export const serviceCredentials = pgTable("service_credentials", {
+  id: text("id").primaryKey(),
+  kind: text("kind").notNull(),
+  principalId: text("principal_id").notNull(),
+  authKeyId: text("auth_key_id").notNull(),
+  encryptedSecret: text("encrypted_secret").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, table => [uniqueIndex("service_credentials_identity_unique").on(table.kind, table.principalId)]);
+
+export const releaseMetadata = pgTable("release_metadata", {
+  id: integer("id").primaryKey().default(1),
+  schemaVersion: integer("schema_version").notNull().default(1),
+});
 import {
 bigint,
 boolean,
@@ -516,13 +531,6 @@ export const registryOutbox = pgTable("registry_outbox", {
   publishedAt: timestamp("published_at", { withTimezone: true }),
 }, table => [index("registry_outbox_pending_idx").on(table.nextAttemptAt).where(sql`${table.publishedAt} IS NULL`)]);
 
-export const nodes = pgTable("nodes", {
-  id: text("id").primaryKey(),
-  kind: text("kind").notNull().default("LOCAL_DOCKER"),
-  enabled: boolean("enabled").notNull().default(true),
-  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
-  metadata: jsonb("metadata"),
-});
 
 export const events = pgTable(
   "events",
@@ -615,7 +623,6 @@ export const schema = {
   transferCommands,
   transferCommandPlayers,
   commands,
-  nodes,
   events,
   proxyHeartbeats,
   serverTpsMetrics,

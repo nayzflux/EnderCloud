@@ -28,6 +28,10 @@ import { ProxyService } from "./modules/proxies/service.ts";
 import { HubRouter } from "./modules/routing/hubs.ts";
 import { SessionController } from "./modules/sessions/controller.ts";
 import { TransferService } from "./modules/transfers/service.ts";
+import { createAuth, authHttpHandler } from "./security/auth.ts";
+import { loadSecurityConfig } from "./security/config.ts";
+import { Credentials } from "./security/credentials.ts";
+import { createAuthorizer } from "./security/authorize.ts";
 import { Scheduler } from "./scheduler.ts";
 
 const bootstrapLogger = new Logger("error", {
@@ -46,6 +50,7 @@ process.once("unhandledRejection", (error) => {
 
 async function main(): Promise<void> {
 const config = loadConfig();
+const security = loadSecurityConfig();
 const logger = new Logger(config.logLevel, {
   service: "orchestrator",
   version: "0.1.0",
@@ -76,12 +81,15 @@ await synchronizeConfiguration(
   config.templatesRoot,
   logger.child({ component: "configuration" }),
 );
+const auth = createAuth(db, security);
+const credentials = new Credentials(db, auth, security);
 const bus = new RedisEventBus(config.redisUrl, logger.child({ component: "redis-bus" }));
 await bus.connect();
 const outbox = new RegistryOutbox(db, bus);
 const hosts = new HostService(db, logger.child({ component: "host-service" }));
 const templates = new TemplateArchiveService(db);
 const executor = new AgentExecutor(hosts, {
+  getControlToken: id => credentials.getControlToken(id),
   operationTimeoutMs: config.agentOperationTimeoutMs,
   probeTimeoutMs: config.agentProbeTimeoutMs,
 }, logger.child({ component: "agent-executor" }));
@@ -103,6 +111,7 @@ const instances = new InstanceController(
   hosts,
   startup,
   config.paperHealthLeaseMs,
+  credentials,
 );
 const queues = new QueueService(db);
 const dashboard = new DashboardService(db, config.instanceStartRetryLimit);
@@ -129,6 +138,8 @@ const startWorker = new InstanceStartWorker(
 );
 
 const app = createApp({
+  authorize: createAuthorizer(db, auth),
+  authentication: authHttpHandler(auth),
   proxies: new ProxyService(db, instances),
   queues,
   instances,

@@ -98,6 +98,7 @@ export class InstanceController {
     private readonly hosts?: HostService,
     private readonly startPolicy?: VariantStartController,
     private readonly paperHealthLeaseMs = 30_000,
+    private readonly credentials?: import("../../security/credentials.ts").Credentials,
   ) {
     this.paperEvents = new PaperEvents(db, transfers, hubs, logger, monitoring, paperHealthLeaseMs, {
       markReady: (id, endpoint) => this.markReady(id, endpoint),
@@ -463,7 +464,7 @@ export class InstanceController {
         ...(row.session_id ? { sessionId: row.session_id } : {}),
         templateLayers: templateLayersForVariant,
         runtime: frozen?.runtime ?? row.runtime_spec,
-        environment: {},
+        environment: this.credentials ? { ENDERCLOUD_API_TOKEN: (await this.credentials.ensure(frozen?.instanceType === "proxy" ? "proxy" : "paper", instanceId)).apiToken } : {},
       });
       await this.db.transaction(async (tx) => {
         await tx

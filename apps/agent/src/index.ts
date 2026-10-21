@@ -1,3 +1,4 @@
+import { bearerAuthorizer } from "@endercloud/runtime/bearer";
 import { join } from "node:path";
 import { mkdir } from "node:fs/promises";
 import { Logger } from "@endercloud/runtime/logger";
@@ -22,6 +23,9 @@ process.once("unhandledRejection", (error) => {
 
 async function main(): Promise<void> {
 const config = loadAgentConfig();
+const control = bearerAuthorizer(process.env.AGENT_CONTROL_TOKEN ?? "");
+const token = process.env.AGENT_ORCHESTRATOR_TOKEN;
+if (!token || token.length < 32) throw new Error("AGENT_ORCHESTRATOR_TOKEN is required");
 const logger = new Logger(config.logLevel, {
   service: "agent",
   version: config.agentVersion,
@@ -36,12 +40,12 @@ const templates = new TemplateCache(
   config.templateCacheRoot,
   config.orchestratorUrl,
   logger.child({ component: "template-cache" }),
-  { timeoutMs: config.templateDownloadTimeoutMs, idleTimeoutMs: config.templateIdleTimeoutMs,
+  { token, timeoutMs: config.templateDownloadTimeoutMs, idleTimeoutMs: config.templateIdleTimeoutMs,
     maxExpandedBytes: config.templateMaxExpandedBytes, maxEntries: config.templateMaxEntries,
     concurrency: config.templateDownloadConcurrency },
 );
 await templates.initialize();
-const app = createAgentApp(config, executor, templates, logger.child({ component: "http-api" }));
+const app = createAgentApp(config, executor, templates, logger.child({ component: "http-api" }), control);
 app.listen({ port: config.port, hostname: "0.0.0.0" });
 
 let heartbeatRunning = false;
@@ -56,7 +60,7 @@ async function heartbeat(): Promise<void> {
       new URL(`/api/v1/hosts/${encodeURIComponent(config.hostId)}/heartbeat`, config.orchestratorUrl),
       {
         method: "PUT",
-        headers: { "content-type": "application/json", "x-request-id": requestId },
+        headers: { "content-type": "application/json", "x-request-id": requestId, authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(Math.min(3_000, config.heartbeatIntervalMs)),
         body: JSON.stringify({
           controlUrl: config.controlUrl,

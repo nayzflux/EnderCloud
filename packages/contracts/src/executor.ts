@@ -1,12 +1,12 @@
 import type { InstanceType, VariantRuntimeSpec } from "@endercloud/contracts/domain";
 
 export interface InstanceSpec {
-  readonly instanceType?: InstanceType;
+  readonly instanceType?: InstanceType | undefined;
   readonly hostId: string;
   readonly instanceId: string;
   readonly groupId: string;
   readonly variantId: string;
-  readonly sessionId?: string;
+  readonly sessionId?: string | undefined;
   readonly templateLayers: readonly {
     readonly id: string;
     readonly checksum: string;

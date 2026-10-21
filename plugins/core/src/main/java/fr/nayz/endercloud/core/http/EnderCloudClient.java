@@ -33,14 +33,17 @@ public final class EnderCloudClient implements AutoCloseable {
     private final URI baseUri;
     private final HttpClient client;
     private final Duration timeout;
+    private final String token;
 
-    public EnderCloudClient(URI baseUri) {
-        this(baseUri, Duration.ofSeconds(10));
+    public EnderCloudClient(URI baseUri, String token) {
+        this(baseUri, Duration.ofSeconds(10), token);
     }
 
-    public EnderCloudClient(URI baseUri, Duration timeout) {
+    public EnderCloudClient(URI baseUri, Duration timeout, String token) {
+        if (token == null || token.length() < 32) throw new IllegalArgumentException("ENDERCLOUD_API_TOKEN is required");
         this.baseUri = baseUri;
         this.timeout = timeout;
+        this.token = token;
         this.client = HttpClient.newBuilder()
                 .connectTimeout(timeout)
                 .version(HttpClient.Version.HTTP_1_1)
@@ -155,6 +158,8 @@ public final class EnderCloudClient implements AutoCloseable {
         HttpRequest request = HttpRequest.newBuilder(baseUri.resolve(path))
                 .timeout(timeout)
                 .header("Accept", "application/json")
+                .header("Authorization", "Bearer " + token)
+                .header("X-Request-Id", UUID.randomUUID().toString())
                 .header("Content-Type", "application/json")
                 .method(method, publisher)
                 .build();

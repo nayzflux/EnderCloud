@@ -114,7 +114,7 @@ export interface ServerGroupConfig {
 }
 
 export interface VariantRuntimeSpec {
-  readonly dataDirectory?: string;
+  readonly dataDirectory?: string | undefined;
   readonly image: string;
   readonly memoryBytes: number;
   readonly cpu: number;
@@ -222,17 +222,4 @@ export interface ProxySnapshot extends Omit<ProxyControl, "controlLeaseMs"> {
   readonly ready: boolean;
 }
 
-export type PaperEvent =
-  | { readonly type: "SERVER_READY"; readonly endpoint?: string }
-  | { readonly type: "PLAYER_JOINED"; readonly playerId: string; readonly sessionId?: string }
-  | { readonly type: "PLAYER_LEFT"; readonly playerId: string; readonly sessionId?: string }
-  | { readonly type: "PLAYER_ELIMINATED"; readonly playerId: string; readonly sessionId: string }
-  | {
-      readonly type: "HEARTBEAT";
-      readonly playerIds: readonly string[];
-      readonly tps?: TpsSnapshot;
-    }
-  | { readonly type: "GAME_STARTING"; readonly sessionId: string }
-  | { readonly type: "GAME_STARTED"; readonly sessionId: string }
-  | { readonly type: "GAME_CANCELLED"; readonly sessionId: string; readonly reason?: string }
-  | { readonly type: "GAME_FINISHED"; readonly sessionId: string; readonly results?: unknown };
+export type PaperEvent = import("zod").infer<typeof import("./schemas.ts").paperEventSchema>;

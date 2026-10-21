@@ -1,4 +1,6 @@
 import { Elysia, t } from "elysia";
+import { ApplicationError, denyUnauthorized, type RequestAuthorizer } from "@endercloud/contracts/errors";
+import { instanceCreateSchema } from "@endercloud/contracts/schemas";
 import type { AgentConfig } from "./config.ts";
 import type { TemplateCache } from "./template-cache.ts";
 import type { LocalDockerExecutor } from "./docker-executor.ts";
@@ -7,28 +9,6 @@ import { nanoid } from "@endercloud/runtime/id";
 
 const internalId = t.String({ pattern: "^[A-Za-z0-9]{16}$" });
 const groupId = t.String({ pattern: "^[a-z0-9][a-z0-9-]{1,62}$" });
-const layerSchema = t.Object({
-  id: groupId,
-  checksum: t.String({ pattern: "^[a-f0-9]{64}$" }),
-});
-const instanceSchema = t.Object({
-  instanceType: t.Optional(t.Union([t.Literal("paper"), t.Literal("proxy")])),
-  hostId: groupId,
-  instanceId: internalId,
-  groupId,
-  variantId: groupId,
-  sessionId: t.Optional(internalId),
-  templateLayers: t.Array(layerSchema, { minItems: 1 }),
-  runtime: t.Object({
-    dataDirectory: t.Optional(t.String({ pattern: "^/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+$" })),
-    image: t.String({ minLength: 1 }),
-    memoryBytes: t.Number({ minimum: 1 }),
-    cpu: t.Number({ exclusiveMinimum: 0 }),
-    environment: t.Record(t.String(), t.String()),
-  }),
-  environment: t.Record(t.String(), t.String()),
-});
-
 interface RequestContext {
   readonly requestId: string;
   readonly commandId: string | undefined;
@@ -41,6 +21,7 @@ export function createAgentApp(
   executor: LocalDockerExecutor,
   templates: TemplateCache,
   logger?: Logger,
+  authorize: RequestAuthorizer = denyUnauthorized,
 ) {
   const requestContexts = new WeakMap<Request, RequestContext>();
   const contextFor = (request: Request): RequestContext => {
@@ -51,7 +32,7 @@ export function createAgentApp(
     return context;
   };
   return new Elysia({ name: "endercloud-agent" })
-    .onRequest(({ request }) => {
+    .onRequest(async ({ request }) => {
       const context = {
         requestId: request.headers.get("x-request-id") ?? nanoid(),
         commandId: request.headers.get("x-command-id") ?? undefined,
@@ -62,18 +43,19 @@ export function createAgentApp(
         requestId: context.requestId,
         commandId: context.commandId,
       });
+      if (!new URL(request.url).pathname.startsWith("/health/")) await authorize(request);
     })
     .onAfterHandle(({ request, set }) => {
       set.headers["x-request-id"] = contextFor(request).requestId;
     })
     .onError(({ request, error, code, set }) => {
       const message = error instanceof Error ? error.message : String(error);
-      set.status = code === "VALIDATION" ? 400 : 500;
+      set.status = error instanceof ApplicationError ? error.status : code === "NOT_FOUND" ? 404 : code === "VALIDATION" || code === "PARSE" ? 400 : 500;
       const context = contextFor(request);
       const requestId = context.requestId;
       context.requestError = error;
       set.headers["x-request-id"] = requestId;
-      return { error: code === "VALIDATION" ? "VALIDATION_ERROR" : "AGENT_ERROR", message, requestId };
+      return { error: error instanceof ApplicationError ? error.code : code, message: set.status === 500 ? "Internal agent error" : message, requestId };
     })
     .onAfterResponse(({ request, route, set }) => {
       const context = contextFor(request);
@@ -137,15 +119,15 @@ export function createAgentApp(
         "/instances/:instanceId",
         async ({ params, body }) => {
           if (params.instanceId !== body.instanceId) {
-            throw new Error("Path and body instance ids differ");
+            throw new ApplicationError("INVALID_REQUEST", 400, "Path and body instance ids differ");
           }
           if (body.hostId !== config.hostId) {
-            throw new Error(`Agent ${config.hostId} cannot create for host ${body.hostId}`);
+            throw new ApplicationError("FORBIDDEN", 403, "Host identity does not match this agent");
           }
           const templateLayers = await templates.resolveLayers(body.templateLayers);
           return executor.createInstance({ ...body, templateLayers });
         },
-        { params: t.Object({ instanceId: internalId }), body: instanceSchema },
+        { params: t.Object({ instanceId: internalId }), body: instanceCreateSchema },
       )
       .post(
         "/instances/:instanceId/stop",

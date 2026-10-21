@@ -4,9 +4,21 @@ import type { AgentConfig } from "../../src/config.ts";
 import type { TemplateCache } from "../../src/template-cache.ts";
 import type { LocalDockerExecutor } from "../../src/docker-executor.ts";
 import { Logger } from "@endercloud/runtime/logger";
+import { bearerAuthorizer } from "@endercloud/runtime/bearer";
 
 const instanceId = "agentinstance001";
 const checksum = "a".repeat(64);
+
+test("agent control is denied by default and accepts only its own control token", async () => {
+  const executor = { listManagedInstances: async () => [] } as unknown as LocalDockerExecutor;
+  const config = { hostId: "worker-one" } as AgentConfig;
+  const denied = createAgentApp(config, executor, {} as TemplateCache);
+  expect((await denied.handle(new Request("http://agent/api/v1/instances"))).status).toBe(401);
+  const token = "test-control-token-at-least-32-bytes";
+  const app = createAgentApp(config, executor, {} as TemplateCache, undefined, bearerAuthorizer(token));
+  expect((await app.handle(new Request("http://agent/api/v1/instances", { headers: { authorization: "Bearer wrong-host-token" } }))).status).toBe(401);
+  expect((await app.handle(new Request("http://agent/api/v1/instances", { headers: { authorization: `Bearer ${token}` } }))).status).toBe(200);
+});
 
 test("agent keeps request ids, errors and durations isolated across concurrent requests", async () => {
   const records: Record<string, unknown>[] = [];
@@ -28,6 +40,7 @@ test("agent keeps request ids, errors and durations isolated across concurrent r
     executor,
     {} as TemplateCache,
     logger,
+    () => {},
   );
 
   const slowResponse = app.handle(new Request("http://agent/api/v1/instances", {
@@ -89,7 +102,7 @@ test("agent API delegates idempotent instance operations to the local executor",
   ]);
   const templates = { resolveLayers } as unknown as TemplateCache;
   const config = { hostId: "host-paris-01" } as AgentConfig;
-  const app = createAgentApp(config, executor, templates, logger);
+  const app = createAgentApp(config, executor, templates, logger, () => {});
 
   const body = {
     hostId: "host-paris-01",
@@ -187,6 +200,7 @@ test("agent refuses a create request addressed to another host", async () => {
     { hostId: "host-paris-01" } as AgentConfig,
     { createInstance } as unknown as LocalDockerExecutor,
     { resolveLayers: mock(async () => []) } as unknown as TemplateCache,
+    undefined, () => {},
   );
   const response = await app.handle(new Request(
     `http://agent/api/v1/instances/${instanceId}`,
@@ -210,6 +224,6 @@ test("agent refuses a create request addressed to another host", async () => {
     },
   ));
 
-  expect(response.status).toBe(500);
+  expect(response.status).toBe(403);
   expect(createInstance).not.toHaveBeenCalled();
 });
