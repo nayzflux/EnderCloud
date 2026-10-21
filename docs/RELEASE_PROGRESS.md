@@ -36,4 +36,5 @@ Each implementation commit includes focused validation. Record completed work, d
 
 ## Implementation results
 
-Pending.
+- Audit 4: startup tasks contain rejected operations and retain failed recovery writes until PostgreSQL accepts them. Persistent command retry deadline prevents a hot retry loop. Validation: backend TypeScript and 81 unit tests pass.
+- Docker daemon is reachable outside the filesystem sandbox; integration tests use explicitly escalated commands and disposable Testcontainers databases.

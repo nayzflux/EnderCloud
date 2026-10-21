@@ -482,6 +482,7 @@ export const commands = pgTable(
     operation: text("operation").notNull(),
     state: commandStateEnum("state").notNull().default("PENDING"),
     attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow().notNull(),
     payload: jsonb("payload"),
     lastError: text("last_error"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

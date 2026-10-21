@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { commands, serverInstances } from "../db/schema.ts";
 import type { Executor } from "../executor/executor.ts";
@@ -16,6 +16,7 @@ export class InstanceStartWorker {
   private accepting = true;
   private claiming = false;
   private stopping = false;
+  private readonly recoveries = new Map<string, string>();
 
   public constructor(
     private readonly db: Database,
@@ -48,6 +49,18 @@ export class InstanceStartWorker {
     }
     this.claiming = true;
     try {
+      // A failed persistence attempt remains here until PostgreSQL accepts it.
+      // Never turn a local command failure into an unhandled process rejection.
+      for (const [commandId, message] of this.recoveries) {
+        await this.db.update(commands).set({
+          state: "PENDING",
+          startedAt: null,
+          lastError: message,
+          nextAttemptAt: sql`now() + interval '1 second'`,
+        }).where(and(eq(commands.id, commandId), eq(commands.state, "RUNNING")));
+        this.recoveries.delete(commandId);
+      }
+      if (!this.accepting) return;
       const available = this.concurrency - this.active.size;
       if (available <= 0) {
         return;
@@ -106,6 +119,7 @@ export class InstanceStartWorker {
         .where(and(
           eq(commands.operation, "CREATE"),
           eq(commands.state, "PENDING"),
+          lte(commands.nextAttemptAt, sql`now()`),
           inArray(serverInstances.lifecycleState, ["CREATING", "STARTING"]),
           sql`NOT EXISTS (
             SELECT 1 FROM variant_start_states startup_policy
@@ -139,7 +153,7 @@ export class InstanceStartWorker {
   }
 
   private launch(command: ClaimedCreate): void {
-    const operation = this.logger.runWithContext({
+    const operation = Promise.resolve().then(() => this.logger.runWithContext({
       commandId: command.commandId,
       instanceId: command.instanceId,
       attempt: command.attempt,
@@ -152,6 +166,14 @@ export class InstanceStartWorker {
           command.commandId,
           () => this.stopping,
         );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.recoveries.set(command.commandId, message);
+        this.logger.error("instance.worker.command_failed", "Startup command will be recovered", {
+          error,
+          commandId: command.commandId,
+          instanceId: command.instanceId,
+        });
       } finally {
         this.logger.debug("instance.worker.completed", "Instance startup command completed", {
           durationMs: Math.round(performance.now() - startedAt),
@@ -163,7 +185,7 @@ export class InstanceStartWorker {
           });
         }
       }
-    });
+    }));
     this.active.set(command.commandId, operation);
   }
 }
