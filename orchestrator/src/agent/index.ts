@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { mkdir } from "node:fs/promises";
 import { Logger } from "../logger.ts";
 import { LocalDockerExecutor } from "../executor/local-docker.ts";
@@ -30,7 +31,7 @@ await Promise.all([
   mkdir(config.runtimeRoot, { recursive: true }),
   mkdir(config.templateCacheRoot, { recursive: true }),
 ]);
-const executor = new LocalDockerExecutor(config, logger.child({ component: "docker-executor" }));
+const executor = new LocalDockerExecutor({ ...config, journalPath: join(config.runtimeRoot, "agent-journal.sqlite") }, logger.child({ component: "docker-executor" }));
 const templates = new TemplateCache(
   config.templateCacheRoot,
   config.orchestratorUrl,
@@ -117,6 +118,7 @@ async function shutdown(signal: string): Promise<void> {
   clearInterval(heartbeatTimer);
   logger.info("agent.shutdown.requested", "Agent shutdown requested", { signal });
   await app.stop();
+  await executor.close();
   logger.info("agent.shutdown.completed", "Agent shutdown completed", { signal });
 }
 

@@ -1,5 +1,6 @@
 import { cp, mkdir, mkdtemp, readdir, rename, rm } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { OperationJournal, StaleOperationError } from "../agent/operation-journal.ts";
 import Docker from "dockerode";
 import type { Logger } from "../logger.ts";
 import type {
@@ -13,6 +14,7 @@ import type {
 } from "./executor.ts";
 
 export interface LocalDockerConfig {
+  readonly journalPath?: string;
   readonly proxy?: { readonly address: string; readonly portStart: number; readonly portEnd: number };
   readonly dockerSocket: string;
   readonly dockerNetwork: string;
@@ -89,19 +91,26 @@ export async function materializeLayers(
 
 export class LocalDockerExecutor implements Executor {
   private readonly docker: Docker;
+  private readonly operations: OperationJournal;
   private creationQueue: Promise<void> = Promise.resolve();
 
   public constructor(
     private readonly config: LocalDockerConfig,
     private readonly logger: Logger,
   ) {
+    this.operations = new OperationJournal(config.journalPath);
     this.docker = new Docker({ socketPath: config.dockerSocket });
   }
 
   // Materialize a template, create its container, and return the proxy endpoint.
   public async createInstance(spec: InstanceSpec): Promise<CreatedInstance> {
-    const startedAt = performance.now();
     this.assertHost(spec.hostId);
+    const fingerprint = { ...spec, templateLayers: spec.templateLayers.map(({ id, checksum }) => ({ id, checksum })) };
+    return this.operations.run(spec.instanceId, 1, fingerprint, assertCurrent => this.create(spec, assertCurrent));
+  }
+
+  private async create(spec: InstanceSpec, assertCurrent: () => void): Promise<CreatedInstance> {
+    const startedAt = performance.now();
     const isProxy = spec.instanceType === "proxy";
     if (isProxy && !this.config.proxy) throw new Error("Agent does not support proxy instances");
     const address = isProxy ? this.config.proxy!.address : this.config.gameAddress;
@@ -142,9 +151,11 @@ export class LocalDockerExecutor implements Executor {
       layerCount: spec.templateLayers.length,
     });
     await this.ensureImage(spec.runtime.image);
+    assertCurrent();
     // Only port selection and container creation need serialization. Runtime
     // materialization and image checks remain concurrent across startup slots.
     const prepared = await this.withCreationLock(async () => {
+      assertCurrent();
       const concurrentExisting = await this.findByInstanceId(spec.instanceId);
       if (concurrentExisting) return { existing: concurrentExisting } as const;
       const hostPort = await this.allocatePort(isProxy);
@@ -199,6 +210,7 @@ export class LocalDockerExecutor implements Executor {
     }
     const { container, hostPort } = prepared;
     try {
+      assertCurrent();
       await container.start();
     } catch (error) {
       // Creation succeeded but startup failed; remove the unusable container before retrying.
@@ -228,6 +240,11 @@ export class LocalDockerExecutor implements Executor {
   // Gracefully stop a managed container when it is still running.
   public async stopInstance(target: InstanceTarget, timeoutSeconds: number): Promise<void> {
     this.assertHost(target.hostId);
+    return this.operations.run(target.instanceId, 2, { desired: "STOPPED" }, () => this.stop(target, timeoutSeconds))
+      .catch(error => { if (!(error instanceof StaleOperationError)) throw error; });
+  }
+
+  private async stop(target: InstanceTarget, timeoutSeconds: number): Promise<void> {
     const existing = await this.findByInstanceId(target.instanceId);
     if (!existing || existing.State !== "running") return;
     await this.docker.getContainer(existing.Id).stop({ t: timeoutSeconds });
@@ -236,6 +253,10 @@ export class LocalDockerExecutor implements Executor {
   // Remove both the managed container and its generated runtime directory.
   public async deleteInstance(target: InstanceTarget): Promise<void> {
     this.assertHost(target.hostId);
+    return this.operations.run(target.instanceId, 3, { desired: "ABSENT" }, () => this.remove(target));
+  }
+
+  private async remove(target: InstanceTarget): Promise<void> {
     const existing = await this.findByInstanceId(target.instanceId);
     if (existing) {
       await this.docker.getContainer(existing.Id).remove({ force: true, v: true });
@@ -272,6 +293,15 @@ export class LocalDockerExecutor implements Executor {
   public async deleteOrphanInstance(
     instance: RuntimeInstance,
   ): Promise<OrphanCleanupResult> {
+    this.assertHost(instance.hostId);
+    const key = /^[A-Za-z0-9_-]+$/.test(instance.instanceId) ? instance.instanceId
+      : `orphan-${Buffer.from(instance.containerId).toString("base64url")}`;
+    return this.operations.run(key, 3, { desired: "ABSENT" }, () => this.removeOrphan(instance));
+  }
+
+  public async close(): Promise<void> { await this.operations.close(); }
+
+  private async removeOrphan(instance: RuntimeInstance): Promise<OrphanCleanupResult> {
     this.assertHost(instance.hostId);
     const container = this.docker.getContainer(instance.containerId);
     let containerRemoved = false;
