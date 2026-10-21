@@ -26,6 +26,7 @@ import { AgentExecutor } from "../../src/executor/agent-executor.ts";
 import { HostMaintenanceController } from "../../src/services/host-maintenance-controller.ts";
 import { InstanceStartWorker } from "../../src/services/instance-start-worker.ts";
 import { SessionController } from "../../src/services/session-controller.ts";
+import { RegistryOutbox } from "../../src/events/registry-outbox.ts";
 
 const TEST_HOST_ID = "integration-host";
 
@@ -105,7 +106,7 @@ async function seedVariant(groupId: string, variantId: string, revision = 1) {
 }
 
 async function cleanDb() {
-  await sql`TRUNCATE TABLE template_layers, server_groups, execution_hosts, events, server_tps_metrics CASCADE`;
+  await sql`TRUNCATE TABLE template_layers, server_groups, execution_hosts, events, server_tps_metrics, registry_outbox CASCADE`;
 }
 
 async function seedGroup() {
@@ -311,6 +312,24 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     await controller.tick();
 
     expect(beginDrain).toHaveBeenCalledWith(instanceId, "SESSION_CANCELLED");
+  });
+
+  test("new transfers supersede old generations and abandonment cannot affect a newer command", async () => {
+    const { groupId, variantId } = await seedGroup();
+    const instanceId = nanoid();
+    const playerId = crypto.randomUUID();
+    await db.insert(serverInstances).values({ id: instanceId, hostId: TEST_HOST_ID, groupId, variantId,
+      lifecycleState: "RUNNING", availabilityState: "OPEN", endpoint: "target:25565", reservedCpu: 1, reservedMemoryBytes: 1024 });
+    const deliveries: Array<{ commandId: string; expiresAt: string; playerGenerations: Record<string, number> }> = [];
+    const transfers = new TransferService(db, { publishTransfer: async payload => { deliveries.push(payload); } } as RedisEventBus, mockLogger);
+    const first = await db.transaction(tx => transfers.enqueue(tx, { instanceId, endpoint: "target:25565", players: [playerId] }));
+    const second = await db.transaction(tx => transfers.enqueue(tx, { instanceId, endpoint: "target:25565", players: [playerId] }));
+    await transfers.abandon(first, playerId, 1);
+    await transfers.tick();
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]?.commandId).toBe(second);
+    expect(deliveries[0]?.playerGenerations[playerId]).toBe(2);
+    expect(Date.parse(deliveries[0]!.expiresAt)).toBeGreaterThan(Date.now());
   });
 
   test("a transfer retry excludes a player who arrived and then left", async () => {
@@ -2110,6 +2129,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     expect(source[0]?.drainReason).toBe("HUB_RENEWAL");
     expect(ready[0]?.lifecycleState).toBe("RUNNING");
     expect(ready[0]?.renewalDeadline?.getTime()).toBeGreaterThan(Date.now());
+    await new RegistryOutbox(db, bus).tick();
     expect(registryEvents.slice(-2)).toEqual([
       { type: "SERVER_REGISTERED", instanceId: replacement!.id },
       { type: "SERVER_UNREGISTERED", instanceId: sourceInstanceId },

@@ -134,6 +134,20 @@
       "when": 1792540803000,
       "tag": "0018_paper_health",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792540804000,
+      "tag": "0019_registry_revision",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792540805000,
+      "tag": "0020_transfer_generations",
+      "breakpoints": true
     }
   ]
 }

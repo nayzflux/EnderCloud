@@ -162,9 +162,14 @@ export function createApp(dependencies: ApiDependencies) {
     )
     .group("/api/v1", (api) =>
       api
-        .get("/proxy/servers", () => dependencies.instances.listProxyServers(), {
+        .get("/proxy/servers", () => dependencies.instances.getRegistrySnapshot(), {
           detail: { tags: ["Proxy"] },
         })
+        .post("/proxies/:instanceId/transfers/:commandId/players/:playerId/abandon", async ({ params, body, set }) => {
+          await dependencies.instances.abandonTransfer(params.commandId, params.playerId, body.generation);
+          set.status = 204;
+        }, { params: t.Object({ instanceId: internalId, commandId: internalId, playerId: playerUuid }),
+          body: t.Object({ generation: t.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }) }) })
         .get("/proxies", () => dependencies.proxies.list(), { detail: { tags: ["Proxy"] } })
         .put("/proxies/:instanceId/heartbeat", ({ params, body }) =>
           dependencies.proxies.heartbeat(params.instanceId, body), {

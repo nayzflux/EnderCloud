@@ -129,7 +129,7 @@ test("orchestrator keeps request ids, errors and durations isolated across concu
     releaseSlow = resolve;
   });
   const instances = {
-    listProxyServers: async () => {
+    getRegistrySnapshot: async () => {
       await slowGate;
       throw new Error("database failed");
     },

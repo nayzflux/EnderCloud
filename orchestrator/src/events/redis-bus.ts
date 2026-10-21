@@ -34,8 +34,9 @@ export class RedisEventBus {
     type: "SERVER_REGISTERED" | "SERVER_UPDATED" | "SERVER_UNREGISTERED",
     payload: unknown,
     eventId?: string,
+    registryRevision?: number,
   ): Promise<void> {
-    await this.publish(REGISTRY_CHANNEL, type, payload, eventId);
+    await this.publish(REGISTRY_CHANNEL, type, payload, eventId, registryRevision);
   }
 
   // Publish a player transfer command for the proxy layer.
@@ -45,7 +46,9 @@ export class RedisEventBus {
     readonly players: readonly string[];
     readonly sourceInstanceId?: string;
     readonly reason?: "SESSION_CANCELLED";
-    readonly commandId?: string;
+    readonly commandId: string;
+    readonly expiresAt: string;
+    readonly playerGenerations: Readonly<Record<string, number>>;
   }): Promise<void> {
     await this.publish(TRANSFER_CHANNEL, "TRANSFER_PLAYERS", payload);
   }
@@ -56,10 +59,12 @@ export class RedisEventBus {
     type: RedisEnvelope["type"],
     payload: unknown,
     eventId = nanoid(),
+    registryRevision?: number,
   ): Promise<void> {
     const envelope: RedisEnvelope = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       eventId,
+      ...(registryRevision !== undefined ? { registryRevision } : {}),
       type,
       occurredAt: new Date().toISOString(),
       payload,

@@ -7,6 +7,7 @@ public record RedisEnvelope(
         String eventId,
         String type,
         String occurredAt,
+        Long registryRevision,
         JsonNode payload
 ) {
 }

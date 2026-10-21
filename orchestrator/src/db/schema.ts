@@ -457,6 +457,11 @@ export const transferCommands = pgTable(
   ],
 );
 
+export const playerTransferGenerations = pgTable("player_transfer_generations", {
+  playerId: uuid("player_id").primaryKey(),
+  generation: bigint("generation", { mode: "number" }).notNull(),
+});
+
 export const transferCommandPlayers = pgTable(
   "transfer_command_players",
   {
@@ -465,6 +470,7 @@ export const transferCommandPlayers = pgTable(
       .references(() => transferCommands.id, { onDelete: "cascade" }),
     playerId: uuid("player_id").notNull(),
     state: text("state").notNull().default("PENDING"),
+    generation: bigint("generation", { mode: "number" }).notNull().default(1),
     observedAt: timestamp("observed_at", { withTimezone: true }),
   },
   (table) => [
@@ -472,7 +478,7 @@ export const transferCommandPlayers = pgTable(
     index("transfer_command_players_pending_idx").on(table.state, table.playerId),
     check(
       "transfer_command_players_state_check",
-      sql`${table.state} IN ('PENDING', 'ARRIVED', 'LEFT')`,
+      sql`${table.state} IN ('PENDING', 'ARRIVED', 'LEFT', 'SUPERSEDED', 'ABANDONED')`,
     ),
   ],
 );
@@ -495,9 +501,15 @@ export const commands = pgTable(
   (table) => [index("commands_pending_idx").on(table.state, table.createdAt)],
 );
 
+export const registryState = pgTable("registry_state", {
+  id: integer("id").primaryKey().default(1),
+  revision: bigint("revision", { mode: "number" }).notNull().default(0),
+});
+
 export const registryOutbox = pgTable("registry_outbox", {
   id: text("id").primaryKey(),
   type: text("type").notNull(),
+  revision: bigint("revision", { mode: "number" }).notNull().unique(),
   payload: jsonb("payload").notNull(),
   attempts: integer("attempts").notNull().default(0),
   nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow().notNull(),

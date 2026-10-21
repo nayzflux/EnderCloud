@@ -39,7 +39,8 @@ import type { HubRouter } from "./hub-router.ts";
 import type { MonitoringService } from "./monitoring-service.ts";
 import type { HostService } from "./host-service.ts";
 import type { VariantStartController } from "./variant-start-controller.ts";
-import { enqueueRegistryEvent } from "../events/registry-outbox.ts";
+import { registryState } from "../db/schema.ts";
+import { enqueueRegistryEvent, readRegistryServers } from "../events/registry-outbox.ts";
 import { countsAsStartupFailure } from "../domain/startup-policy.ts";
 
 interface CreateRow {
@@ -585,6 +586,10 @@ export class InstanceController {
     await this.recordEvent("instance", instanceId, event.type, event);
   }
 
+  public async abandonTransfer(commandId: string, playerId: string, generation: number): Promise<void> {
+    await this.transfers.abandon(commandId, playerId, generation);
+  }
+
   public async suspectHealth(instanceId: string): Promise<void> {
     await this.db.transaction(async tx => {
       const changed = await tx.update(serverInstances).set({ healthSuspectedAt: sql`now()` })
@@ -637,7 +642,7 @@ export class InstanceController {
       await this.startPolicy?.markReady(instanceId);
       // Publish registration only for the transaction that actually performed STARTING -> RUNNING.
       if (rows[0].groupType !== "proxy") {
-        await this.bus.publishRegistry("SERVER_REGISTERED", rows[0]);
+        await this.publishRegistry("SERVER_REGISTERED", rows[0]);
       }
       this.logger.info("instance.lifecycle.ready", "Instance reported server readiness", {
         instanceId,
@@ -717,7 +722,7 @@ export class InstanceController {
 
     // Re-registration is idempotent and closes the crash window between registration and drain.
     if (replacement.groupType !== "proxy") {
-      await this.bus.publishRegistry("SERVER_REGISTERED", replacement);
+      await this.publishRegistry("SERVER_REGISTERED", replacement);
     }
     return this.beginDrain(
       replacement.replacesInstanceId,
@@ -870,30 +875,18 @@ export class InstanceController {
 
   // Return all running endpoints that may be registered by a proxy.
   public async listProxyServers(): Promise<readonly ServerSnapshot[]> {
-    return (await this.db
-      .select({
-        instanceId: serverInstances.id,
-        variantId: serverInstances.variantId,
-        groupId: serverInstances.groupId,
-        groupType: serverGroups.type,
-        endpoint: serverInstances.endpoint,
-        lifecycleState: serverInstances.lifecycleState,
-        availabilityState: serverInstances.availabilityState,
-        playerCount: serverInstances.playerCount,
-        maximumPlayers: sql<number>`COALESCE(${serverGroups.maximumPlayersPerInstance}, ${serverGroups.maximumPlayers}, 0)`,
-      })
-      .from(serverInstances)
-      .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
-      .where(
-        and(
-          eq(serverInstances.lifecycleState, "RUNNING"),
-          sql`(${serverInstances.paperHealthDeadline} IS NULL OR ${serverInstances.paperHealthDeadline} > now())`,
-          sql`EXISTS (SELECT 1 FROM ${executionHosts} WHERE ${executionHosts.id} = ${serverInstances.hostId} AND ${executionHosts.healthState} = 'ONLINE')`,
-          inArray(serverGroups.type, ["hub", "minigame"]),
-          isNotNull(serverInstances.endpoint)
-        )
-      )
-      .orderBy(serverInstances.runningAt, serverInstances.id)) as unknown as readonly ServerSnapshot[];
+    return readRegistryServers(this.db);
+  }
+
+  public async getRegistrySnapshot() {
+    return this.db.transaction(async tx => {
+      const [state] = await tx.select().from(registryState).where(eq(registryState.id, 1)).for("update");
+      return { revision: state!.revision, servers: await readRegistryServers(tx) };
+    });
+  }
+
+  private async publishRegistry(type: "SERVER_REGISTERED" | "SERVER_UPDATED" | "SERVER_UNREGISTERED", payload: unknown): Promise<void> {
+    await this.db.transaction(tx => enqueueRegistryEvent(tx, type, payload));
   }
 
   private async publishRoutingUpdate(instanceId: string): Promise<void> {
@@ -923,7 +916,7 @@ export class InstanceController {
       .limit(1)) as unknown as ServerSnapshot[];
     if (!rows[0]) return;
     try {
-      await this.bus.publishRegistry("SERVER_UPDATED", rows[0]);
+      await this.publishRegistry("SERVER_UPDATED", rows[0]);
     } catch (error) {
       this.logger.warn("instance.routing_update.failed", "Unable to publish server load update", {
         instanceId,
@@ -1517,7 +1510,7 @@ export class InstanceController {
       .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
       .where(eq(serverInstances.id, instanceId));
     if (instance && instance.type !== "proxy") {
-      await this.bus.publishRegistry("SERVER_UNREGISTERED", { instanceId });
+      await this.publishRegistry("SERVER_UNREGISTERED", { instanceId });
     }
   }
 

@@ -17,6 +17,7 @@ export interface TransferPayload {
 
 interface TransferCommandRow {
   id: string;
+  expiresAt: Date;
   payload: {
     instanceId: string;
     endpoint: string;
@@ -71,11 +72,30 @@ export class TransferService {
       expiresAt: sql`now() + (${target[0].timeoutMs} * interval '1 millisecond')`
     });
     if (payload.players.length > 0) {
+      const generations = new Map<string, number>();
+      for (const playerId of [...new Set(payload.players)].sort()) {
+        const [current] = await tx.insert(schema.playerTransferGenerations).values({ playerId, generation: 1 })
+          .onConflictDoUpdate({ target: schema.playerTransferGenerations.playerId,
+            set: { generation: sql`${schema.playerTransferGenerations.generation} + 1` } }).returning();
+        if (!Number.isSafeInteger(current.generation)) throw new Error("Transfer generation exceeded safe bounds");
+        generations.set(playerId, current.generation);
+        await tx.update(schema.transferCommandPlayers).set({ state: "SUPERSEDED", observedAt: sql`now()` })
+          .where(and(eq(schema.transferCommandPlayers.playerId, playerId), eq(schema.transferCommandPlayers.state, "PENDING")));
+      }
       await tx.insert(schema.transferCommandPlayers).values(
-        [...new Set(payload.players)].map((playerId) => ({ commandId, playerId })),
+        await Promise.all([...new Set(payload.players)].sort().map(async playerId => {
+          // Locks are acquired in player-id order by processing sequentially below.
+          return { commandId, playerId, generation: generations.get(playerId)! };
+        })),
       );
     }
     return commandId;
+  }
+
+  public async abandon(commandId: string, playerId: string, generation: number): Promise<void> {
+    await this.db.update(schema.transferCommandPlayers).set({ state: "ABANDONED", observedAt: sql`now()` })
+      .where(and(eq(schema.transferCommandPlayers.commandId, commandId), eq(schema.transferCommandPlayers.playerId, playerId),
+        eq(schema.transferCommandPlayers.generation, generation), eq(schema.transferCommandPlayers.state, "PENDING")));
   }
 
   // Cancel every pending transfer targeting a failed or draining instance.
@@ -104,6 +124,7 @@ export class TransferService {
         .select({
           id: schema.transferCommands.id,
           payload: schema.transferCommands.payload,
+          expiresAt: schema.transferCommands.expiresAt,
         })
         .from(schema.transferCommands)
         .where(
@@ -121,6 +142,7 @@ export class TransferService {
           commandId: schema.transferCommandPlayers.commandId,
           playerId: schema.transferCommandPlayers.playerId,
           state: schema.transferCommandPlayers.state,
+          generation: schema.transferCommandPlayers.generation,
         })
         .from(schema.transferCommandPlayers)
         .where(inArray(schema.transferCommandPlayers.commandId, commands.map((command) => command.id)));
@@ -136,7 +158,7 @@ export class TransferService {
         const players = commandReceipts
           ? commandReceipts.filter((receipt) => receipt.state === "PENDING").map((receipt) => receipt.playerId)
           : command.payload.players;
-        if (players.length > 0) await this.publish(command, players);
+        if (players.length > 0) await this.publish(command, players, Object.fromEntries((commandReceipts ?? []).map(receipt => [receipt.playerId, receipt.generation])));
       }
     } finally {
       this.running = false;
@@ -241,12 +263,14 @@ export class TransferService {
   }
 
   // Publish one command and schedule bounded retries with exponential backoff.
-  private async publish(command: TransferCommandRow, players: readonly string[]): Promise<void> {
+  private async publish(command: TransferCommandRow, players: readonly string[], playerGenerations: Readonly<Record<string, number>>): Promise<void> {
     try {
       await this.bus.publishTransfer({
         ...command.payload,
         players,
         commandId: command.id,
+        expiresAt: command.expiresAt.toISOString(),
+        playerGenerations,
       });
       await this.db
         .update(schema.transferCommands)

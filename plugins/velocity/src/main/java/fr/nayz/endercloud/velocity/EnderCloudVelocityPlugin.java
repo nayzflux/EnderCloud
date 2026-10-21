@@ -37,6 +37,8 @@ import org.slf4j.Logger;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.URI;
+import java.time.Instant;
+import java.util.List;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Map;
@@ -63,7 +65,10 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
     private final ProxyServer proxy;
     private final Logger logger;
     private final Map<String, ServerSnapshot> snapshots = new ConcurrentHashMap<>();
-    private final Set<String> transfersInFlight = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, CompletableFuture<Void>> transfersInFlight = new ConcurrentHashMap<>();
+    private final TransferFence transferFence = new TransferFence();
+    private final RegistrySynchronizer<RedisEnvelope> registryOrder = new RegistrySynchronizer<>();
+    private CompletableFuture<Void> snapshotInFlight;
     private final AtomicBoolean ready = new AtomicBoolean();
     private final AtomicBoolean synchronizationInProgress = new AtomicBoolean();
     private final AtomicBoolean heartbeatInProgress = new AtomicBoolean();
@@ -273,8 +278,23 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
         });
     }
 
-    private CompletableFuture<Void> reloadSnapshot() {
-        return orchestrator.getServers().thenAccept(servers -> {
+    private synchronized CompletableFuture<Void> reloadSnapshot() {
+        if (snapshotInFlight != null) return snapshotInFlight;
+        registryOrder.begin();
+        CompletableFuture<Void> loading = orchestrator.getServers().thenAccept(snapshot -> {
+            if (shuttingDown) return;
+            if (!registryOrder.snapshot(snapshot.revision(), () -> applyRegistrySnapshot(snapshot.servers()), this::applyRegistryEvent))
+                throw new IllegalStateException("Registry revision gap requires another snapshot");
+        });
+        snapshotInFlight = loading;
+        loading.whenComplete((ignored, error) -> {
+            synchronized (this) { if (snapshotInFlight == loading) snapshotInFlight = null; }
+            if (error != null) { registryOrder.failed(); ready.set(false); }
+        });
+        return loading;
+    }
+
+    private void applyRegistrySnapshot(List<ServerSnapshot> servers) {
             Map<String, SocketAddress> registeredAddresses = new HashMap<>();
             for (RegisteredServer registered : proxy.getAllServers()) {
                 ServerInfo info = registered.getServerInfo();
@@ -298,7 +318,16 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
             servers.stream()
                     .filter(server -> !"proxy".equals(server.groupType()))
                     .forEach(server -> snapshots.put(server.instanceId(), server));
-        });
+    }
+
+    private void applyRegistryEvent(RedisEnvelope envelope) {
+        try {
+            switch (envelope.type()) {
+                case "SERVER_REGISTERED", "SERVER_UPDATED" -> update(JsonCodec.mapper().treeToValue(envelope.payload(), ServerSnapshot.class));
+                case "SERVER_UNREGISTERED" -> unregister(envelope.payload().path("instanceId").asText());
+                default -> throw new IllegalArgumentException("Unsupported registry event");
+            }
+        } catch (Exception error) { throw new IllegalArgumentException("Invalid registry event", error); }
     }
 
     private void handleRedisMessage(String channel, String message) {
@@ -307,37 +336,20 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
                     message,
                     RedisEnvelope.class
             );
-            if (envelope.schemaVersion() != 1) {
+            if (envelope.schemaVersion() != 2) {
                 logger.warn(
                         "Ignoring unsupported EnderCloud event schema {}",
                         envelope.schemaVersion()
                 );
                 return;
             }
-            switch (envelope.type()) {
-                case "SERVER_REGISTERED" -> {
-                    ServerSnapshot snapshot = JsonCodec.mapper().treeToValue(
-                            envelope.payload(),
-                            ServerSnapshot.class
-                    );
-                    update(snapshot);
-                }
-                case "SERVER_UPDATED" -> {
-                    ServerSnapshot snapshot = JsonCodec.mapper().treeToValue(
-                            envelope.payload(),
-                            ServerSnapshot.class
-                    );
-                    update(snapshot);
-                }
-                case "SERVER_UNREGISTERED" -> unregister(
-                        envelope.payload().path("instanceId").asText()
-                );
-                case "TRANSFER_PLAYERS" -> transferPlayers(envelope.payload(), true);
-                default -> logger.debug(
-                        "Ignoring unknown EnderCloud event {}",
-                        envelope.type()
-                );
+            if (envelope.type().equals("TRANSFER_PLAYERS")) {
+                transferPlayers(envelope.payload(), true);
+            } else if (envelope.type().startsWith("SERVER_")) {
+                if (envelope.registryRevision() == null || envelope.registryRevision() < 1) throw new IllegalArgumentException("Missing registry revision");
+                if (!registryOrder.event(envelope.registryRevision(), envelope, this::applyRegistryEvent)) reloadSnapshot();
             }
+
         } catch (Exception exception) {
             logger.error("Invalid EnderCloud Redis message on {}", channel, exception);
             reloadSnapshot().exceptionally(error -> {
@@ -398,28 +410,42 @@ public final class EnderCloudVelocityPlugin implements EnderCloudVelocityApi {
             }
             return;
         }
+        String commandId = payload.path("commandId").asText();
+        Instant expiresAt;
+        try { expiresAt = Instant.parse(payload.path("expiresAt").asText()); }
+        catch (RuntimeException error) { logger.warn("Ignoring transfer without a valid expiration"); return; }
+        String expectedSource = payload.hasNonNull("sourceInstanceId") ? payload.path("sourceInstanceId").asText() : null;
+        if (commandId.isBlank()) return;
         for (JsonNode playerNode : payload.path("players")) {
             try {
                 UUID playerId = UUID.fromString(playerNode.asText());
-                proxy.getPlayer(playerId).ifPresent(player -> {
-                    boolean alreadyConnected = player.getCurrentServer()
-                            .map(connection -> connection.getServer().equals(target.orElseThrow()))
-                            .orElse(false);
-                    if (alreadyConnected) return;
-                    String commandId = payload.path("commandId").asText(instanceId);
-                    String inFlightKey = commandId + ":" + playerId;
-                    if (!transfersInFlight.add(inFlightKey)) return;
-                    player.createConnectionRequest(target.orElseThrow())
-                            .connect()
-                            .whenComplete((result, error) ->
-                                    transfersInFlight.remove(inFlightKey)
-                            );
+                long generation = payload.path("playerGenerations").path(playerId.toString()).asLong(0);
+                if (generation < 1) continue;
+                transferFence.observe(playerId, generation, expiresAt, Instant.now());
+                CompletableFuture<Void> operation = transfersInFlight.compute(playerId, (id, previous) -> {
+                    CompletableFuture<Void> before = previous == null ? CompletableFuture.completedFuture(null) : previous;
+                    return before.handle((ignored, error) -> null).thenCompose(ignored -> {
+                        if (shuttingDown) return CompletableFuture.completedFuture(null);
+                        var player = proxy.getPlayer(playerId).orElse(null);
+                        if (player == null) return CompletableFuture.completedFuture(null);
+                        String actualSource = player.getCurrentServer().flatMap(connection -> instanceId(connection.getServer())).orElse(null);
+                        TransferFence.Decision decision = transferFence.check(playerId, generation, expiresAt, expectedSource, actualSource, Instant.now());
+                        if (decision != TransferFence.Decision.ACCEPT) {
+                            return instanceId.isBlank() ? CompletableFuture.completedFuture(null)
+                                : orchestrator.abandonTransfer(instanceId, commandId, playerId, generation);
+                        }
+                        var currentTarget = proxy.getServer(serverName(snapshot)).orElse(null);
+                        if (currentTarget == null || player.getCurrentServer().map(connection -> connection.getServer().equals(currentTarget)).orElse(false))
+                            return CompletableFuture.completedFuture(null);
+                        return player.createConnectionRequest(currentTarget).connect().thenApply(result -> null);
+                    });
+                });
+                operation.whenComplete((ignored, error) -> {
+                    transfersInFlight.remove(playerId, operation);
+                    if (error != null && !shuttingDown) logger.warn("Unable to complete transfer {}", commandId, error);
                 });
             } catch (IllegalArgumentException exception) {
-                logger.warn(
-                        "Ignoring invalid player UUID in transfer: {}",
-                        playerNode.asText()
-                );
+                logger.warn("Ignoring invalid player UUID in transfer: {}", playerNode.asText());
             }
         }
     }

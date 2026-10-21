@@ -174,10 +174,12 @@ describe("durable instance startup", () => {
     {} as HubRouter, logger, undefined, undefined, policy);
     expect(await controller.failInstance("startup-instance-0", "CREATE_FAILED")).toBe(true);
     expect((await policy.getStatus(groupId, variantId, 1))?.failureCount).toBe(1);
+    const pendingCount = (await db.select().from(registryOutbox)).length;
     expect(await controller.failInstance("startup-instance-0", "CREATE_FAILED")).toBe(false);
     expect((await policy.getStatus(groupId, variantId, 1))?.failureCount).toBe(1);
     const first = await db.select().from(registryOutbox);
-    expect(first.filter(event => event.type === "SERVER_UNREGISTERED")).toHaveLength(1);
+    expect(first.length).toBe(pendingCount);
+    expect(first.some(event => event.type === "SERVER_UNREGISTERED")).toBe(true);
     let calls = 0;
     const publisher = new RegistryOutbox(db, { publishRegistry: async () => {
       calls += 1;

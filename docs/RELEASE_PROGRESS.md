@@ -38,3 +38,15 @@ Each implementation commit includes focused validation. Record completed work, d
 
 - Audit 4: startup tasks contain rejected operations and retain failed recovery writes until PostgreSQL accepts them. Persistent command retry deadline prevents a hot retry loop. Validation: backend TypeScript and 81 unit tests pass.
 - Docker daemon is reachable outside the filesystem sandbox; integration tests use explicitly escalated commands and disposable Testcontainers databases.
+- Audits 1/2: probe deadlines and infrastructure recovery; transactional failure accounting and an at-least-once registry outbox. Focused PostgreSQL scenarios pass, including Redis failure and revision replacement.
+- Audits 5/7: recovery locks and rereads sessions and players; cancellation is preserved and recovery proceeds during physical STOPPING without releasing physical reservations. PostgreSQL regressions pass.
+- Audits 6/8: offline instance transitions retry every reconciliation; retained diagnostic runtimes retry stop independently of file retention. Targeted SQL and unit checks pass.
+- Audit 3: persistent SQLite operation journal serializes each instance and fences delayed CREATEs after STOP/DELETE, including across restart. Fixed generations 1=create, 2=stop, 3=delete are sufficient because instance ids are never reused. Contradictory CREATE specifications fail explicitly.
+- Audits 9/12: configurable 30s Paper health lease plus 30s confirmation, routing withdrawal and terminal-state protection; partial loop failures propagate as AggregateError without skipping independent stages. Targeted checks pass.
+- Audit 10 and configuration: bounded/abortable downloads, idle watchdog, concurrency/size/entry quotas, startup staging cleanup, cache integrity repair; streamed, framed v2 template checksums with deterministic ordering; duplicate group and numeric bound checks. Backend TypeScript and 87 unit tests pass.
+- Audit 11: single-flight Paper assignment refresh, request/revision ordering, session-scoped acknowledgements. Paper compilation and two JUnit regressions pass in a disposable JDK 25 container.
+- Audits 13/14: registry protocol v2 with ordered outbox revisions and buffered Velocity snapshots; persistent per-player transfer generations, wire expirations, source checks and abandonment receipts. PostgreSQL regressions pass; final coordinated Java validation is running.
+
+## Remaining release work
+
+The workspace/package extraction, domain service decomposition, shared Zod schemas, lifecycle/HTTP cleanup, authentication, fresh schema, canonical documentation, frontend organization and final deployment/CI validation are still required. Existing passing checks do not yet establish release readiness.

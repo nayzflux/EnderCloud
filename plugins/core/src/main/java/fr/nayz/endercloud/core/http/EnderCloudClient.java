@@ -3,6 +3,7 @@ package fr.nayz.endercloud.core.http;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 
+import fr.nayz.endercloud.core.model.RegistrySnapshot;
 import fr.nayz.endercloud.core.model.PaperEvent;
 import fr.nayz.endercloud.core.model.ProxyHeartbeat;
 import fr.nayz.endercloud.core.model.ProxyControl;
@@ -46,10 +47,9 @@ public final class EnderCloudClient implements AutoCloseable {
                 .build();
     }
 
-    public CompletableFuture<List<ServerSnapshot>> getServers() {
+    public CompletableFuture<RegistrySnapshot> getServers() {
         return send("GET", "/api/v1/proxy/servers", null)
-                .thenApply(response -> read(response, new TypeReference<>() {
-                }));
+                .thenApply(response -> read(response, RegistrySnapshot.class));
     }
 
     public CompletableFuture<ProxyControl> proxyHeartbeat(String instanceId, ProxyHeartbeat heartbeat) {
@@ -71,6 +71,11 @@ public final class EnderCloudClient implements AutoCloseable {
             JsonNode body = read(response, JsonNode.class);
             return body.path("removed").asBoolean(false);
         });
+    }
+
+    public CompletableFuture<Void> abandonTransfer(String proxyId, String commandId, UUID playerId, long generation) {
+        return send("POST", "/api/v1/proxies/" + encode(proxyId) + "/transfers/" + encode(commandId)
+                + "/players/" + playerId + "/abandon", JsonCodec.write(Map.of("generation", generation))).thenApply(ignored -> null);
     }
 
     public CompletableFuture<Void> networkDisconnected(UUID playerId) {

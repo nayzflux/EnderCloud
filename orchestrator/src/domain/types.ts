@@ -170,7 +170,8 @@ export interface QueueParty {
 }
 
 export interface RedisEnvelope<T = unknown> {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
+  readonly registryRevision?: number;
   readonly eventId: string;
   readonly type:
     | "SERVER_REGISTERED"
