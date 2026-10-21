@@ -39,6 +39,7 @@ export class SessionController {
   public async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    const failures: Error[] = [];
     try {
       // Stage order matters: expire stale players before deciding whether sessions may start,
       // then recover failures before final drain cleanup.
@@ -55,12 +56,14 @@ export class SessionController {
         try {
           await task();
         } catch (error) {
+          failures.push(new Error(stage, { cause: error }));
           this.logger.error("session.tick_stage.failed", "Session tick stage failed", {
             stage,
             error,
           });
         }
       }
+      if (failures.length) throw new AggregateError(failures, "session control loop failed");
     } finally {
       this.running = false;
     }

@@ -28,6 +28,7 @@ export class HostMaintenanceController {
   public async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    const failures: Error[] = [];
     try {
       const drainingHosts = await this.db.select({ id: executionHosts.id })
         .from(executionHosts)
@@ -36,12 +37,14 @@ export class HostMaintenanceController {
         try {
           await this.drainHost(host.id);
         } catch (error) {
+          failures.push(new Error(host.id, { cause: error }));
           this.logger.error("host.maintenance.failed", "Host maintenance reconciliation failed", {
             hostId: host.id,
             error,
           });
         }
       }
+      if (failures.length) throw new AggregateError(failures, "host.maintenance control loop failed");
     } finally {
       this.running = false;
     }

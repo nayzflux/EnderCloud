@@ -18,6 +18,7 @@ export class CapacityController {
   public async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    const failures: Error[] = [];
     try {
       await this.initializeHubRenewalDeadlines();
       const groups = await this.db.select().from(serverGroups);
@@ -140,12 +141,14 @@ export class CapacityController {
             await this.instances.beginDrain(candidate.id);
           }
         } catch (error) {
+          failures.push(new Error(group.id, { cause: error }));
           this.logger.error("capacity.group.failed", "Capacity group reconciliation failed", {
             groupId: group.id,
             error,
           });
         }
       }
+      if (failures.length) throw new AggregateError(failures, "capacity control loop failed");
     } catch (error) {
       this.logger.error("capacity.tick.failed", "Capacity reconciliation failed", { error });
       throw error;
