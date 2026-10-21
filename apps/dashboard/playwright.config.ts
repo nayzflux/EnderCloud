@@ -12,9 +12,7 @@ export default defineConfig({
   fullyParallel: true,
   workers: 1,
   globalSetup: "./e2e/global-setup.ts",
-  // The console polls the cluster every few seconds, so a click can land on a
-  // re-render under parallel load; one retry absorbs that without hiding bugs.
-  retries: 1,
+  retries: process.env.CI ? 1 : 0,
   reporter: "list",
   timeout: 45_000,
   expect: { timeout: 10_000 },

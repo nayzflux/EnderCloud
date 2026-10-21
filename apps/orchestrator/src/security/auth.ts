@@ -29,7 +29,11 @@ export function createAuth(db: Database, config: SecurityConfig, bootstrap = fal
     rateLimit: {
       enabled: true,
       storage: "database",
-      customRules: { "/sign-in/email": { window: 60, max: 5 } },
+      customRules: {
+        "/sign-in/email": { window: 60, max: 5 },
+        // Layouts, data routes and open tabs all validate their persisted session.
+        "/get-session": false,
+      },
     },
     advanced: {
       useSecureCookies: config.origin.startsWith("https:"),

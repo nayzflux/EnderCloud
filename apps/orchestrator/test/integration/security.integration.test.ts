@@ -118,6 +118,14 @@ test("local administrator signs in, resets sessions and cannot register a second
     .map((value) => value.split(";")[0])
     .join("; ");
   expect(cookie).toContain("endercloud.session_token=");
+  // Session checks are not login attempts; normal polling must not exhaust the auth limiter.
+  for (let index = 0; index < 110; index++) {
+    const response = await handler(
+      new Request(`${config.origin}/api/auth/get-session`, { headers: { cookie } }),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ session: { id: expect.any(String) } });
+  }
   const authorize = createAuthorizer(database.db, auth);
   await authorize(
     new Request(`${config.origin}/api/v1/dashboard/cluster`, { headers: { cookie } }),

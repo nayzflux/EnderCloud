@@ -18,7 +18,7 @@ printf '%s' "$password" | docker compose exec -T orchestrator bun src/security/c
 unset password
 ```
 
-Open `/login`. Public registration and API-key management endpoints are disabled. The database enforces one administrator. Passwords are hashed by Better Auth; sessions expire after eight hours, use HttpOnly SameSite=Strict cookies, and are checked against PostgreSQL. Production cookies require HTTPS. Five login attempts per minute are allowed. No SMTP server is required.
+Open `/login`. Public registration and API-key management endpoints are disabled. The database enforces one administrator. Passwords are hashed by Better Auth; sessions expire after eight hours, use HttpOnly SameSite=Strict cookies, and are checked against PostgreSQL. Production cookies require HTTPS. Five login attempts per minute are allowed; normal session checks from polling and open tabs do not consume that limit. No SMTP server is required.
 
 ## Provision an agent
 
