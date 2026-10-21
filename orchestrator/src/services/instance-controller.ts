@@ -13,6 +13,7 @@ import {
   events,
   transferCommands,
   transferCommandPlayers,
+  executionHosts,
 } from "../db/schema.ts";
 import { asc, eq, and, sql, desc, inArray, isNotNull, notInArray } from "drizzle-orm";
 import type postgres from "postgres";
@@ -869,6 +870,7 @@ export class InstanceController {
       .where(
         and(
           eq(serverInstances.lifecycleState, "RUNNING"),
+          sql`EXISTS (SELECT 1 FROM ${executionHosts} WHERE ${executionHosts.id} = ${serverInstances.hostId} AND ${executionHosts.healthState} = 'ONLINE')`,
           inArray(serverGroups.type, ["hub", "minigame"]),
           isNotNull(serverInstances.endpoint)
         )

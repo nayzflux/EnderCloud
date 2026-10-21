@@ -14,6 +14,7 @@ interface InstanceRow {
   lifecycle_state: LifecycleState;
   startup_expired: boolean;
   runtime_retained: boolean;
+  shutdown_timeout_ms: number;
 }
 
 interface HostRow {
@@ -47,6 +48,7 @@ export class Reconciler {
           host_id: serverInstances.hostId,
           lifecycle_state: serverInstances.lifecycleState,
           runtime_retained: serverInstances.runtimeRetained,
+          shutdown_timeout_ms: serverGroups.shutdownTimeoutMs,
           startup_expired: sql<boolean>`(
             ${serverInstances.lifecycleState} = 'STARTING'
             AND ${serverInstances.startupDeadline} <= now()
@@ -102,9 +104,8 @@ export class Reconciler {
           const reason = heartbeatExpired
             ? "Agent heartbeat expired"
             : "Agent control API remained unreachable";
-          if (await this.hosts.markOffline(host.id, reason)) {
-            await this.failHostInstances(host.id, byHost.get(host.id) ?? [], reason);
-          }
+          await this.hosts.markOffline(host.id, reason);
+          await this.failHostInstances(host.id, byHost.get(host.id) ?? [], reason);
           continue;
         }
 
@@ -179,6 +180,11 @@ export class Reconciler {
             }).from(serverInstances).where(eq(serverInstances.id, database.id));
             if (rows[0]?.due) await this.instances.stopAndDelete(database.id);
           }
+        } else if (database.lifecycle_state === "FAILED" && database.runtime_retained) {
+          // Diagnostic files are retained, but a failed game must not keep running.
+          if (runtime?.running) await this.executor.stopInstance(
+            { hostId, instanceId: database.id }, Math.ceil(database.shutdown_timeout_ms / 1_000),
+          );
         } else if (
           database.lifecycle_state === "STOPPING" ||
           (database.lifecycle_state === "FAILED" && !database.runtime_retained) ||

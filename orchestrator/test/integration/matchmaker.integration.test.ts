@@ -504,6 +504,21 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     expect((await db.select().from(serverInstances).where(eq(serverInstances.id, instanceId)))[0]?.reservedCpu).toBe(1);
   });
 
+  test("an already offline host retries an instance transition that previously failed", async () => {
+    const { groupId, variantId } = await seedGroup();
+    await db.insert(serverInstances).values({ id: nanoid(), hostId: TEST_HOST_ID, groupId, variantId,
+      lifecycleState: "RUNNING", availabilityState: "OPEN", reservedCpu: 1, reservedMemoryBytes: 1024 });
+    await db.update(executionHosts).set({ healthState: "OFFLINE", lastHeartbeatAt: new Date(0),
+      lastControlContactAt: new Date(0), createdAt: new Date(0) }).where(eq(executionHosts.id, TEST_HOST_ID));
+    let attempts = 0;
+    const reconciler = new Reconciler(db, { listManagedInstances: async () => { throw Error("offline"); } } as unknown as Executor,
+      { failInstance: async () => { attempts += 1; if (attempts === 1) throw Error("temporary SQL failure"); return true; } } as unknown as InstanceController,
+      new HostService(db), mockLogger, 1);
+    await reconciler.tick();
+    await reconciler.tick();
+    expect(attempts).toBe(2);
+  });
+
   test("a legacy session receives a deadline when its instance fails", async () => {
     const { groupId, variantId } = await seedGroup();
     const instanceId = nanoid();
