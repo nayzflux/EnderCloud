@@ -26,13 +26,15 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicLong;
+
 
 public final class EnderCloudPaperPlugin extends JavaPlugin
         implements Listener, EnderCloudPaperApi {
-    private final AtomicReference<SessionAssignment> assignment = new AtomicReference<>();
-    private final AtomicInteger acknowledgedRevision = new AtomicInteger();
+    private final AssignmentTracker assignment = new AssignmentTracker();
+    private final AtomicLong assignmentRequest = new AtomicLong();
+    private final AtomicBoolean assignmentRefreshInProgress = new AtomicBoolean();
+    private volatile boolean shuttingDown;
     private final AtomicBoolean serverReadyAcknowledged = new AtomicBoolean();
     private EnderCloudClient orchestrator;
     private String instanceId;
@@ -80,6 +82,7 @@ public final class EnderCloudPaperPlugin extends JavaPlugin
 
     @Override
     public void onDisable() {
+        shuttingDown = true;
         getServer().getServicesManager().unregisterAll(this);
         if (orchestrator != null) orchestrator.close();
     }
@@ -193,37 +196,19 @@ public final class EnderCloudPaperPlugin extends JavaPlugin
     }
 
     private void refreshAssignment() {
-        orchestrator.getAssignment(instanceId)
-                .thenAccept(optional -> {
-                    if (optional.isEmpty()) {
-                        assignment.set(null);
-                        acknowledgedRevision.set(0);
-                        return;
-                    }
-                    SessionAssignment next = optional.orElseThrow();
-                    assignment.set(next);
-                    if (acknowledgedRevision.get() >= next.revision()) return;
-                    orchestrator.acknowledgeAssignment(instanceId, next.revision())
-                            .thenAccept(acknowledged -> {
-                                if (acknowledged) {
-                                    acknowledgedRevision.accumulateAndGet(
-                                            next.revision(),
-                                            Math::max
-                                    );
-                                }
-                            })
-                            .exceptionally(error -> {
-                                getLogger().warning(
-                                        "Unable to acknowledge assignment: "
-                                                + error.getMessage()
-                                );
-                                return null;
-                            });
-                })
-                .exceptionally(error -> {
-                    getLogger().warning("Unable to refresh assignment: " + error.getMessage());
-                    return null;
-                });
+        if (shuttingDown || !assignmentRefreshInProgress.compareAndSet(false, true)) return;
+        long request = assignmentRequest.incrementAndGet();
+        orchestrator.getAssignment(instanceId).thenCompose(optional -> {
+            if (shuttingDown || !assignment.accept(request, optional)) return CompletableFuture.completedFuture(null);
+            SessionAssignment next = optional.orElse(null);
+            if (next == null || assignment.isAcknowledged(next)) return CompletableFuture.completedFuture(null);
+            return orchestrator.acknowledgeAssignment(instanceId, next.revision()).thenAccept(acknowledged -> {
+                if (acknowledged && !shuttingDown) assignment.acknowledge(next);
+            });
+        }).whenComplete((ignored, error) -> {
+            assignmentRefreshInProgress.set(false);
+            if (error != null && !shuttingDown) getLogger().warning("Unable to refresh assignment: " + error.getMessage());
+        });
     }
 
     private void publish(PaperEvent event) {
