@@ -1,3 +1,4 @@
+import type {SqlRow} from "../../db/client.ts";
 import type { QueueParty,SessionState } from "@endercloud/contracts/domain";
 import { nanoid } from "@endercloud/runtime/id";
 import type { Logger } from "@endercloud/runtime/logger";
@@ -118,9 +119,9 @@ export class Matchmaker {
   // One PostgreSQL advisory lock serializes every logical worker for this mode.
   private async processGroup(group: GroupRow): Promise<void> {
     await this.db.transaction(async (tx: Transaction) => {
-      const locks = (await tx.execute(sql`
+      const locks = (await tx.execute<SqlRow<{ locked: boolean }>>(sql`
         SELECT pg_try_advisory_xact_lock(hashtextextended(${group.id}, 0)) AS locked
-      `)) as unknown as { locked: boolean }[];
+      `));
       if (!locks[0]?.locked) return;
 
       const sessions = (await this.loadSessions(tx, group.id)).filter((session) =>
@@ -151,7 +152,7 @@ export class Matchmaker {
         }
       }
 
-      const queue = (await tx.execute(sql`
+      const queue = (await tx.execute<SqlRow<QueueRow>>(sql`
         WITH locked_entries AS (
           SELECT q.id, q.party_id, q.joined_at
           FROM queue_entries q
@@ -166,7 +167,7 @@ export class Matchmaker {
         JOIN queue_entry_players qp ON qp.queue_entry_id = q.id
         GROUP BY q.id, q.party_id, q.joined_at
         ORDER BY q.joined_at, q.id
-      `)) as unknown as QueueRow[];
+      `));
 
       for (const party of this.toParties(queue)) {
         let session = this.chooseSession(sessions, party, group);
@@ -272,15 +273,7 @@ export class Matchmaker {
         ),
       )
       .orderBy(asc(gameSessions.createdAt), asc(gameSessions.id))
-      .for("update", { of: gameSessions })) as unknown as {
-      id: string;
-      state: SessionCandidate["state"];
-      instance_id: string | null;
-      endpoint: string | null;
-      created_at: Date;
-      instance_acquisition_deadline: Date | null;
-      lobby_stale_deadline: Date | null;
-    }[];
+      .for("update", { of: gameSessions }));
     const sizes = rows.length === 0
       ? []
       : (await tx
@@ -300,14 +293,13 @@ export class Matchmaker {
             sessionPlayers.sessionId,
             sql`${sessionPlayers.queueEntryId}`,
           )
-          .orderBy(asc(sessionPlayers.sessionId))) as unknown as {
-            session_id: string;
-            ticket_id: string;
-            player_count: number;
-          }[];
-    return rows.map((row) => ({
+          .orderBy(asc(sessionPlayers.sessionId)));
+    return rows.map((row) => {
+      const state = row.state;
+      if (state !== "FORMING" && state !== "WAITING_FOR_INSTANCE" && state !== "TRANSFERRING" && state !== "WAITING") throw new Error("Unexpected session state in matchmaking candidate query");
+      return {
       id: row.id,
-      state: row.state,
+      state,
       instanceId: row.instance_id,
       endpoint: row.endpoint,
       createdAt: new Date(row.created_at),
@@ -320,7 +312,7 @@ export class Matchmaker {
       lobbyStaleDeadline: row.lobby_stale_deadline
         ? new Date(row.lobby_stale_deadline)
         : null,
-    }));
+    }; });
   }
 
   private acceptsTicketsBeforeStaleDeadline(session: SessionCandidate): boolean {
@@ -498,9 +490,9 @@ export class Matchmaker {
       )
       .orderBy(asc(serverInstances.runningAt), asc(serverInstances.id))
       .limit(1)
-      .for("update", { skipLocked: true })) as unknown as Reservation[];
+      .for("update", { skipLocked: true }));
     const reservation = reservations[0];
-    if (!reservation) return null;
+    if (!reservation?.endpoint) return null;
     const claimed = await tx.update(serverInstances)
       .set({
         availabilityState: "RESERVED",
@@ -516,7 +508,7 @@ export class Matchmaker {
         ),
       )
       .returning({ id: serverInstances.id });
-    return claimed.length > 0 ? reservation : null;
+    return claimed.length > 0 ? {id: reservation.id, endpoint: reservation.endpoint} : null;
   }
 
   private async startSessionTransfers(

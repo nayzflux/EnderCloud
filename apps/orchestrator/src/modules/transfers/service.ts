@@ -1,4 +1,5 @@
 import { ApplicationError } from "@endercloud/contracts/errors";
+import type { TransferIntent } from "@endercloud/contracts/domain";
 import { nanoid } from "@endercloud/runtime/id";
 import type { Logger } from "@endercloud/runtime/logger";
 import { and,asc,eq,gt,inArray,lte,sql } from "drizzle-orm";
@@ -6,25 +7,12 @@ import type { Database,Transaction } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import type { RedisEventBus } from "../../events/redis-bus.ts";
 
-export interface TransferPayload {
-  readonly instanceId: string;
-  readonly endpoint: string;
-  readonly players: readonly string[];
-  readonly sourceInstanceId?: string;
-  readonly reason?: "SESSION_CANCELLED";
-  readonly commandId?: string;
-}
+export type TransferPayload = TransferIntent;
 
 interface TransferCommandRow {
   id: string;
   expiresAt: Date;
-  payload: {
-    instanceId: string;
-    endpoint: string;
-    players: string[];
-    sourceInstanceId?: string;
-    reason?: "SESSION_CANCELLED";
-  };
+  payload: TransferIntent;
 }
 
 export class TransferService {
@@ -136,7 +124,7 @@ export class TransferService {
         )
         // Preserve command order so older player moves are retried first.
         .orderBy(asc(schema.transferCommands.createdAt))
-        .limit(100)) as unknown as TransferCommandRow[];
+        .limit(100));
       const receipts = commands.length === 0 ? [] : await this.db
         .select({
           commandId: schema.transferCommandPlayers.commandId,
@@ -216,7 +204,7 @@ export class TransferService {
       .returning({
         id: schema.transferCommands.id,
         instance_id: schema.transferCommands.instanceId,
-      })) as unknown as { id: string; instance_id: string }[];
+      }));
     // Emit one warning per command so operators can identify the affected destination.
     for (const command of expired) {
       this.logger.warn("transfer.command.expired", "Transfer command expired", {

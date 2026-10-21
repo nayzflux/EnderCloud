@@ -5,7 +5,7 @@ import { migrateDatabase } from "../../src/db/migrate.ts";
 import { createAuth, authHttpHandler } from "../../src/security/auth.ts";
 import { createAdministrator } from "../../src/security/cli.ts";
 
-const container = await new PostgreSqlContainer("postgres:15-alpine").start();
+const container = await new PostgreSqlContainer("postgres:18.1-alpine").start();
 const database = createDatabase(container.getConnectionUri());
 let server: ReturnType<typeof Bun.serve> | undefined;
 let closing: Promise<void> | undefined;

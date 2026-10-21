@@ -79,7 +79,7 @@ export class VariantSelector {
         serverGroupVariants.selectionWeight,
         variantStartStates.state,
         variantStartStates.nextRetryAt,
-      )) as unknown as VariantRow[];
+      ));
 
     if (rows.length === 0) return null;
 

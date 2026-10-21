@@ -50,7 +50,8 @@ export function createAgentApp(
     })
     .onError(({ request, error, code, set }) => {
       const message = error instanceof Error ? error.message : String(error);
-      set.status = error instanceof ApplicationError ? error.status : code === "NOT_FOUND" ? 404 : code === "VALIDATION" || code === "PARSE" ? 400 : 500;
+      const infrastructure = typeof error === "object" && error !== null && "code" in error && ["ENOSPC", "EROFS", "EACCES", "ECONNREFUSED", "ECONNRESET", "ENOENT"].includes(String(error.code));
+      set.status = error instanceof ApplicationError ? error.status : infrastructure ? 503 : code === "NOT_FOUND" ? 404 : code === "VALIDATION" || code === "PARSE" ? 400 : 500;
       const context = contextFor(request);
       const requestId = context.requestId;
       context.requestError = error;

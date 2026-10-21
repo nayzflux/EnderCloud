@@ -1,3 +1,4 @@
+import type {SqlRow} from "../../db/client.ts";
 import type {
 DashboardMonitoringAlert,
 DashboardMonitoringSeries,
@@ -135,7 +136,7 @@ export class MonitoringService {
 
   public async getSummary(): Promise<DashboardMonitoringSummary> {
     const [tpsRows, startupRows] = await Promise.all([
-      this.db.execute(sql<TpsAlertRow>`
+      this.db.execute<SqlRow<TpsAlertRow>>(sql<TpsAlertRow>`
         WITH latest AS (
           SELECT DISTINCT ON (metrics.group_id, metrics.variant_id)
             metrics.group_id,
@@ -155,8 +156,8 @@ export class MonitoringService {
         SELECT group_id, variant_id, value, observed_at
         FROM latest
         WHERE value < ${TPS_ALERT_THRESHOLD}
-      `) as unknown as Promise<TpsAlertRow[]>,
-      this.db.execute(sql<StartupAlertRow>`
+      `),
+      this.db.execute<SqlRow<StartupAlertRow>>(sql<StartupAlertRow>`
         SELECT
           instances.group_id,
           instances.variant_id,
@@ -176,7 +177,7 @@ export class MonitoringService {
         GROUP BY instances.group_id, instances.variant_id, groups.startup_timeout_ms
         HAVING avg(extract(epoch FROM (instances.running_at - instances.starting_at)) * 1000)
           > groups.startup_timeout_ms * ${STARTUP_ALERT_RATIO}::double precision
-      `) as unknown as Promise<StartupAlertRow[]>,
+      `),
     ]);
 
     const alerts: DashboardMonitoringAlert[] = [
@@ -233,7 +234,7 @@ export class MonitoringService {
     const generatedAtIso = generatedAt.toISOString();
 
     const [startupRows, tpsRows] = await Promise.all([
-      this.db.execute(sql<StartupPointRow>`
+      this.db.execute<SqlRow<StartupPointRow>>(sql<StartupPointRow>`
         WITH points AS (
           SELECT generate_series(
             ${rangeStartIso}::timestamptz,
@@ -259,8 +260,8 @@ export class MonitoringService {
         GROUP BY variants.variant_id, points.at
         HAVING count(instances.id) > 0
         ORDER BY variants.variant_id, points.at
-      `) as unknown as Promise<StartupPointRow[]>,
-      this.db.execute(sql<TpsPointRow>`
+      `),
+      this.db.execute<SqlRow<TpsPointRow>>(sql<TpsPointRow>`
         SELECT
           metrics.variant_id,
           to_timestamp(
@@ -277,7 +278,7 @@ export class MonitoringService {
           AND metrics.bucket_at <= ${generatedAtIso}::timestamptz
         GROUP BY metrics.variant_id, at
         ORDER BY metrics.variant_id, at
-      `) as unknown as Promise<TpsPointRow[]>,
+      `),
     ]);
 
     const startupByVariant = new Map<string, DashboardMonitoringSeries["variants"][number]["startup"] extends readonly (infer T)[] ? T[] : never>();

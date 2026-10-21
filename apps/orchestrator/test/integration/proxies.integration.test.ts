@@ -32,7 +32,7 @@ const creates: InstanceSpec[] = [];
 const registry: { type: string; payload: unknown }[] = [];
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("postgres:15-alpine").start();
+  container = await new PostgreSqlContainer("postgres:18.1-alpine").start();
   const uri = container.getConnectionUri();
   await migrateDatabase(uri);
   database = createDatabase(uri);

@@ -22,10 +22,8 @@ let db: ReturnType<typeof createDatabase>["db"];
 
 describe("dashboard host reporting", () => {
   beforeAll(async () => {
-    const uri = process.env.TEST_DATABASE_URL ?? await (async () => {
-      container = await new PostgreSqlContainer("postgres:15-alpine").start();
-      return container.getConnectionUri();
-    })();
+    container = await new PostgreSqlContainer("postgres:18.1-alpine").start();
+    const uri = container.getConnectionUri();
     await migrateDatabase(uri);
     const client = createDatabase(uri);
     sqlClient = client.sql;

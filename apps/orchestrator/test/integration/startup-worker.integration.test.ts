@@ -74,11 +74,11 @@ async function seedBase(): Promise<void> {
   await db.insert(templateLayers).values({
     id: variantId,
     templatePath: "none",
-    checksum: "checksum",
+    checksum: "a".repeat(64),
     runtimePatch: runtime,
     fileSummary: { fileCount: 0, totalBytes: 0, roots: [] },
   });
-  await db.insert(serverVariants).values({ id: variantId, revision: 1, checksum: "checksum", runtimeSpec: runtime });
+  await db.insert(serverVariants).values({ id: variantId, revision: 1, checksum: "a".repeat(64), runtimeSpec: runtime });
   await db.insert(serverVariantLayers).values({ variantId, layerId: variantId, ordinal: 0 });
   await db.insert(serverGroupVariants).values({ groupId, variantId, enabled: true, selectionWeight: 100 });
   await db.insert(executionHosts).values({
@@ -116,7 +116,7 @@ async function seedCreates(count: number, state: "PENDING" | "RUNNING" = "PENDIN
       operation: "CREATE",
       payload: { version: 1, instanceType: "paper", variantRevision: 1, variantChecksum: "checksum",
         runtime: { image: "itzg/minecraft-server:java25", cpu: 1, memoryBytes: 1024 ** 3, environment: {} },
-        templateLayers: [{ id: variantId, checksum: "checksum" }] },
+        templateLayers: [{ id: variantId, checksum: "a".repeat(64) }] },
       state,
       createdAt: new Date(createdAt + index * 100),
       ...(state === "RUNNING" ? { startedAt: new Date() } : {}),
@@ -126,10 +126,8 @@ async function seedCreates(count: number, state: "PENDING" | "RUNNING" = "PENDIN
 
 describe("durable instance startup", () => {
   beforeAll(async () => {
-    const uri = process.env.TEST_DATABASE_URL ?? await (async () => {
-      container = await new PostgreSqlContainer("postgres:15-alpine").start();
-      return container.getConnectionUri();
-    })();
+    container = await new PostgreSqlContainer("postgres:18.1-alpine").start();
+    const uri = container.getConnectionUri();
     await migrateDatabase(uri);
     const client = createDatabase(uri);
     sqlClient = client.sql;
@@ -321,10 +319,10 @@ describe("durable instance startup", () => {
     expect(received).toHaveLength(1);
     expect(received[0]?.runtime.memoryBytes).toBe(1024 ** 3);
     expect(received[0]?.runtime.cpu).toBe(1);
-    expect(received[0]?.templateLayers[0]?.checksum).toBe("checksum");
+    expect(received[0]?.templateLayers[0]?.checksum).toBe("a".repeat(64));
   });
 
-  test("a frozen CREATE fails safely when its template content is no longer available", async () => {
+  test.each(["changed-layer", "disabled-group", "invalid-runtime"])("a frozen CREATE is refused for %s", async (cause) => {
     let createCalls = 0;
     const executor = {
       createInstance: async () => {
@@ -347,8 +345,10 @@ describe("durable instance startup", () => {
     const command = await db.select({ id: commands.id })
       .from(commands)
       .where(eq(commands.instanceId, instanceId!));
-    await db.update(templateLayers).set({ checksum: "changed-layer" })
+    if (cause === "changed-layer") await db.update(templateLayers).set({ checksum: "changed-layer" })
       .where(eq(templateLayers.id, variantId));
+    if (cause === "disabled-group") await db.update(serverGroups).set({ enabled: false }).where(eq(serverGroups.id, groupId));
+    if (cause === "invalid-runtime") await db.update(commands).set({ payload: { version: 1, runtime: { cpu: -1 } } }).where(eq(commands.id, command[0]!.id));
 
     await controller.executeCreate(instanceId!, command[0]!.id);
 

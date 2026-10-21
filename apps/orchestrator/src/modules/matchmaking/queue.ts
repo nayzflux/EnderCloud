@@ -1,3 +1,4 @@
+import type {SqlRow} from "../../db/client.ts";
 import { ApplicationError } from "@endercloud/contracts/errors";
 import { nanoid } from "@endercloud/runtime/id";
 import { and,desc,eq,inArray,isNull,notInArray,or,sql } from "drizzle-orm";
@@ -142,7 +143,7 @@ export class QueueService {
             )
           );
 
-        const conflicts = await tx.execute(sql`SELECT EXISTS (${queueConflicts}) OR EXISTS (${sessionConflicts}) AS exists`) as unknown as { exists: boolean }[];
+        const conflicts = await tx.execute<SqlRow<{ exists: boolean }>>(sql`SELECT EXISTS (${queueConflicts}) OR EXISTS (${sessionConflicts}) AS exists`);
         if (conflicts[0]?.exists) throw new ApplicationError("CONFLICT", 409, `Player ${playerId} is already matchmaking`);
       }
       // Create the parent before membership rows; the transaction hides partial parties.
@@ -303,12 +304,12 @@ export class QueueService {
     const session = sessionRows[0];
     if (!session) return;
 
-    const sizes = (await tx.execute(sql`
+    const sizes = (await tx.execute<SqlRow<{ size: number }>>(sql`
       SELECT count(*)::integer AS size
       FROM session_players
       WHERE session_id = ${sessionId} AND state <> 'LEFT'
       GROUP BY queue_entry_id
-    `)) as unknown as { size: number }[];
+    `));
     const ticketSizes = sizes.map((row) => Number(row.size));
     const playerCount = ticketSizes.reduce((sum, size) => sum + size, 0);
     const profiles = computeFeasibleProfiles(

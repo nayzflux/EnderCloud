@@ -237,6 +237,15 @@ describe("configuration", () => {
     ).toThrow();
   });
 
+  test("image references distinguish registry ports, explicit tags and valid digests", () => {
+    for (const image of ["alpine", "registry.example:5000/server", "server@sha256:invalid", "https://registry.example/server:1"]) {
+      expect(() => parseVariant({id: "image-check", docker: {image}}, "variant.yml")).toThrow();
+    }
+    for (const image of ["registry.example:5000/server:1.2.3", `server@sha256:${"a".repeat(64)}`]) {
+      expect(parseVariant({id: "image-check", docker: {image}}, "variant.yml").runtime.image).toBe(image);
+    }
+  });
+
   test("serializes JSONB values before binding them", () => {
     const serialized = jsonParameter({
       image: "itzg/minecraft-server:java25",

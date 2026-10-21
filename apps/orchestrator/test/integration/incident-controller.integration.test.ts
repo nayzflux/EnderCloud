@@ -93,10 +93,8 @@ async function seedHost(id = "incident-host", cpu = 16) {
 
 describe("persistent operational incidents", () => {
   beforeAll(async () => {
-    const uri = process.env.TEST_DATABASE_URL ?? await (async () => {
-      container = await new PostgreSqlContainer("postgres:15-alpine").start();
-      return container.getConnectionUri();
-    })();
+    container = await new PostgreSqlContainer("postgres:18.1-alpine").start();
+    const uri = container.getConnectionUri();
     await migrateDatabase(uri);
     const client = createDatabase(uri);
     sqlClient = client.sql;
@@ -187,7 +185,7 @@ describe("persistent operational incidents", () => {
     await db.insert(transferCommands).values(instanceIds.map((instanceId, index) => ({
       id: `expired-transfer-${index}`,
       instanceId,
-      payload: { players: [] },
+      payload: { instanceId, endpoint: "127.0.0.1:25565", players: [] },
       state: "EXPIRED",
       attempts: 2,
       expiresAt: new Date(Date.now() - 1_000),

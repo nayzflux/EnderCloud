@@ -1,11 +1,22 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { AgentExecutor } from "../../src/executor/agent-executor.ts";
-import { ExecutionHostUnavailableError } from "@endercloud/contracts/executor";
+import { ExecutionHostUnavailableError, ExecutionCommandSupersededError } from "@endercloud/contracts/executor";
 import { Logger } from "@endercloud/runtime/logger";
 import type { HostService } from "../../src/modules/hosts/service.ts";
 
 afterEach(() => {
   mock.restore();
+});
+
+test("agent authentication and infrastructure failures do not become variant failures", async () => {
+  const hosts = {getTarget: async () => ({controlUrl: "http://agent"}), recordControlSuccess: async () => {}, recordControlFailure: async () => {}} as unknown as HostService;
+  const executor = new AgentExecutor(hosts, {probeTimeoutMs: 1000, operationTimeoutMs: 1000});
+  for (const status of [401, 403, 503]) {
+    spyOn(globalThis, "fetch").mockImplementation((async () => new Response(null, {status})) as unknown as typeof fetch);
+    await expect(executor.listManagedInstances("host-one")).rejects.toBeInstanceOf(ExecutionHostUnavailableError);
+  }
+  spyOn(globalThis, "fetch").mockImplementation((async () => Response.json({error: "STALE_OPERATION"}, {status: 409})) as unknown as typeof fetch);
+  await expect(executor.listManagedInstances("host-one")).rejects.toBeInstanceOf(ExecutionCommandSupersededError);
 });
 
 test("agent executor propagates request and command context headers", async () => {

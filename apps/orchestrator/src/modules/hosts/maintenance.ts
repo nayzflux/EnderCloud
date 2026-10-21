@@ -67,7 +67,7 @@ export class HostMaintenanceController {
         eq(serverInstances.hostId, hostId),
         ne(serverInstances.lifecycleState, "STOPPED"),
       ))
-      .groupBy(serverInstances.id, gameSessions.id)) as unknown as MaintenanceInstance[];
+      .groupBy(serverInstances.id, gameSessions.id));
 
     if (assigned.length === 0) {
       await this.hosts.markMaintenance(hostId);

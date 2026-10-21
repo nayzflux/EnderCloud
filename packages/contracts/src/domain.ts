@@ -194,6 +194,14 @@ export interface ServerSnapshot {
   readonly maximumPlayers: number;
 }
 
+export interface TransferIntent {
+  readonly instanceId: string;
+  readonly endpoint: string;
+  readonly players: readonly string[];
+  readonly sourceInstanceId?: string;
+  readonly reason?: "SESSION_CANCELLED";
+}
+
 export interface TpsSnapshot {
   readonly oneMinute: number;
   readonly fiveMinutes: number;

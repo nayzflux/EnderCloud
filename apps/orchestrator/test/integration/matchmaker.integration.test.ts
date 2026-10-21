@@ -141,10 +141,8 @@ async function seedGroup() {
 
 describe("Matchmaker Integration (Section 2 & 3)", () => {
   beforeAll(async () => {
-    const uri = process.env.TEST_DATABASE_URL ?? await (async () => {
-      container = await new PostgreSqlContainer("postgres:15-alpine").start();
-      return container.getConnectionUri();
-    })();
+    container = await new PostgreSqlContainer("postgres:18.1-alpine").start();
+    const uri = container.getConnectionUri();
     
     await migrateDatabase(uri);
     
@@ -1886,7 +1884,7 @@ describe("Matchmaker Integration (Section 2 & 3)", () => {
     const commands = await db.select().from(transferCommands);
     expect(commands).toHaveLength(3);
     const routed = commands
-      .map((command) => command.payload as { instanceId: string; players: string[] })
+      .map((command) => command.payload)
       .filter((payload) => playerIds.some((playerId) => payload.players.includes(playerId)));
     expect(routed).toHaveLength(2);
     expect(routed.every((payload) => payload.instanceId !== overloadedInstanceId)).toBeTrue();

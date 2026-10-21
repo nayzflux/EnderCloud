@@ -1,11 +1,8 @@
+import {createCommandSchema, type CreateCommandPayload} from "./create-spec.ts";
 import { ApplicationError } from "@endercloud/contracts/errors";
-import type {
-InstanceType,
-ServerSnapshot,
-VariantRuntimeSpec
-} from "@endercloud/contracts/domain";
+import type {ServerSnapshot} from "@endercloud/contracts/domain";
 import type { Executor } from "@endercloud/contracts/executor";
-import { ExecutionHostUnavailableError } from "@endercloud/contracts/executor";
+import { ExecutionHostUnavailableError, ExecutionCommandSupersededError } from "@endercloud/contracts/executor";
 import { nanoid } from "@endercloud/runtime/id";
 import type { Logger } from "@endercloud/runtime/logger";
 import { and,asc,desc,eq,inArray,isNotNull,sql } from "drizzle-orm";
@@ -15,6 +12,7 @@ commands,
 events,
 gameSessions,
 registryState,
+apikey,
 serverGroups,
 serverGroupVariants,
 serverInstances,
@@ -31,55 +29,6 @@ import type { HubRouter } from "../routing/hubs.ts";
 import type { TransferService } from "../transfers/service.ts";
 import type { VariantStartController } from "./start-policy.ts";
 import type { VariantSelector } from "./variant-selector.ts";
-
-interface CreateRow {
-  id: string;
-  host_id: string;
-  group_id: string;
-  variant_id: string;
-  session_id: string | null;
-  variant_revision: number;
-  reserved_cpu: number | null;
-  reserved_memory_bytes: number | null;
-  command_payload: unknown;
-}
-
-interface CreateCommandPayload {
-  readonly instanceType: InstanceType;
-  readonly version: 1;
-  readonly variantRevision: number;
-  readonly variantChecksum: string;
-  readonly runtime: VariantRuntimeSpec;
-  readonly templateLayers: readonly { readonly id: string; readonly checksum: string }[];
-}
-
-function isCreateCommandPayload(value: unknown): value is CreateCommandPayload {
-  if (typeof value !== "object" || value === null) return false;
-  const candidate = value as Partial<CreateCommandPayload>;
-  return candidate.version === 1 &&
-    (candidate.instanceType === "paper" || candidate.instanceType === "proxy") &&
-    Number.isInteger(candidate.variantRevision) &&
-    typeof candidate.variantChecksum === "string" &&
-    typeof candidate.runtime?.image === "string" &&
-    typeof candidate.runtime?.cpu === "number" &&
-    typeof candidate.runtime?.memoryBytes === "number" &&
-    Array.isArray(candidate.templateLayers) &&
-    candidate.templateLayers.length > 0 &&
-    candidate.templateLayers.every((layer) =>
-      typeof layer.id === "string" && typeof layer.checksum === "string"
-    );
-}
-
-interface StopRow {
-  id: string;
-  host_id: string;
-  shutdown_timeout_ms: number;
-}
-
-interface ReadyRow extends ServerSnapshot {
-  readonly replacesInstanceId: string | null;
-  readonly replacementReason: string | null;
-}
 
 import { PaperEvents } from "../sessions/paper-events.ts";
 
@@ -367,9 +316,10 @@ export class InstanceController {
         reserved_cpu: serverInstances.reservedCpu,
         reserved_memory_bytes: serverInstances.reservedMemoryBytes,
         command_payload: commands.payload,
+        group_enabled: serverGroups.enabled,
       })
       .from(serverInstances)
-      .innerJoin(serverVariants, eq(serverVariants.id, serverInstances.variantId))
+      .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
       .innerJoin(commands, eq(commands.instanceId, serverInstances.id))
       .where(
         and(
@@ -378,7 +328,7 @@ export class InstanceController {
           inArray(serverInstances.lifecycleState, ["CREATING", "STARTING"])
         )
       );
-    const row = rows[0] as unknown as CreateRow;
+    const row = rows[0];
     if (!row) {
       await this.db.update(commands).set({
         state: "FAILED",
@@ -387,9 +337,13 @@ export class InstanceController {
       }).where(eq(commands.id, commandId));
       return;
     }
-    const frozen = isCreateCommandPayload(row.command_payload)
-      ? row.command_payload
-      : null;
+    if (!row.host_id) {
+      await this.failInstance(instanceId, "MISSING_EXECUTION_HOST");
+      await this.db.update(commands).set({state: "FAILED", completedAt: sql`now()`, lastError: "Instance has no execution host"}).where(eq(commands.id, commandId));
+      return;
+    }
+    const snapshot = createCommandSchema.safeParse(row.command_payload);
+    const frozen = snapshot.success ? snapshot.data : null;
     const availableLayers = frozen ? await this.db.select({
       id: templateLayers.id,
       checksum: templateLayers.checksum,
@@ -398,7 +352,7 @@ export class InstanceController {
       .where(inArray(templateLayers.id, frozen.templateLayers.map((layer) => layer.id))) : [];
     const layerChecksums = new Map(availableLayers.map((layer) => [layer.id, layer.checksum]));
     if (
-      !frozen ||
+      !row.group_enabled || !frozen ||
       (frozen && (
         frozen.variantRevision !== row.variant_revision ||
         frozen.runtime.cpu !== row.reserved_cpu ||
@@ -417,7 +371,7 @@ export class InstanceController {
         await tx.update(serverInstances).set({
           lifecycleState: "FAILED",
           failedAt: sql`now()`,
-          failureReason: "OBSOLETE_CREATE",
+          failureReason: row.group_enabled ? "OBSOLETE_CREATE" : "GROUP_DISABLED",
           updatedAt: sql`now()`,
         }).where(and(
           eq(serverInstances.id, instanceId),
@@ -500,7 +454,7 @@ export class InstanceController {
       }).where(eq(commands.id, commandId));
       const reason = error instanceof ExecutionHostUnavailableError
         ? "HOST_OFFLINE"
-        : "CREATE_FAILED";
+        : error instanceof ExecutionCommandSupersededError ? "OBSOLETE_CREATE" : "CREATE_FAILED";
       await this.failInstance(instanceId, reason, { error: message });
       const failureFields = {
         instanceId,
@@ -571,7 +525,7 @@ export class InstanceController {
         maximumPlayers: sql<number>`COALESCE(${serverGroups.maximumPlayersPerInstance}, ${serverGroups.maximumPlayers}, 0)`,
         replacesInstanceId: serverInstances.replacesInstanceId,
         replacementReason: serverInstances.replacementReason,
-      })) as unknown as ReadyRow[];
+      }));
       if (rows[0]) {
         await this.startPolicy?.markReady(instanceId, tx);
         if (rows[0].groupType !== "proxy") await enqueueRegistryEvent(tx, "SERVER_REGISTERED", rows[0]);
@@ -637,7 +591,7 @@ export class InstanceController {
           isNotNull(serverInstances.replacesInstanceId),
         ),
       )
-      .limit(1)) as unknown as ReadyRow[];
+      .limit(1));
     const replacement = replacements[0];
     if (!replacement?.replacesInstanceId) return false;
 
@@ -761,7 +715,7 @@ export class InstanceController {
         id: serverInstances.id,
         host_id: serverInstances.hostId,
         shutdown_timeout_ms: serverGroups.shutdownTimeoutMs,
-      }) as unknown as StopRow[];
+      });
     const row = rows[0];
     if (!row) return;
     if (!row.host_id) throw new Error(`Instance ${instanceId} has no execution host`);
@@ -788,6 +742,8 @@ export class InstanceController {
             updatedAt: sql`now()`,
           })
           .where(eq(serverInstances.id, instanceId));
+        await tx.update(apikey).set({enabled: false}).where(sql`${apikey.id} IN (
+          SELECT auth_key_id FROM service_credentials WHERE principal_id = ${instanceId} AND kind IN ('paper', 'proxy'))`);
         await tx
           .update(commands)
           .set({ state: "SUCCEEDED", completedAt: sql`now()` })
@@ -848,7 +804,7 @@ export class InstanceController {
           isNotNull(serverInstances.endpoint),
         ),
       )
-      .limit(1)) as unknown as ServerSnapshot[];
+      .limit(1));
     if (!rows[0]) return;
     try {
       await this.publishRegistry("SERVER_UPDATED", rows[0]);

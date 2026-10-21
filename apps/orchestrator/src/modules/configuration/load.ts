@@ -61,8 +61,9 @@ export async function loadConfiguration(
     try {
       const descriptorStat = await stat(descriptor);
       if (!descriptorStat.isFile()) continue;
-    } catch {
-      continue;
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") continue;
+      throw error;
     }
     const variant = parseVariant(parse(await readFile(descriptor, "utf8")), descriptor);
     const inspected = await inspectTemplateDirectory(templatePath);

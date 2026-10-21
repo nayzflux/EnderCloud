@@ -1,5 +1,6 @@
 import type {
 TemplateFileSummary,
+TransferIntent,
 VariantRuntimePatch,
 VariantRuntimeSpec,
 } from "@endercloud/contracts/domain";
@@ -454,7 +455,7 @@ export const transferCommands = pgTable(
       .notNull()
       .references(() => serverInstances.id, { onDelete: "cascade" }),
     sessionId: text("session_id").references(() => gameSessions.id, { onDelete: "cascade" }),
-    payload: jsonb("payload").notNull(),
+    payload: jsonb("payload").$type<TransferIntent>().notNull(),
     state: text("state").notNull().default("PENDING"),
     attempts: integer("attempts").notNull().default(0),
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow().notNull(),

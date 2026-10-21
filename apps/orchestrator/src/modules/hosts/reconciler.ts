@@ -60,13 +60,13 @@ export class Reconciler {
           )`.as("startup_expired"),
         }).from(serverInstances)
           .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
-          .where(ne(serverInstances.lifecycleState, "STOPPED")) as unknown as Promise<InstanceRow[]>,
+          .where(ne(serverInstances.lifecycleState, "STOPPED")),
         this.db.select({
           id: executionHosts.id,
           last_heartbeat_at: executionHosts.lastHeartbeatAt,
           last_control_contact_at: executionHosts.lastControlContactAt,
           created_at: executionHosts.createdAt,
-        }).from(executionHosts) as unknown as Promise<HostRow[]>,
+        }).from(executionHosts),
       ]);
       const byHost = new Map<string, InstanceRow[]>();
       for (const instance of databaseInstances) {

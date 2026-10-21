@@ -112,7 +112,7 @@ export class SessionController {
     .from(gameSessions)
     .leftJoin(sessionPlayers, eq(sessionPlayers.sessionId, gameSessions.id))
     .where(inArray(gameSessions.state, ["WAITING_FOR_INSTANCE", "TRANSFERRING", "WAITING"]))
-    .groupBy(gameSessions.id) as unknown as SessionRow[];
+    .groupBy(gameSessions.id);
     // Evaluate each session from the same database snapshot of counts and deadline state.
     for (const session of sessions) {
       if (session.state === "WAITING_FOR_INSTANCE") {
@@ -276,14 +276,7 @@ export class SessionController {
     .where(and(
       eq(serverInstances.lifecycleState, "DRAINING"),
       inArray(serverGroups.type, ["hub", "minigame"]),
-    )) as unknown as
-      {
-        id: string;
-        type: "hub" | "minigame";
-        player_count: number;
-        session_state: SessionState | null;
-        due: boolean;
-      }[];
+    ));
     for (const instance of draining) {
       if (
         instance.type === "minigame" &&

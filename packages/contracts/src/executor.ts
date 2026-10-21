@@ -69,6 +69,10 @@ export class ExecutionHostUnavailableError extends Error {
   }
 }
 
+export class ExecutionCommandSupersededError extends Error {
+  public constructor(message: string) { super(message); this.name = "ExecutionCommandSupersededError"; }
+}
+
 export interface InstanceTarget {
   readonly hostId: string;
   readonly instanceId: string;

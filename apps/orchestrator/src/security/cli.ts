@@ -49,7 +49,12 @@ if (import.meta.main) {
         const values = await credentials.ensure("agent", identity, command === "agent:rotate");
         console.log(`AGENT_ID=${identity}\nAGENT_ORCHESTRATOR_TOKEN=${values.apiToken}\nAGENT_CONTROL_TOKEN=${values.controlToken}`);
       }
-    } else throw new Error("Commands: admin:create <email>, admin:reset, agent:provision|rotate <host> --stdout, agent:revoke <host>");
+    } else if (command === "instance:rotate" || command === "instance:revoke") {
+      if (!identity || !/^[A-Za-z0-9]{16}$/.test(identity)) throw new Error("A valid instance id is required");
+      const credentials = new Credentials(database.db, createAuth(database.db, config), config);
+      await credentials.retireInstance(identity, command === "instance:rotate" ? "CREDENTIAL_ROTATED" : "CREDENTIAL_REVOKED");
+      console.log("Instance credential revoked. The control plane will remove its runtime and restore configured capacity with a new identity.");
+    } else throw new Error("Commands: admin:create <email>, admin:reset, agent:provision|rotate <host> --stdout, agent:revoke <host>, instance:rotate|revoke <id>");
   } finally {
     await lock`SELECT pg_advisory_unlock(18523418)`.catch(() => {});
     lock.release();

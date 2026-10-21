@@ -1,3 +1,4 @@
+import type {SqlRow} from "../../db/client.ts";
 import type { DashboardIncidentPage } from "@endercloud/contracts/dashboard";
 import type {
 IncidentKind,
@@ -256,7 +257,7 @@ export class IncidentController {
   }
 
   private async detectCapacity(): Promise<Observation[]> {
-    const rows = await this.db.execute(sql<CapacityRow>`
+    const rows = await this.db.execute<SqlRow<CapacityRow>>(sql<CapacityRow>`
       WITH reservations AS (
         SELECT host_id, sum(reserved_cpu) AS cpu, sum(reserved_memory_bytes) AS memory
         FROM server_instances
@@ -301,7 +302,7 @@ export class IncidentController {
       FROM group_state state
       WHERE state.active_count < state.minimum_instances
         OR state.warm_ready + state.warm_pending < state.minimum_warm_instances
-    `) as unknown as CapacityRow[];
+    `);
     return rows.flatMap((row): Observation[] => {
       const requiredCpu = row.requested_cpu * row.needed_instance_count;
       const requiredMemoryBytes = Number(row.requested_memory_bytes) * row.needed_instance_count;
@@ -357,7 +358,7 @@ export class IncidentController {
   }
 
   private async detectInstanceFailures(): Promise<Observation[]> {
-    const rows = await this.db.execute(sql<FailureRow>`
+    const rows = await this.db.execute<SqlRow<FailureRow>>(sql<FailureRow>`
       SELECT group_id, variant_id, variant_revision, state,
         failure_count AS occurrence_count,
         last_failed_instance_id,
@@ -365,7 +366,7 @@ export class IncidentController {
         last_failure_at AS last_observed_at
       FROM variant_start_states
       WHERE state IN ('BACKING_OFF', 'PROBING', 'BLOCKED', 'RESETTING')
-    `) as unknown as FailureRow[];
+    `);
     return rows.map((row) => ({
       fingerprint: `instance-failure:${row.group_id}:${row.variant_id}:${row.variant_revision}`,
       kind: "INSTANCE_FAILURE_LOOP",
@@ -386,14 +387,14 @@ export class IncidentController {
   }
 
   private async detectHosts(): Promise<Observation[]> {
-    const rows = await this.db.execute(sql<HostRow>`
+    const rows = await this.db.execute<SqlRow<HostRow>>(sql<HostRow>`
       SELECT hosts.id, hosts.health_state, hosts.admin_state, hosts.last_error,
         count(instances.id) FILTER (WHERE instances.lifecycle_state <> 'STOPPED')::int AS assigned_count
       FROM execution_hosts hosts
       LEFT JOIN server_instances instances ON instances.host_id = hosts.id
       WHERE hosts.admin_state <> 'MAINTENANCE' AND hosts.health_state <> 'ONLINE'
       GROUP BY hosts.id
-    `) as unknown as HostRow[];
+    `);
     return rows.map((row) => ({
       fingerprint: `host-health:${row.id}`,
       kind: row.health_state === "OFFLINE" ? "HOST_UNAVAILABLE" : "HOST_RECOVERY_STUCK",
@@ -410,7 +411,7 @@ export class IncidentController {
   }
 
   private async detectMaintenance(): Promise<Observation[]> {
-    const rows = await this.db.execute(sql<MaintenanceRow>`
+    const rows = await this.db.execute<SqlRow<MaintenanceRow>>(sql<MaintenanceRow>`
       SELECT hosts.id AS host_id, array_agg(instances.id ORDER BY instances.created_at) AS blocked_instances
       FROM execution_hosts hosts
       JOIN server_instances instances ON instances.host_id = hosts.id
@@ -423,7 +424,7 @@ export class IncidentController {
             AND replacement.lifecycle_state IN ('CREATING','STARTING','RUNNING')
         )
       GROUP BY hosts.id
-    `) as unknown as MaintenanceRow[];
+    `);
     return rows.map((row) => ({
       fingerprint: `host-maintenance:${row.host_id}`,
       kind: "HOST_MAINTENANCE_BLOCKED",
@@ -438,7 +439,7 @@ export class IncidentController {
   }
 
   private async detectTransferFailures(): Promise<Observation[]> {
-    const rows = await this.db.execute(sql<AggregateFailureRow>`
+    const rows = await this.db.execute<SqlRow<AggregateFailureRow>>(sql<AggregateFailureRow>`
       SELECT instances.group_id, count(*)::int AS occurrence_count,
         array_agg(commands.id ORDER BY commands.completed_at DESC) AS affected_ids,
         max(commands.completed_at) AS last_observed_at
@@ -447,7 +448,7 @@ export class IncidentController {
       WHERE commands.state = 'EXPIRED'
         AND commands.completed_at >= now() - (${this.config.incidentFailureWindowMs} * interval '1 millisecond')
       GROUP BY instances.group_id HAVING count(*) >= ${this.config.incidentFailureThreshold}
-    `) as unknown as AggregateFailureRow[];
+    `);
     return rows.map((row) => ({
       fingerprint: `transfer-failure:${row.group_id}`,
       kind: "TRANSFER_FAILURE_LOOP",
@@ -463,7 +464,7 @@ export class IncidentController {
   }
 
   private async detectCommandFailures(): Promise<Observation[]> {
-    const rows = await this.db.execute(sql<AggregateFailureRow>`
+    const rows = await this.db.execute<SqlRow<AggregateFailureRow>>(sql<AggregateFailureRow>`
       SELECT instances.group_id, commands.operation, count(*)::int AS occurrence_count,
         array_agg(commands.id ORDER BY commands.completed_at DESC) AS affected_ids,
         max(commands.completed_at) AS last_observed_at
@@ -473,7 +474,7 @@ export class IncidentController {
         AND commands.completed_at >= now() - (${this.config.incidentFailureWindowMs} * interval '1 millisecond')
       GROUP BY instances.group_id, commands.operation
       HAVING count(*) >= ${this.config.incidentFailureThreshold}
-    `) as unknown as AggregateFailureRow[];
+    `);
     return rows.map((row) => ({
       fingerprint: `command-failure:${row.group_id}:${row.operation}`,
       kind: "COMMAND_FAILURE_LOOP",

@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { createDatabase } from "../../src/db/client.ts";
 import { acquireLeadership } from "../../src/db/leadership.ts";
 import { migrateDatabase } from "../../src/db/migrate.ts";
-import { serviceCredentials, apikey } from "../../src/db/schema.ts";
+import { serviceCredentials, apikey, serverGroups, templateLayers, serverVariants, serverInstances, registryOutbox } from "../../src/db/schema.ts";
 import { createAuth, authHttpHandler } from "../../src/security/auth.ts";
 import { createAuthorizer } from "../../src/security/authorize.ts";
 import { Credentials } from "../../src/security/credentials.ts";
@@ -20,7 +20,7 @@ let database: ReturnType<typeof createDatabase>;
 const config = { secret: "test-only-administrator-secret-32-bytes", encryptionKey: Buffer.alloc(32, 1), origin: "http://localhost:3000" };
 const password = "test-only-password-long-enough";
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("postgres:15-alpine").start();
+  container = await new PostgreSqlContainer("postgres:18.1-alpine").start();
   await migrateDatabase(container.getConnectionUri());
   database = createDatabase(container.getConnectionUri());
   await createAdministrator(database.db, config, "admin@example.test", password);
@@ -115,4 +115,23 @@ test("public sign-in rate limits repeated failures and exposes no key management
   }
   expect(statuses).toContain(429);
   expect(statuses).not.toContain(200);
+});
+
+test("Paper keys cannot control another instance; rotation retires the old identity atomically", async () => {
+  const runtime = {image: "alpine:3.22.1", cpu: 1, memoryBytes: 1024, environment: {}};
+  await database.db.insert(serverGroups).values({id: "security-hubs", type: "hub", maximumInstances: 1, maximumWarmInstances: 1,
+    startupTimeoutMs: 30_000, drainTimeoutMs: 30_000, cancelledDrainTimeoutMs: 1000, shutdownTimeoutMs: 1000, transferTimeoutMs: 10_000, playerStaleTimeoutMs: 30_000});
+  await database.db.insert(templateLayers).values({id: "security-layer", templatePath: "/test", checksum: "a".repeat(64), runtimePatch: {environment: {}}, fileSummary: {fileCount: 0, totalBytes: 0, roots: []}});
+  await database.db.insert(serverVariants).values({id: "security-layer", checksum: "a".repeat(64), revision: 1, runtimeSpec: runtime});
+  const id = "securityinst0001";
+  await database.db.insert(serverInstances).values({id, groupId: "security-hubs", variantId: "security-layer", lifecycleState: "STARTING", availabilityState: "OPEN"});
+  const auth = createAuth(database.db, config); const credentials = new Credentials(database.db, auth, config);
+  const token = (await credentials.ensure("paper", id)).apiToken; const authorize = createAuthorizer(database.db, auth);
+  const request = (resource: string) => new Request(`${config.origin}/api/v1/instances/${resource}/assignment`, {headers: {authorization: `Bearer ${token}`}});
+  await authorize(request(id));
+  await expect(authorize(request("securityinst0002"))).rejects.toMatchObject({status: 403});
+  await credentials.retireInstance(id, "CREDENTIAL_ROTATED");
+  await expect(authorize(request(id))).rejects.toMatchObject({status: 401});
+  expect((await database.db.select().from(serverInstances).where(eq(serverInstances.id, id)))[0]).toMatchObject({lifecycleState: "FAILED", failureReason: "CREDENTIAL_ROTATED"});
+  expect(await database.db.select().from(registryOutbox)).toHaveLength(1);
 });

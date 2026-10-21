@@ -19,3 +19,5 @@ export function createDatabase(databaseUrl: string) {
 
 export type Database = ReturnType<typeof createDatabase>["db"];
 export type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+/** Explicit result contract for SQL expressions that Drizzle cannot infer. */
+export type SqlRow<T extends object> = T & Record<string, unknown>;

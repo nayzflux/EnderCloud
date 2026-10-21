@@ -313,8 +313,10 @@ export function parseVariant(document: unknown, source: string): ServerVariantCo
   let image: string | undefined;
   if (docker.image !== undefined) {
     image = string(docker.image, `${source}.docker.image`);
-    const tag = image.includes("@sha256:") ? image.split("@sha256:")[1] : image.split(":").at(-1);
-    if (!tag || tag === "latest") {
+    const digest = /^[^\s@]+@sha256:[a-f0-9]{64}$/.test(image);
+    const colon = image.lastIndexOf(":");
+    const tag = colon > image.lastIndexOf("/") ? image.slice(colon + 1) : undefined;
+    if (/\s|\\|:\/\//.test(image) || (!digest && (!tag || tag === "latest" || !/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(tag) || image.includes("@")))) {
       throw new Error(`${source}.docker.image must use an explicit tag or digest`);
     }
   }

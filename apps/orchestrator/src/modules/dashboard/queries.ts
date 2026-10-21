@@ -672,7 +672,7 @@ export class DashboardService {
     return {
       hosts: hosts as HostRow[],
       groups: groups as GroupRow[], 
-      variants: variants as unknown as VariantRow[], 
+      variants: variants, 
       instances: instances as InstanceRow[], 
       sessions: sessions as SessionRow[], 
       queues: queues as QueueSummaryRow[],
