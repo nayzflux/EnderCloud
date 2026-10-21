@@ -1,14 +1,14 @@
-import { and, eq, gt, inArray, isNotNull, ne, sql } from "drizzle-orm";
-import type { Database } from "../db/client.ts";
+import { and,eq,gt,inArray,isNotNull,ne,sql } from "drizzle-orm";
+import type { Database,Transaction } from "../../db/client.ts";
 import {
-  instancePlayers,
-  executionHosts,
-  serverGroups,
-  serverInstances,
-  transferCommands,
-} from "../db/schema.ts";
-import type { TransferService } from "./transfer-service.ts";
-import { allocateHubPlayers } from "../domain/hub-routing.ts";
+executionHosts,
+instancePlayers,
+serverGroups,
+serverInstances,
+transferCommands,
+} from "../../db/schema.ts";
+import { allocateHubPlayers } from "../../domain/hub-routing.ts";
+import type { TransferService } from "../transfers/service.ts";
 
 export interface HubTransferResult {
   readonly acceptedPlayers: readonly string[];
@@ -53,7 +53,7 @@ export class HubRouter {
       return { acceptedPlayers: [], rejectedPlayers: [] };
     }
 
-    return this.db.transaction(async (tx: any) => {
+    return this.db.transaction(async (tx: Transaction) => {
       // Serialize every hub-routing decision so concurrent calls cannot consume
       // the same advertised capacity.
       await tx.execute(sql`

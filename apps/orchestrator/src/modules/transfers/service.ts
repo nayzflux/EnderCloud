@@ -1,10 +1,9 @@
-import type postgres from "postgres";
-import type { Database } from "../db/client.ts";
-import { sql, eq, and, lte, gt, asc, inArray } from "drizzle-orm";
-import type { RedisEventBus } from "../events/redis-bus.ts";
 import { nanoid } from "@endercloud/runtime/id";
 import type { Logger } from "@endercloud/runtime/logger";
-import * as schema from "../db/schema.ts";
+import { and,asc,eq,gt,inArray,lte,sql } from "drizzle-orm";
+import type { Database,Transaction } from "../../db/client.ts";
+import * as schema from "../../db/schema.ts";
+import type { RedisEventBus } from "../../events/redis-bus.ts";
 
 export interface TransferPayload {
   readonly instanceId: string;
@@ -38,7 +37,7 @@ export class TransferService {
 
   // Persist a durable transfer command inside the caller transaction.
   public async enqueue(
-    tx: any,
+    tx: Transaction,
     payload: TransferPayload,
     sessionId?: string,
   ): Promise<string> {
@@ -77,7 +76,7 @@ export class TransferService {
         const [current] = await tx.insert(schema.playerTransferGenerations).values({ playerId, generation: 1 })
           .onConflictDoUpdate({ target: schema.playerTransferGenerations.playerId,
             set: { generation: sql`${schema.playerTransferGenerations.generation} + 1` } }).returning();
-        if (!Number.isSafeInteger(current.generation)) throw new Error("Transfer generation exceeded safe bounds");
+        if (!current || !Number.isSafeInteger(current.generation)) throw new Error("Transfer generation exceeded safe bounds");
         generations.set(playerId, current.generation);
         await tx.update(schema.transferCommandPlayers).set({ state: "SUPERSEDED", observedAt: sql`now()` })
           .where(and(eq(schema.transferCommandPlayers.playerId, playerId), eq(schema.transferCommandPlayers.state, "PENDING")));

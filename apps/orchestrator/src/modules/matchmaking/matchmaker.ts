@@ -1,24 +1,23 @@
-import { and, asc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
-import type { Database } from "../db/client.ts";
-import {
-  gameSessions,
-  queueEntries,
-  queueEntryPlayers,
-  serverGroups,
-  serverInstances,
-  executionHosts,
-  sessionPlayers,
-} from "../db/schema.ts";
-import {
-  computeFeasibleProfiles,
-  isProfileEligible,
-  rankSessionCandidates,
-  selectRecommendedProfile,
-} from "../domain/matchmaking.ts";
-import type { QueueParty, SessionState } from "@endercloud/contracts/domain";
+import type { QueueParty,SessionState } from "@endercloud/contracts/domain";
 import { nanoid } from "@endercloud/runtime/id";
 import type { Logger } from "@endercloud/runtime/logger";
-import type { TransferService } from "./transfer-service.ts";
+import { and,asc,eq,inArray,isNotNull,ne,sql } from "drizzle-orm";
+import type { Database,Transaction } from "../../db/client.ts";
+import {
+executionHosts,
+gameSessions,
+queueEntries,
+serverGroups,
+serverInstances,
+sessionPlayers
+} from "../../db/schema.ts";
+import {
+computeFeasibleProfiles,
+isProfileEligible,
+rankSessionCandidates,
+selectRecommendedProfile,
+} from "../../domain/matchmaking.ts";
+import type { TransferService } from "../transfers/service.ts";
 
 interface GroupRow {
   id: string;
@@ -118,7 +117,7 @@ export class Matchmaker {
 
   // One PostgreSQL advisory lock serializes every logical worker for this mode.
   private async processGroup(group: GroupRow): Promise<void> {
-    await this.db.transaction(async (tx: any) => {
+    await this.db.transaction(async (tx: Transaction) => {
       const locks = (await tx.execute(sql`
         SELECT pg_try_advisory_xact_lock(hashtextextended(${group.id}, 0)) AS locked
       `)) as unknown as { locked: boolean }[];
@@ -248,7 +247,7 @@ export class Matchmaker {
     };
   }
 
-  private async loadSessions(tx: any, groupId: string): Promise<SessionCandidate[]> {
+  private async loadSessions(tx: Transaction, groupId: string): Promise<SessionCandidate[]> {
     const rows = (await tx
       .select({
         id: gameSessions.id,
@@ -360,7 +359,7 @@ export class Matchmaker {
   }
 
   private async attachParty(
-    tx: any,
+    tx: Transaction,
     session: SessionCandidate,
     party: QueueParty,
   ): Promise<void> {
@@ -439,7 +438,7 @@ export class Matchmaker {
   }
 
   private async dispatchSession(
-    tx: any,
+    tx: Transaction,
     group: GroupRow,
     session: SessionCandidate,
   ): Promise<void> {
@@ -464,7 +463,7 @@ export class Matchmaker {
   }
 
   private async tryAssignInstance(
-    tx: any,
+    tx: Transaction,
     group: GroupRow,
     session: SessionCandidate,
   ): Promise<boolean> {
@@ -478,7 +477,7 @@ export class Matchmaker {
   }
 
   private async reserveInstance(
-    tx: any,
+    tx: Transaction,
     groupId: string,
     sessionId: string,
   ): Promise<Reservation | null> {
@@ -521,7 +520,7 @@ export class Matchmaker {
   }
 
   private async startSessionTransfers(
-    tx: any,
+    tx: Transaction,
     group: GroupRow,
     session: SessionCandidate,
     reservation: Reservation,
@@ -588,7 +587,7 @@ export class Matchmaker {
   }
 
   private async beginTicketTransfer(
-    tx: any,
+    tx: Transaction,
     session: SessionCandidate,
     party: QueueParty,
   ): Promise<void> {

@@ -1,8 +1,8 @@
+import { Logger } from "@endercloud/runtime/logger";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "../config.ts";
 import { createDatabase } from "./client.ts";
-import { Logger } from "@endercloud/runtime/logger";
 
 // Apply pending schema migrations before any service starts reading state.
 export async function migrateDatabase(databaseUrl: string, logger?: Logger): Promise<void> {

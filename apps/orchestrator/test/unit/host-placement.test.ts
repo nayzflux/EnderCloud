@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { selectExecutionHost } from "../../src/domain/host-placement.ts";
-import { classifyPlacementBlock } from "../../src/services/host-service.ts";
+import { classifyPlacementBlock } from "../../src/modules/hosts/service.ts";
 
 const gibibyte = 1024 ** 3;
 

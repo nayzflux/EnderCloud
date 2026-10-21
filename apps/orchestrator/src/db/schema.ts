@@ -1,38 +1,37 @@
+import type {
+TemplateFileSummary,
+VariantRuntimePatch,
+VariantRuntimeSpec,
+} from "@endercloud/contracts/domain";
 import {
-  bigint,
-  boolean,
-  check,
-  doublePrecision,
-  index,
-  integer,
-  jsonb,
-  pgEnum,
-  pgTable,
-  primaryKey,
-  real,
-  text,
-  timestamp,
-  uniqueIndex,
-  uuid,
-} from "drizzle-orm/pg-core";
+availabilityStates,
+executionHostAdminStates,
+executionHostHealthStates,
+incidentKinds,
+incidentScopeTypes,
+incidentSeverities,
+incidentStates,
+lifecycleStates,
+sessionPlayerStates,
+sessionStates,
+} from "@endercloud/contracts/domain";
 import { sql } from "drizzle-orm";
 import {
-  availabilityStates,
-  executionHostAdminStates,
-  executionHostHealthStates,
-  incidentKinds,
-  incidentScopeTypes,
-  incidentSeverities,
-  incidentStates,
-  lifecycleStates,
-  sessionPlayerStates,
-  sessionStates,
-} from "@endercloud/contracts/domain";
-import type {
-  TemplateFileSummary,
-  VariantRuntimePatch,
-  VariantRuntimeSpec,
-} from "@endercloud/contracts/domain";
+bigint,
+boolean,
+check,
+doublePrecision,
+index,
+integer,
+jsonb,
+pgEnum,
+pgTable,
+primaryKey,
+text,
+timestamp,
+uniqueIndex,
+uuid
+} from "drizzle-orm/pg-core";
 
 export const groupTypeEnum = pgEnum("group_type", ["hub", "minigame", "proxy"]);
 export const lifecycleStateEnum = pgEnum("lifecycle_state", lifecycleStates);

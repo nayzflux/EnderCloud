@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { SessionController } from "../../src/services/session-controller.ts";
+import { SessionController } from "../../src/modules/sessions/controller.ts";
 import type { Database } from "../../src/db/client.ts";
-import type { InstanceController } from "../../src/services/instance-controller.ts";
-import type { TransferService } from "../../src/services/transfer-service.ts";
-import type { HubRouter } from "../../src/services/hub-router.ts";
+import type { InstanceController } from "../../src/modules/instances/lifecycle.ts";
+import type { TransferService } from "../../src/modules/transfers/service.ts";
+import type { HubRouter } from "../../src/modules/routing/hubs.ts";
 import { Logger } from "@endercloud/runtime/logger";
 
 test("session stages continue independently but report partial failure to the scheduler", async () => {

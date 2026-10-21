@@ -1,5 +1,5 @@
-import type { AvailabilityState, CapacityPolicy, LifecycleState } from "@endercloud/contracts/domain";
-import { isWarmPending, isWarmReady } from "./state-machines.ts";
+import type { AvailabilityState,CapacityPolicy,LifecycleState } from "@endercloud/contracts/domain";
+import { isWarmPending,isWarmReady } from "./state-machines.ts";
 
 export interface InstanceCapacityState {
   readonly lifecycle: LifecycleState;

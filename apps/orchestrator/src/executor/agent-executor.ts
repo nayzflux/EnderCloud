@@ -1,16 +1,16 @@
-import type { HostService } from "../services/host-service.ts";
 import type {
-  CreatedInstance,
-  Executor,
-  InstanceSpec,
-  InstanceTarget,
-  OrphanCleanupResult,
-  RuntimeInstance,
-  RuntimeState,
+CreatedInstance,
+Executor,
+InstanceSpec,
+InstanceTarget,
+OrphanCleanupResult,
+RuntimeInstance,
+RuntimeState,
 } from "@endercloud/contracts/executor";
 import { ExecutionHostUnavailableError } from "@endercloud/contracts/executor";
 import { nanoid } from "@endercloud/runtime/id";
 import type { Logger } from "@endercloud/runtime/logger";
+import type { HostService } from "../modules/hosts/service.ts";
 
 export interface AgentExecutorConfig {
   readonly operationTimeoutMs: number;

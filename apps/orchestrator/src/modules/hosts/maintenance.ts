@@ -1,10 +1,10 @@
-import { and, eq, ne, sql } from "drizzle-orm";
-import type { Database } from "../db/client.ts";
-import { executionHosts, gameSessions, serverInstances, sessionPlayers } from "../db/schema.ts";
-import type { AvailabilityState, LifecycleState, SessionState } from "@endercloud/contracts/domain";
+import type { AvailabilityState,LifecycleState,SessionState } from "@endercloud/contracts/domain";
 import type { Logger } from "@endercloud/runtime/logger";
-import type { HostService } from "./host-service.ts";
-import type { InstanceController } from "./instance-controller.ts";
+import { and,eq,ne,sql } from "drizzle-orm";
+import type { Database } from "../../db/client.ts";
+import { executionHosts,gameSessions,serverInstances,sessionPlayers } from "../../db/schema.ts";
+import type { InstanceController } from "../instances/lifecycle.ts";
+import type { HostService } from "./service.ts";
 
 interface MaintenanceInstance {
   readonly id: string;

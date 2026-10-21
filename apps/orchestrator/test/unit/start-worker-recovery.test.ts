@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { InstanceStartWorker } from "../../src/services/instance-start-worker.ts";
-import type { InstanceController } from "../../src/services/instance-controller.ts";
+import { InstanceStartWorker } from "../../src/modules/instances/start-worker.ts";
+import type { InstanceController } from "../../src/modules/instances/lifecycle.ts";
 import type { Database } from "../../src/db/client.ts";
 import type { Executor } from "@endercloud/contracts/executor";
 import { Logger } from "@endercloud/runtime/logger";

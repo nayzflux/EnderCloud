@@ -1,10 +1,10 @@
 import { describe, expect, test, beforeAll, beforeEach, afterAll, mock } from "bun:test";
 import { createDatabase, type SqlClient } from "../../src/db/client.ts";
 import { migrateDatabase } from "../../src/db/migrate.ts";
-import { Matchmaker } from "../../src/services/matchmaker.ts";
-import { QueueService } from "../../src/services/queue-service.ts";
+import { Matchmaker } from "../../src/modules/matchmaking/matchmaker.ts";
+import { QueueService } from "../../src/modules/matchmaking/queue.ts";
 import { serverGroups, serverGroupVariants, serverVariantLayers, serverVariants, templateLayers, serverInstances, gameSessions, sessionPlayers, queueEntries, executionHosts } from "../../src/db/schema.ts";
-import type { TransferService } from "../../src/services/transfer-service.ts";
+import type { TransferService } from "../../src/modules/transfers/service.ts";
 import type { Logger } from "@endercloud/runtime/logger";
 import { nanoid } from "@endercloud/runtime/id";
 import { eq, count } from "drizzle-orm";

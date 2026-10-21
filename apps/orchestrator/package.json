@@ -19,15 +19,19 @@
     "db:migrate": "bun src/db/migrate.ts"
   },
   "dependencies": {
+    "@better-auth/api-key": "1.7.12",
+    "@better-auth/drizzle-adapter": "1.7.12",
     "@elysiajs/openapi": "1.4.15",
+    "@endercloud/contracts": "workspace:*",
+    "@endercloud/runtime": "workspace:*",
+    "better-auth": "1.7.12",
     "drizzle-orm": "0.44.7",
     "elysia": "1.4.29",
     "ioredis": "5.11.1",
     "postgres": "3.4.9",
     "tar-stream": "3.2.0",
     "yaml": "2.9.0",
-    "@endercloud/contracts": "workspace:*",
-    "@endercloud/runtime": "workspace:*"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@testcontainers/postgresql": "12.0.4",

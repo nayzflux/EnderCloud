@@ -1,16 +1,16 @@
 import { expect, mock, test } from "bun:test";
 import { createApp } from "../../src/api/app.ts";
 import { Logger } from "@endercloud/runtime/logger";
-import type { DashboardService } from "../../src/services/dashboard-service.ts";
-import type { InstanceController } from "../../src/services/instance-controller.ts";
-import type { QueueService } from "../../src/services/queue-service.ts";
-import type { HubRouter } from "../../src/services/hub-router.ts";
-import type { MonitoringService } from "../../src/services/monitoring-service.ts";
-import type { HostService } from "../../src/services/host-service.ts";
-import type { TemplateArchiveService } from "../../src/services/template-archive-service.ts";
-import type { IncidentController } from "../../src/services/incident-controller.ts";
-import type { VariantStartController } from "../../src/services/variant-start-controller.ts";
-import type { ProxyService } from "../../src/services/proxy-service.ts";
+import type { DashboardService } from "../../src/modules/dashboard/queries.ts";
+import type { InstanceController } from "../../src/modules/instances/lifecycle.ts";
+import type { QueueService } from "../../src/modules/matchmaking/queue.ts";
+import type { HubRouter } from "../../src/modules/routing/hubs.ts";
+import type { MonitoringService } from "../../src/modules/monitoring/metrics.ts";
+import type { HostService } from "../../src/modules/hosts/service.ts";
+import type { TemplateArchiveService } from "../../src/modules/configuration/archives.ts";
+import type { IncidentController } from "../../src/modules/monitoring/incidents.ts";
+import type { VariantStartController } from "../../src/modules/instances/start-policy.ts";
+import type { ProxyService } from "../../src/modules/proxies/service.ts";
 
 function testApp(
   hubs: HubRouter = {} as HubRouter,

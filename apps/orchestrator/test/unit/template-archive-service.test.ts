@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { extract } from "tar-stream";
 import type { Database } from "../../src/db/client.ts";
-import { TemplateArchiveService } from "../../src/services/template-archive-service.ts";
+import { TemplateArchiveService } from "../../src/modules/configuration/archives.ts";
 
 const temporaryDirectories: string[] = [];
 

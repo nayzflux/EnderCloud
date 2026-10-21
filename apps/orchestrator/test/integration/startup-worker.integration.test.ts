@@ -17,17 +17,17 @@ import {
 import type { Executor } from "@endercloud/contracts/executor";
 import type { InstanceSpec } from "@endercloud/contracts/executor";
 import { Logger } from "@endercloud/runtime/logger";
-import type { InstanceController } from "../../src/services/instance-controller.ts";
-import { InstanceStartWorker } from "../../src/services/instance-start-worker.ts";
-import { VariantStartController } from "../../src/services/variant-start-controller.ts";
+import type { InstanceController } from "../../src/modules/instances/lifecycle.ts";
+import { InstanceStartWorker } from "../../src/modules/instances/start-worker.ts";
+import { VariantStartController } from "../../src/modules/instances/start-policy.ts";
 import { RegistryOutbox } from "../../src/events/registry-outbox.ts";
 import { registryOutbox } from "../../src/db/schema.ts";
-import { VariantSelector } from "../../src/services/variant-selector.ts";
-import { HostService } from "../../src/services/host-service.ts";
-import { InstanceController as RealInstanceController } from "../../src/services/instance-controller.ts";
+import { VariantSelector } from "../../src/modules/instances/variant-selector.ts";
+import { HostService } from "../../src/modules/hosts/service.ts";
+import { InstanceController as RealInstanceController } from "../../src/modules/instances/lifecycle.ts";
 import type { RedisEventBus } from "../../src/events/redis-bus.ts";
-import type { TransferService } from "../../src/services/transfer-service.ts";
-import type { HubRouter } from "../../src/services/hub-router.ts";
+import type { TransferService } from "../../src/modules/transfers/service.ts";
+import type { HubRouter } from "../../src/modules/routing/hubs.ts";
 
 let container: StartedPostgreSqlContainer | undefined;
 let sqlClient: ReturnType<typeof createDatabase>["sql"];

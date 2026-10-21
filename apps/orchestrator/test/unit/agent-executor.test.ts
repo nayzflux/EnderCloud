@@ -2,7 +2,7 @@ import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { AgentExecutor } from "../../src/executor/agent-executor.ts";
 import { ExecutionHostUnavailableError } from "@endercloud/contracts/executor";
 import { Logger } from "@endercloud/runtime/logger";
-import type { HostService } from "../../src/services/host-service.ts";
+import type { HostService } from "../../src/modules/hosts/service.ts";
 
 afterEach(() => {
   mock.restore();

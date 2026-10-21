@@ -1,5 +1,5 @@
-import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
 import * as schema from "./schema.ts";
 
 export type SqlClient = ReturnType<typeof postgres>;
@@ -17,3 +17,4 @@ export function createDatabase(databaseUrl: string) {
 }
 
 export type Database = ReturnType<typeof createDatabase>["db"];
+export type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];

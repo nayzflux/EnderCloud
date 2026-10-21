@@ -1,65 +1,40 @@
-import { createHash } from "node:crypto";
-import { readdir, readFile, stat } from "node:fs/promises";
-import { join, relative, resolve, sep } from "node:path";
-import { parse } from "yaml";
-import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
-import type { Database } from "../db/client.ts";
-import {
-  serverGroups,
-  serverGroupVariants,
-  serverVariantLayers,
-  serverVariants,
-  templateLayers,
-} from "../db/schema.ts";
-import type {
-  GroupVariantReference,
-  ResolvedServerVariantConfig,
-  ServerGroupConfig,
-  ServerVariantConfig,
-  TemplateFileSummary,
-  TemplateLayerSpec,
-  VariantRuntimePatch,
-  VariantRuntimeSpec,
-} from "@endercloud/contracts/domain";
-import type { Logger } from "@endercloud/runtime/logger";
-
-import { inspectTemplateDirectory } from "@endercloud/runtime/templates";
-export { inspectTemplateDirectory } from "@endercloud/runtime/templates";
+import type { GroupVariantReference,ServerGroupConfig,ServerVariantConfig,VariantRuntimePatch } from "@endercloud/contracts/domain";
+import { z } from "zod";
 
 const idPattern = /^[a-z0-9][a-z0-9-]{1,62}$/;
 
 function object(value: unknown, context: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!z.record(z.string(), z.unknown()).safeParse(value).success) {
     throw new Error(`${context} must be an object`);
   }
   return value as Record<string, unknown>;
 }
 
 function string(value: unknown, context: string): string {
-  if (typeof value !== "string" || value.length === 0) {
+  if (!z.string().min(1).safeParse(value).success) {
     throw new Error(`${context} must be a non-empty string`);
   }
-  return value;
+  return value as string;
 }
 
 function integer(value: unknown, context: string, minimum = 0): number {
-  if (!Number.isSafeInteger(value) || (value as number) < minimum) {
+  if (!z.number().int().safe().min(minimum).safeParse(value).success) {
     throw new Error(`${context} must be an integer >= ${minimum}`);
   }
   return value as number;
 }
 
 function positive(value: unknown, context: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+  if (!z.number().finite().positive().safeParse(value).success) {
     throw new Error(`${context} must be a positive number`);
   }
-  return value;
+  return value as number;
 }
 
 function boolean(value: unknown, context: string, fallback?: boolean): boolean {
   if (value === undefined && fallback !== undefined) return fallback;
-  if (typeof value !== "boolean") throw new Error(`${context} must be a boolean`);
-  return value;
+  if (!z.boolean().safeParse(value).success) throw new Error(`${context} must be a boolean`);
+  return value as boolean;
 }
 
 // Convert human-readable duration values into milliseconds.
@@ -309,12 +284,14 @@ export function parseGroup(
 }
 
 function parseMemory(value: unknown, context: string): number {
-  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
   if (typeof value !== "string") throw new Error(`${context} must be a byte count or 4G`);
   const match = /^(\d+)([KMG])$/i.exec(value);
   if (!match) throw new Error(`${context} must look like 512M or 4G`);
   const factors = { K: 1024, M: 1024 ** 2, G: 1024 ** 3 } as const;
-  return Number.parseInt(match[1]!, 10) * factors[match[2]!.toUpperCase() as keyof typeof factors];
+  const bytes = Number.parseInt(match[1]!, 10) * factors[match[2]!.toUpperCase() as keyof typeof factors];
+  if (!Number.isSafeInteger(bytes) || bytes <= 0) throw new Error(`${context} exceeds the supported memory bound`);
+  return bytes;
 }
 
 // Validate one reusable template layer. Whether it is instantiable is decided by groups.
@@ -378,270 +355,3 @@ export function parseVariant(document: unknown, source: string): ServerVariantCo
   };
 }
 
-function mergeRuntime(layers: readonly TemplateLayerSpec[], context: string): VariantRuntimeSpec {
-  let dataDirectory = "/data";
-  let image: string | undefined;
-  let memoryBytes: number | undefined;
-  let cpu: number | undefined;
-  const environment: Record<string, string> = {};
-  for (const layer of layers) {
-    dataDirectory = layer.runtime.dataDirectory ?? dataDirectory;
-    image = layer.runtime.image ?? image;
-    memoryBytes = layer.runtime.memoryBytes ?? memoryBytes;
-    cpu = layer.runtime.cpu ?? cpu;
-    Object.assign(environment, layer.runtime.environment);
-  }
-  if (!image || memoryBytes === undefined || cpu === undefined) {
-    throw new Error(`${context} does not resolve a complete docker image, memory and cpu runtime`);
-  }
-  return { image, memoryBytes, cpu, environment, dataDirectory };
-}
-
-function effectiveChecksum(layers: readonly TemplateLayerSpec[]): string {
-  const hasher = createHash("sha256");
-  for (const layer of layers) {
-    hasher.update(layer.id);
-    hasher.update("\0");
-    hasher.update(layer.checksum);
-    hasher.update("\0");
-  }
-  return hasher.digest("hex");
-}
-
-// Load all group and variant descriptors and verify their references.
-export async function loadConfiguration(
-  groupsRoot: string,
-  templatesRoot: string,
-) {
-  const groupFiles = (await readdir(groupsRoot, { withFileTypes: true }))
-    .filter((entry) => entry.isFile() && /\.ya?ml$/i.test(entry.name))
-    .map((entry) => join(groupsRoot, entry.name));
-  // Group files are independent, so parse them concurrently during startup.
-  const groups = await Promise.all(
-    groupFiles.map(async (path) =>
-      parseGroup(parse(await readFile(path, "utf8")), path)
-    ),
-  );
-  if (new Set(groups.map(group => group.id)).size !== groups.length) throw new Error("Duplicate group ids");
-  const layers: TemplateLayerSpec[] = [];
-  const manifests = new Map<string, ReadonlyMap<string, "directory" | "file">>();
-  // Each template directory is optional until it contains a valid variant.yml descriptor.
-  for (const entry of await readdir(templatesRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const templatePath = resolve(templatesRoot, entry.name);
-    const descriptor = join(templatePath, "variant.yml");
-    try {
-      const descriptorStat = await stat(descriptor);
-      if (!descriptorStat.isFile()) continue;
-    } catch {
-      continue;
-    }
-    const variant = parseVariant(parse(await readFile(descriptor, "utf8")), descriptor);
-    const inspected = await inspectTemplateDirectory(templatePath);
-    layers.push({
-      ...variant,
-      templatePath,
-      checksum: inspected.checksum,
-      files: inspected.files,
-    });
-    manifests.set(variant.id, inspected.manifest);
-  }
-  const layersById = new Map<string, TemplateLayerSpec>();
-  for (const layer of layers) {
-    if (layersById.has(layer.id)) throw new Error(`Duplicate template layer id ${layer.id}`);
-    layersById.set(layer.id, layer);
-  }
-
-  const finalIds = new Set(groups.flatMap((group) => group.variants.map((variant) => variant.id)));
-  const variants: ResolvedServerVariantConfig[] = [];
-  for (const id of finalIds) {
-    const finalLayer = layersById.get(id);
-    if (!finalLayer) throw new Error(`Group references unknown final variant ${id}`);
-    if (finalLayer.revision === undefined) {
-      throw new Error(`Final variant ${id} must define revision`);
-    }
-    if (finalLayer.parents.includes(id)) throw new Error(`Final variant ${id} cannot parent itself`);
-    const parents = finalLayer.parents.map((parentId) => {
-      const parent = layersById.get(parentId);
-      if (!parent) throw new Error(`Final variant ${id} references unknown parent ${parentId}`);
-      if (parent.parents.length > 0) {
-        throw new Error(`Parent layer ${parentId} cannot declare parents in flat inheritance`);
-      }
-      return parent;
-    });
-    const stack = [...parents, finalLayer];
-    const observed = new Map<string, "directory" | "file">();
-    for (const layer of stack) {
-      for (const [path, kind] of manifests.get(layer.id) ?? []) {
-        const previous = observed.get(path);
-        if (previous && previous !== kind) {
-          throw new Error(`Variant ${id} has a file/directory conflict at ${path}`);
-        }
-        observed.set(path, kind);
-      }
-    }
-    variants.push({
-      id,
-      revision: finalLayer.revision,
-      checksum: effectiveChecksum(stack),
-      runtime: mergeRuntime(stack, `Final variant ${id}`),
-      layers: stack,
-    });
-  }
-  return { groups, layers, variants };
-}
-
-// Upsert the filesystem configuration into the database as one atomic snapshot.
-export async function synchronizeConfiguration(
-  db: Database,
-  groupsRoot: string,
-  templatesRoot: string,
-  logger: Logger,
-): Promise<void> {
-  const configuration = await loadConfiguration(groupsRoot, templatesRoot);
-  // Groups and variants are committed together so readers never observe a partial config refresh.
-  await db.transaction(async (tx) => {
-    const groupIds = configuration.groups.map((group) => group.id);
-    await tx.update(serverGroups)
-      .set({ enabled: false, updatedAt: sql`now()` })
-      .where(and(
-        eq(serverGroups.enabled, true),
-        groupIds.length > 0 ? notInArray(serverGroups.id, groupIds) : undefined,
-      ));
-
-    // Upsert preserves runtime rows that reference stable group identifiers.
-    for (const group of configuration.groups) {
-      const matchmaking = group.matchmaking;
-      const routing = group.routing;
-      await tx.insert(serverGroups).values({
-        id: group.id,
-        type: group.type,
-        enabled: group.enabled,
-        minimumPlayers: matchmaking?.minimumPlayers ?? null,
-        maximumPlayers: matchmaking?.maximumPlayers ?? null,
-        teamCount: matchmaking?.teamCount ?? null,
-        teamSize: matchmaking?.teamSize ?? null,
-        candidateWindow: matchmaking?.candidateWindow ?? null,
-        instanceAcquisitionTimeoutMs: group.timeouts.instanceAcquisitionMs ?? null,
-        lobbyStaleTimeoutMs: group.timeouts.lobbyStaleMs ?? null,
-        minimumPlayersPerTeam: matchmaking?.minimumPlayersPerTeam ?? null,
-        maximumTeamSpread: matchmaking?.maximumTeamSpread ?? null,
-        minimumInstances: group.capacity.minimumInstances,
-        maximumInstances: group.capacity.maximumInstances,
-        minimumWarmInstances: group.capacity.minimumWarmInstances,
-        maximumWarmInstances: group.capacity.maximumWarmInstances,
-        maximumPlayersPerInstance: routing?.maximumPlayersPerInstance ?? null,
-        targetPlayersPerInstance: routing?.targetPlayersPerInstance ?? null,
-        startupTimeoutMs: group.timeouts.startupMs,
-        drainTimeoutMs: group.timeouts.drainMs,
-        cancelledDrainTimeoutMs: group.timeouts.cancelledDrainMs,
-        shutdownTimeoutMs: group.timeouts.shutdownMs,
-        transferTimeoutMs: group.timeouts.transferMs,
-        playerStaleTimeoutMs: group.timeouts.playerStaleMs,
-        instanceLifetimeMs: group.timeouts.instanceLifetimeMs ?? null,
-        updatedAt: sql`now()`,
-      }).onConflictDoUpdate({
-        target: serverGroups.id,
-        set: {
-          type: group.type,
-          enabled: group.enabled,
-          minimumPlayers: matchmaking?.minimumPlayers ?? null,
-          maximumPlayers: matchmaking?.maximumPlayers ?? null,
-          teamCount: matchmaking?.teamCount ?? null,
-          teamSize: matchmaking?.teamSize ?? null,
-          candidateWindow: matchmaking?.candidateWindow ?? null,
-          instanceAcquisitionTimeoutMs: group.timeouts.instanceAcquisitionMs ?? null,
-          lobbyStaleTimeoutMs: group.timeouts.lobbyStaleMs ?? null,
-          minimumPlayersPerTeam: matchmaking?.minimumPlayersPerTeam ?? null,
-          maximumTeamSpread: matchmaking?.maximumTeamSpread ?? null,
-          minimumInstances: group.capacity.minimumInstances,
-          maximumInstances: group.capacity.maximumInstances,
-          minimumWarmInstances: group.capacity.minimumWarmInstances,
-          maximumWarmInstances: group.capacity.maximumWarmInstances,
-          maximumPlayersPerInstance: routing?.maximumPlayersPerInstance ?? null,
-          targetPlayersPerInstance: routing?.targetPlayersPerInstance ?? null,
-          startupTimeoutMs: group.timeouts.startupMs,
-          drainTimeoutMs: group.timeouts.drainMs,
-          cancelledDrainTimeoutMs: group.timeouts.cancelledDrainMs,
-          shutdownTimeoutMs: group.timeouts.shutdownMs,
-          transferTimeoutMs: group.timeouts.transferMs,
-          playerStaleTimeoutMs: group.timeouts.playerStaleMs,
-          instanceLifetimeMs: group.timeouts.instanceLifetimeMs ?? null,
-          updatedAt: sql`now()`,
-        }
-      });
-    }
-    for (const layer of configuration.layers) {
-      await tx.insert(templateLayers).values({
-        id: layer.id,
-        templatePath: layer.templatePath,
-        checksum: layer.checksum,
-        runtimePatch: layer.runtime,
-        fileSummary: layer.files,
-        updatedAt: sql`now()`,
-      }).onConflictDoUpdate({
-        target: templateLayers.id,
-        set: {
-          templatePath: layer.templatePath,
-          checksum: layer.checksum,
-          runtimePatch: layer.runtime,
-          fileSummary: layer.files,
-          updatedAt: sql`now()`,
-        },
-      });
-    }
-
-    // Effective variant metadata changes in place; existing instances keep their variant id.
-    for (const variant of configuration.variants) {
-      await tx.insert(serverVariants).values({
-        id: variant.id,
-        revision: variant.revision,
-        checksum: variant.checksum,
-        runtimeSpec: variant.runtime,
-        updatedAt: sql`now()`,
-      }).onConflictDoUpdate({
-        target: serverVariants.id,
-        set: {
-          revision: variant.revision,
-          checksum: variant.checksum,
-          runtimeSpec: variant.runtime,
-          updatedAt: sql`now()`,
-        }
-      });
-    }
-
-    const finalIds = configuration.variants.map((variant) => variant.id);
-    if (finalIds.length > 0) {
-      await tx.delete(serverVariantLayers).where(inArray(serverVariantLayers.variantId, finalIds));
-    }
-    for (const variant of configuration.variants) {
-      await tx.insert(serverVariantLayers).values(
-        variant.layers.map((layer, ordinal) => ({
-          variantId: variant.id,
-          layerId: layer.id,
-          ordinal,
-        })),
-      );
-    }
-
-    if (groupIds.length > 0) {
-      await tx.delete(serverGroupVariants).where(inArray(serverGroupVariants.groupId, groupIds));
-    }
-    for (const group of configuration.groups) {
-      if (group.variants.length === 0) continue;
-      await tx.insert(serverGroupVariants).values(
-        group.variants.map((variant) => ({
-          groupId: group.id,
-          variantId: variant.id,
-          enabled: variant.enabled,
-          selectionWeight: variant.weight,
-        })),
-      );
-    }
-  });
-  logger.info("configuration.synchronized", "Configuration synchronized", {
-    groups: configuration.groups.length,
-    layers: configuration.layers.length,
-    variants: configuration.variants.length,
-  });
-}

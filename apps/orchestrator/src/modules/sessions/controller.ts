@@ -1,18 +1,18 @@
-import type { Database } from "../db/client.ts";
-import { sql, and, eq, inArray, isNotNull, lt, notInArray, or } from "drizzle-orm";
-import {
-  gameSessions,
-  instancePlayers,
-  serverGroups,
-  serverInstances,
-  sessionPlayers,
-  transferCommands,
-} from "../db/schema.ts";
 import type { SessionState } from "@endercloud/contracts/domain";
 import type { Logger } from "@endercloud/runtime/logger";
-import type { InstanceController } from "./instance-controller.ts";
-import type { TransferService } from "./transfer-service.ts";
-import type { HubRouter } from "./hub-router.ts";
+import { and,eq,inArray,isNotNull,lt,notInArray,or,sql } from "drizzle-orm";
+import type { Database,Transaction } from "../../db/client.ts";
+import {
+gameSessions,
+instancePlayers,
+serverGroups,
+serverInstances,
+sessionPlayers,
+transferCommands,
+} from "../../db/schema.ts";
+import type { InstanceController } from "../instances/lifecycle.ts";
+import type { HubRouter } from "../routing/hubs.ts";
+import type { TransferService } from "../transfers/service.ts";
 
 interface SessionRow {
   id: string;
@@ -159,7 +159,7 @@ export class SessionController {
       .innerJoin(serverInstances, eq(serverInstances.id, instancePlayers.instanceId))
       .where(lt(instancePlayers.staleDeadline, sql`now()`));
     for (const player of expired) {
-      await this.db.transaction(async (tx: any) => {
+      await this.db.transaction(async (tx: Transaction) => {
         const removed = await tx.delete(instancePlayers)
           .where(and(
             eq(instancePlayers.instanceId, player.instanceId),
@@ -307,7 +307,7 @@ export class SessionController {
 
   // Cancel a pre-start session, its transfers, and release its reserved instance.
   private async cancel(sessionId: string): Promise<void> {
-    const cancelled = await this.db.transaction(async (tx: any) => {
+    const cancelled = await this.db.transaction(async (tx: Transaction) => {
       const rows = await tx.update(gameSessions)
         .set({
           state: "CANCELLED",

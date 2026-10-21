@@ -1,7 +1,7 @@
-import Redis from "ioredis";
 import type { RedisEnvelope } from "@endercloud/contracts/domain";
-import type { Logger } from "@endercloud/runtime/logger";
 import { nanoid } from "@endercloud/runtime/id";
+import type { Logger } from "@endercloud/runtime/logger";
+import Redis from "ioredis";
 
 export const REGISTRY_CHANNEL = "minecraft:proxy:registry";
 export const TRANSFER_CHANNEL = "minecraft:proxy:transfers";

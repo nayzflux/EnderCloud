@@ -1,12 +1,12 @@
-import type { Database } from "../db/client.ts";
-import { serverGroups, queueEntries, queueEntryPlayers, sessionPlayers, gameSessions } from "../db/schema.ts";
-import { desc, eq, and, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import { nanoid } from "@endercloud/runtime/id";
+import { and,desc,eq,inArray,isNull,notInArray,or,sql } from "drizzle-orm";
+import type { Database,Transaction } from "../../db/client.ts";
+import { gameSessions,queueEntries,queueEntryPlayers,serverGroups,sessionPlayers } from "../../db/schema.ts";
 import {
-  computeFeasibleProfiles,
-  isProfileEligible,
-  selectRecommendedProfile,
-} from "../domain/matchmaking.ts";
+computeFeasibleProfiles,
+isProfileEligible,
+selectRecommendedProfile,
+} from "../../domain/matchmaking.ts";
 
 export interface EnqueueRequest {
   readonly groupId: string;
@@ -265,7 +265,7 @@ export class QueueService {
   }
 
   private async cancelTicket(
-    tx: any,
+    tx: Transaction,
     entryId: string,
     sessionId: string | null,
     partyId: string,

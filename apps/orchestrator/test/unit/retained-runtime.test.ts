@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { Reconciler } from "../../src/services/reconciler.ts";
+import { Reconciler } from "../../src/modules/hosts/reconciler.ts";
 import type { Database } from "../../src/db/client.ts";
 import type { Executor, RuntimeInstance } from "@endercloud/contracts/executor";
-import type { InstanceController } from "../../src/services/instance-controller.ts";
-import type { HostService } from "../../src/services/host-service.ts";
+import type { InstanceController } from "../../src/modules/instances/lifecycle.ts";
+import type { HostService } from "../../src/modules/hosts/service.ts";
 import { Logger } from "@endercloud/runtime/logger";
 
 test("retained files do not suppress retries to stop a failed container", async () => {

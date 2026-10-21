@@ -1,5 +1,5 @@
-import type { Logger } from "@endercloud/runtime/logger";
 import { nanoid } from "@endercloud/runtime/id";
+import type { Logger } from "@endercloud/runtime/logger";
 
 export interface SchedulerIncidentObserver {
   recordLoopFailure(task: string, error: unknown): Promise<void>;

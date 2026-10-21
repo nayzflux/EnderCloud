@@ -5,7 +5,7 @@ import {
   assembleClusterSnapshot,
   normalizeDashboardLimit,
   type DashboardRows,
-} from "../../src/services/dashboard-service.ts";
+} from "../../src/modules/dashboard/projection.ts";
 
 const now = new Date("2026-07-27T12:00:00.000Z");
 

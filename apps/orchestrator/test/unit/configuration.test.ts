@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfiguration, parseDuration, parseGroup, parseVariant } from "../../src/configuration/sync.ts";
+import { loadConfiguration } from "../../src/modules/configuration/load.ts";
+import { parseDuration, parseGroup, parseVariant } from "../../src/modules/configuration/descriptors.ts";
 import { jsonParameter } from "../../src/db/json.ts";
 
 describe("configuration", () => {

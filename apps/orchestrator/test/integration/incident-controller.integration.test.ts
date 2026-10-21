@@ -20,7 +20,7 @@ import {
   variantStartStates,
 } from "../../src/db/schema.ts";
 import type { Logger } from "@endercloud/runtime/logger";
-import { IncidentController } from "../../src/services/incident-controller.ts";
+import { IncidentController } from "../../src/modules/monitoring/incidents.ts";
 
 let container: StartedPostgreSqlContainer | undefined;
 let sqlClient: ReturnType<typeof createDatabase>["sql"];

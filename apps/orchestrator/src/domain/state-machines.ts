@@ -1,4 +1,4 @@
-import type { AvailabilityState, LifecycleState, SessionState } from "@endercloud/contracts/domain";
+import type { AvailabilityState,LifecycleState,SessionState } from "@endercloud/contracts/domain";
 
 const lifecycleTransitions: Readonly<Record<LifecycleState, readonly LifecycleState[]>> = {
   CREATING: ["STARTING", "FAILED"],

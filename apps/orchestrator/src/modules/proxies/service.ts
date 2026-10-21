@@ -1,8 +1,8 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
-import type { Database } from "../db/client.ts";
-import { proxyHeartbeats, serverGroups, serverInstances } from "../db/schema.ts";
-import type { ProxyControl, ProxyHeartbeat, ProxySnapshot } from "@endercloud/contracts/domain";
-import type { InstanceController } from "./instance-controller.ts";
+import type { ProxyControl,ProxyHeartbeat,ProxySnapshot } from "@endercloud/contracts/domain";
+import { and,eq,inArray,sql } from "drizzle-orm";
+import type { Database } from "../../db/client.ts";
+import { proxyHeartbeats,serverGroups,serverInstances } from "../../db/schema.ts";
+import type { InstanceController } from "../instances/lifecycle.ts";
 
 export class ProxyService {
   public constructor(

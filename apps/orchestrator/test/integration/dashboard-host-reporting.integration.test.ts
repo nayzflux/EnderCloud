@@ -14,7 +14,7 @@ import {
   serverVariants,
   templateLayers,
 } from "../../src/db/schema.ts";
-import { DashboardService } from "../../src/services/dashboard-service.ts";
+import { DashboardService } from "../../src/modules/dashboard/queries.ts";
 
 let container: StartedPostgreSqlContainer | undefined;
 let sqlClient: ReturnType<typeof createDatabase>["sql"];
