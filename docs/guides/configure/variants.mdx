@@ -65,15 +65,15 @@ environment:
   CUSTOM_SERVER: /data/server.jar
 ```
 
-| Field | Required | Rules |
-| --- | :---: | --- |
-| `id` | Yes | Unique ID with 2 to 63 lowercase letters, digits, or dashes |
-| `revision` | Final variants only | Positive integer controlled by the operator |
-| `parents` | No | Ordered, unique array of reusable layer IDs |
-| `docker.image` | In resolved final stack | Image with an explicit tag or SHA-256 digest. `latest` is rejected |
-| `docker.memory` | In resolved final stack | Positive byte integer or value ending in `K`, `M`, or `G` |
-| `docker.cpu` | In resolved final stack | Positive number of vCPU |
-| `environment` | No | Map of string, number, or boolean YAML scalars |
+| Field           |        Required         | Rules                                                              |
+| --------------- | :---------------------: | ------------------------------------------------------------------ |
+| `id`            |           Yes           | Unique ID with 2 to 63 lowercase letters, digits, or dashes        |
+| `revision`      |   Final variants only   | Positive integer controlled by the operator                        |
+| `parents`       |           No            | Ordered, unique array of reusable layer IDs                        |
+| `docker.image`  | In resolved final stack | Image with an explicit tag or SHA-256 digest. `latest` is rejected |
+| `docker.memory` | In resolved final stack | Positive byte integer or value ending in `K`, `M`, or `G`          |
+| `docker.cpu`    | In resolved final stack | Positive number of vCPU                                            |
+| `environment`   |           No            | Map of string, number, or boolean YAML scalars                     |
 
 The directory name does not technically define the layer ID. Keep them equal so operators can
 find layers by ID without opening every descriptor.
@@ -232,4 +232,3 @@ downloaded by agents, and visible to anyone with access to the managed container
 6. Restart the orchestrator.
 
 See [the group reference](/docs/configure/groups) for traffic and capacity policy.
-

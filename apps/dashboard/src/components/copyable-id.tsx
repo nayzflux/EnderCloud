@@ -19,12 +19,7 @@ interface CopyableIdProps {
  * Monospace identifier with a copy affordance. Internal ids are 16 opaque
  * characters, so being able to grab one without selecting text matters.
  */
-export function CopyableId({
-  value,
-  display,
-  className,
-  label = "identifier",
-}: CopyableIdProps) {
+export function CopyableId({ value, display, className, label = "identifier" }: CopyableIdProps) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {

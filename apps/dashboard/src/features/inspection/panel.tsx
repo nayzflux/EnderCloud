@@ -1,20 +1,8 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import {
-  BoxIcon,
-  CircleAlertIcon,
-  ExternalLinkIcon,
-  Gamepad2Icon,
-} from "lucide-react";
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { BoxIcon, CircleAlertIcon, ExternalLinkIcon, Gamepad2Icon } from "lucide-react";
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { CopyableId } from "@/components/copyable-id";
 import { ProxyStatus } from "@/components/proxy-status";
 import { Countdown, Elapsed, RelativeTime } from "@/components/live-time";
@@ -52,12 +40,8 @@ import { formatBytes, formatDateTime, ratio } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /** Ordered lifecycle of a managed container, as the orchestrator records it. */
-function instanceSteps(
-  instance: DashboardInstanceDetail["instance"],
-): readonly TimelineStep[] {
-  const failed =
-    instance.lifecycleState === "FAILED" ||
-    instance.lifecycleState === "ORPHANED";
+function instanceSteps(instance: DashboardInstanceDetail["instance"]): readonly TimelineStep[] {
+  const failed = instance.lifecycleState === "FAILED" || instance.lifecycleState === "ORPHANED";
 
   const steps: TimelineStep[] = [
     { id: "created", label: "Created", at: instance.createdAt },
@@ -76,8 +60,7 @@ function instanceSteps(
   if (failed) {
     steps.push({
       id: "failed",
-      label:
-        instance.lifecycleState === "ORPHANED" ? "Orphaned" : "Failed",
+      label: instance.lifecycleState === "ORPHANED" ? "Orphaned" : "Failed",
       at: instance.updatedAt,
       tone: "danger",
     });
@@ -133,9 +116,7 @@ function instanceSettled(instance: DashboardInstance): boolean {
 
 function sessionSettled(session: DashboardSession): boolean {
   return (
-    session.state === "FINISHED" ||
-    session.state === "CANCELLED" ||
-    session.state === "FAILED"
+    session.state === "FINISHED" || session.state === "CANCELLED" || session.state === "FAILED"
   );
 }
 
@@ -152,11 +133,7 @@ interface DetailPanelContextValue {
 
 const DetailPanelContext = createContext<DetailPanelContextValue | null>(null);
 
-export function DetailPanelProvider({
-  children,
-}: {
-  readonly children: ReactNode;
-}) {
+export function DetailPanelProvider({ children }: { readonly children: ReactNode }) {
   const [selection, setSelection] = useState<Selection>(null);
 
   const value = useMemo<DetailPanelContextValue>(
@@ -181,12 +158,8 @@ export function DetailPanelProvider({
           className="gap-0 p-0 data-[side=right]:w-full sm:max-w-2xl!"
           aria-label="Details"
         >
-          {selection?.kind === "instance" ? (
-            <InstancePanel instanceId={selection.id} />
-          ) : null}
-          {selection?.kind === "session" ? (
-            <SessionPanel sessionId={selection.id} />
-          ) : null}
+          {selection?.kind === "instance" ? <InstancePanel instanceId={selection.id} /> : null}
+          {selection?.kind === "session" ? <SessionPanel sessionId={selection.id} /> : null}
         </SheetContent>
       </Sheet>
     </DetailPanelContext.Provider>
@@ -264,12 +237,7 @@ function ListCard({
   readonly className?: string;
 }) {
   return (
-    <li
-      className={cn(
-        "space-y-1.5 rounded-lg border px-3 py-2.5 text-sm",
-        className,
-      )}
-    >
+    <li className={cn("space-y-1.5 rounded-lg border px-3 py-2.5 text-sm", className)}>
       {children}
     </li>
   );
@@ -278,7 +246,7 @@ function ListCard({
 function InstancePanel({ instanceId }: { readonly instanceId: string }) {
   const query = useQuery({
     queryKey: ["instance", instanceId],
-    queryFn: ({signal}) => fetchInstance(instanceId, signal),
+    queryFn: ({ signal }) => fetchInstance(instanceId, signal),
     refetchInterval: 5_000,
   });
 
@@ -290,13 +258,13 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
 
   return (
     <>
-      <PanelHeader
-        icon={<BoxIcon />}
-        title="Instance"
-        id={instance.id}
-      >
+      <PanelHeader icon={<BoxIcon />} title="Instance" id={instance.id}>
         <LifecycleBadge state={instance.lifecycleState} />
-        {instance.proxy ? <ProxyStatus instance={instance} /> : <AvailabilityBadge state={instance.availabilityState} />}
+        {instance.proxy ? (
+          <ProxyStatus instance={instance} />
+        ) : (
+          <AvailabilityBadge state={instance.availabilityState} />
+        )}
         <Badge variant="outline" className="font-mono text-[0.65rem]">
           {instance.groupId}
         </Badge>
@@ -308,23 +276,19 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
           className="mx-4 mt-3 w-[calc(100%-2rem)] shrink-0 justify-start overflow-x-auto"
         >
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          {!instance.proxy ? <TabsTrigger value="players">
-            Players
-            <span className="text-muted-foreground tabular">
-              {detail.players.length}
-            </span>
-          </TabsTrigger> : null}
+          {!instance.proxy ? (
+            <TabsTrigger value="players">
+              Players
+              <span className="text-muted-foreground tabular">{detail.players.length}</span>
+            </TabsTrigger>
+          ) : null}
           <TabsTrigger value="commands">
             Commands
-            <span className="text-muted-foreground tabular">
-              {detail.commands.length}
-            </span>
+            <span className="text-muted-foreground tabular">{detail.commands.length}</span>
           </TabsTrigger>
           <TabsTrigger value="events">
             Events
-            <span className="text-muted-foreground tabular">
-              {detail.events.length}
-            </span>
+            <span className="text-muted-foreground tabular">{detail.events.length}</span>
           </TabsTrigger>
         </TabsList>
         <Separator className="mt-3" />
@@ -333,21 +297,22 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
           <TabsContent value="overview" className="space-y-5 p-4">
             <div className="rounded-lg border p-3">
               <div className="flex items-baseline justify-between gap-3">
-                <span className="text-xs text-muted-foreground">
-                  Player occupancy
-                </span>
+                <span className="text-xs text-muted-foreground">Player occupancy</span>
                 <span className="font-mono text-sm tabular">
-                  {instance.playerCount}{instance.proxy ? "" : `/${instance.maximumPlayers}`}
+                  {instance.playerCount}
+                  {instance.proxy ? "" : `/${instance.maximumPlayers}`}
                 </span>
               </div>
-              {!instance.proxy ? <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full rounded-full bg-foreground/70"
-                  style={{
-                    width: `${ratio(instance.playerCount, instance.maximumPlayers)}%`,
-                  }}
-                />
-              </div> : null}
+              {!instance.proxy ? (
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-foreground/70"
+                    style={{
+                      width: `${ratio(instance.playerCount, instance.maximumPlayers)}%`,
+                    }}
+                  />
+                </div>
+              ) : null}
             </div>
 
             {instance.failureReason ? (
@@ -437,38 +402,26 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
                 </KeyValue>
                 <KeyValue label="Revision">{variant.revision}</KeyValue>
                 <KeyValue label="CPU">{variant.runtime.cpu} vCPU</KeyValue>
-                <KeyValue label="Memory">
-                  {formatBytes(variant.runtime.memoryBytes)}
-                </KeyValue>
+                <KeyValue label="Memory">{formatBytes(variant.runtime.memoryBytes)}</KeyValue>
                 <KeyValue label="Weight">{variant.weight}</KeyValue>
-                <KeyValue label="Enabled">
-                  {variant.enabled ? "Yes" : "No"}
-                </KeyValue>
+                <KeyValue label="Enabled">{variant.enabled ? "Yes" : "No"}</KeyValue>
                 <KeyValue label="Checksum" mono wide>
                   {variant.checksum}
                 </KeyValue>
               </KeyValueGrid>
               {Object.keys(variant.runtime.environment).length > 0 ? (
                 <div className="rounded-lg border">
-                  <p className="border-b px-3 py-1.5 text-xs text-muted-foreground">
-                    Environment
-                  </p>
+                  <p className="border-b px-3 py-1.5 text-xs text-muted-foreground">Environment</p>
                   <dl className="divide-y">
-                    {Object.entries(variant.runtime.environment).map(
-                      ([key, envValue]) => (
-                        <div
-                          key={key}
-                          className="flex items-baseline justify-between gap-4 px-3 py-1.5"
-                        >
-                          <dt className="font-mono text-xs text-muted-foreground">
-                            {key}
-                          </dt>
-                          <dd className="truncate font-mono text-xs">
-                            {envValue}
-                          </dd>
-                        </div>
-                      ),
-                    )}
+                    {Object.entries(variant.runtime.environment).map(([key, envValue]) => (
+                      <div
+                        key={key}
+                        className="flex items-baseline justify-between gap-4 px-3 py-1.5"
+                      >
+                        <dt className="font-mono text-xs text-muted-foreground">{key}</dt>
+                        <dd className="truncate font-mono text-xs">{envValue}</dd>
+                      </div>
+                    ))}
                   </dl>
                 </div>
               ) : null}
@@ -484,8 +437,8 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
                   <ListCard key={player.playerId}>
                     <CopyableId value={player.playerId} label="player id" />
                     <p className="text-xs text-muted-foreground">
-                      Connected <RelativeTime value={player.connectedAt} /> ·
-                      last seen <RelativeTime value={player.lastSeenAt} />
+                      Connected <RelativeTime value={player.connectedAt} /> · last seen{" "}
+                      <RelativeTime value={player.lastSeenAt} />
                     </p>
                   </ListCard>
                 ))}
@@ -501,9 +454,7 @@ function InstancePanel({ instanceId }: { readonly instanceId: string }) {
                 {detail.commands.map((command) => (
                   <ListCard key={command.id}>
                     <div className="flex items-center justify-between gap-3">
-                      <span className="font-mono text-xs">
-                        {command.operation}
-                      </span>
+                      <span className="font-mono text-xs">{command.operation}</span>
                       <WorkStateBadge state={command.state} />
                     </div>
                     <p className="text-xs text-muted-foreground">
@@ -553,7 +504,7 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
   const { openInstance } = useDetailPanel();
   const query = useQuery({
     queryKey: ["session", sessionId],
-    queryFn: ({signal}) => fetchSession(sessionId, signal),
+    queryFn: ({ signal }) => fetchSession(sessionId, signal),
     refetchInterval: 5_000,
   });
 
@@ -581,15 +532,11 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="tickets">
             Tickets
-            <span className="text-muted-foreground tabular">
-              {detail.tickets.length}
-            </span>
+            <span className="text-muted-foreground tabular">{detail.tickets.length}</span>
           </TabsTrigger>
           <TabsTrigger value="transfers">
             Transfers
-            <span className="text-muted-foreground tabular">
-              {detail.transfers.length}
-            </span>
+            <span className="text-muted-foreground tabular">{detail.transfers.length}</span>
           </TabsTrigger>
         </TabsList>
         <Separator className="mt-3" />
@@ -677,9 +624,7 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
                 <KeyValue label="Connected recommendation">
                   {detail.recommendedConnectedProfile?.join(" · ") ?? "None"}
                 </KeyValue>
-                <KeyValue label="Expected possibilities">
-                  {detail.expectedProfiles.length}
-                </KeyValue>
+                <KeyValue label="Expected possibilities">{detail.expectedProfiles.length}</KeyValue>
                 <KeyValue label="Connected possibilities">
                   {detail.connectedProfiles.length}
                 </KeyValue>
@@ -712,10 +657,7 @@ function SessionPanel({ sessionId }: { readonly sessionId: string }) {
             ) : (
               <div className="flex flex-col gap-3">
                 {detail.tickets.map((ticket) => (
-                  <article
-                    key={ticket.ticketId}
-                    className="overflow-hidden rounded-lg border"
-                  >
+                  <article key={ticket.ticketId} className="overflow-hidden rounded-lg border">
                     <header className="flex items-center justify-between gap-3 border-b bg-muted/40 px-3 py-2">
                       <CopyableId value={ticket.partyId} label="party id" />
                       <Badge variant="outline">

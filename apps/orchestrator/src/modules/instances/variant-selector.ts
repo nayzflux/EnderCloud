@@ -1,11 +1,11 @@
 import type { VariantRuntimeSpec } from "@endercloud/contracts/domain";
-import { and,eq,isNull,or,sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.ts";
 import {
-serverGroupVariants,
-serverInstances,
-serverVariants,
-variantStartStates,
+  serverGroupVariants,
+  serverInstances,
+  serverVariants,
+  variantStartStates,
 } from "../../db/schema.ts";
 import { selectVariant } from "../../domain/variant-selection.ts";
 
@@ -24,7 +24,7 @@ export class VariantSelector {
 
   // Select the best enabled variant using current weighted representation.
   public async select(groupId: string): Promise<VariantRow | null> {
-    const rows = (await this.db
+    const rows = await this.db
       .select({
         id: serverVariants.id,
         group_id: serverGroupVariants.groupId,
@@ -49,10 +49,7 @@ export class VariantSelector {
       )
       .leftJoin(
         serverInstances,
-        and(
-          eq(serverInstances.variantId, serverVariants.id),
-          eq(serverInstances.groupId, groupId),
-        ),
+        and(eq(serverInstances.variantId, serverVariants.id), eq(serverInstances.groupId, groupId)),
       )
       .where(
         and(
@@ -79,7 +76,7 @@ export class VariantSelector {
         serverGroupVariants.selectionWeight,
         variantStartStates.state,
         variantStartStates.nextRetryAt,
-      ));
+      );
 
     if (rows.length === 0) return null;
 

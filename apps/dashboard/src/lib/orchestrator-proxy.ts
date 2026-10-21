@@ -42,8 +42,12 @@ export async function proxyOrchestrator(
       signal: incoming ? AbortSignal.any([controller.signal, incoming.signal]) : controller.signal,
     });
     const body = [204, 205, 304].includes(response.status) ? null : await response.text();
-    const headers = new Headers({ ...noStore, "x-request-id": response.headers.get("x-request-id") ?? requestId });
-    if (response.headers.has("content-type")) headers.set("content-type", response.headers.get("content-type")!);
+    const headers = new Headers({
+      ...noStore,
+      "x-request-id": response.headers.get("x-request-id") ?? requestId,
+    });
+    if (response.headers.has("content-type"))
+      headers.set("content-type", response.headers.get("content-type")!);
     for (const cookie of response.headers.getSetCookie()) headers.append("set-cookie", cookie);
     return new NextResponse(body, {
       status: response.status,

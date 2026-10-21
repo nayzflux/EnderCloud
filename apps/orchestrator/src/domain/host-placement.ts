@@ -16,9 +16,10 @@ export function selectExecutionHost(
   candidates: readonly HostPlacementCandidate[],
   request: PlacementRequest,
 ): HostPlacementCandidate | null {
-  const feasible = candidates.filter((host) =>
-    host.allocatableCpu - host.reservedCpu >= request.cpu &&
-    host.allocatableMemoryBytes - host.reservedMemoryBytes >= request.memoryBytes
+  const feasible = candidates.filter(
+    (host) =>
+      host.allocatableCpu - host.reservedCpu >= request.cpu &&
+      host.allocatableMemoryBytes - host.reservedMemoryBytes >= request.memoryBytes,
   );
   feasible.sort((left, right) => {
     const leftShare = Math.max(

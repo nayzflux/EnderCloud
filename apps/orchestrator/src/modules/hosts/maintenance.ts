@@ -1,8 +1,8 @@
-import type { AvailabilityState,LifecycleState,SessionState } from "@endercloud/contracts/domain";
+import type { AvailabilityState, LifecycleState, SessionState } from "@endercloud/contracts/domain";
 import type { Logger } from "@endercloud/runtime/logger";
-import { and,eq,ne,sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.ts";
-import { executionHosts,gameSessions,serverInstances,sessionPlayers } from "../../db/schema.ts";
+import { executionHosts, gameSessions, serverInstances, sessionPlayers } from "../../db/schema.ts";
 import type { InstanceController } from "../instances/lifecycle.ts";
 import type { HostService } from "./service.ts";
 
@@ -30,7 +30,8 @@ export class HostMaintenanceController {
     this.running = true;
     const failures: Error[] = [];
     try {
-      const drainingHosts = await this.db.select({ id: executionHosts.id })
+      const drainingHosts = await this.db
+        .select({ id: executionHosts.id })
         .from(executionHosts)
         .where(eq(executionHosts.adminState, "DRAINING"));
       for (const host of drainingHosts) {
@@ -44,30 +45,30 @@ export class HostMaintenanceController {
           });
         }
       }
-      if (failures.length) throw new AggregateError(failures, "host.maintenance control loop failed");
+      if (failures.length)
+        throw new AggregateError(failures, "host.maintenance control loop failed");
     } finally {
       this.running = false;
     }
   }
 
   private async drainHost(hostId: string): Promise<void> {
-    const assigned = (await this.db.select({
-      id: serverInstances.id,
-      group_id: serverInstances.groupId,
-      lifecycle_state: serverInstances.lifecycleState,
-      availability_state: serverInstances.availabilityState,
-      session_state: gameSessions.state,
-      connected_players: sql<number>`count(${sessionPlayers.playerId}) FILTER (
+    const assigned = await this.db
+      .select({
+        id: serverInstances.id,
+        group_id: serverInstances.groupId,
+        lifecycle_state: serverInstances.lifecycleState,
+        availability_state: serverInstances.availabilityState,
+        session_state: gameSessions.state,
+        connected_players: sql<number>`count(${sessionPlayers.playerId}) FILTER (
         WHERE ${sessionPlayers.state} = 'CONNECTED'
       )::int`.mapWith(Number),
-    }).from(serverInstances)
+      })
+      .from(serverInstances)
       .leftJoin(gameSessions, eq(gameSessions.id, serverInstances.sessionId))
       .leftJoin(sessionPlayers, eq(sessionPlayers.sessionId, gameSessions.id))
-      .where(and(
-        eq(serverInstances.hostId, hostId),
-        ne(serverInstances.lifecycleState, "STOPPED"),
-      ))
-      .groupBy(serverInstances.id, gameSessions.id));
+      .where(and(eq(serverInstances.hostId, hostId), ne(serverInstances.lifecycleState, "STOPPED")))
+      .groupBy(serverInstances.id, gameSessions.id);
 
     if (assigned.length === 0) {
       await this.hosts.markMaintenance(hostId);
@@ -91,22 +92,24 @@ export class HostMaintenanceController {
         continue;
       }
 
-      const replacements = await this.db.select({
-        id: serverInstances.id,
-        lifecycle_state: serverInstances.lifecycleState,
-      }).from(serverInstances).where(and(
-        eq(serverInstances.replacesInstanceId, instance.id),
-        ne(serverInstances.lifecycleState, "STOPPED"),
-      )).limit(1);
+      const replacements = await this.db
+        .select({
+          id: serverInstances.id,
+          lifecycle_state: serverInstances.lifecycleState,
+        })
+        .from(serverInstances)
+        .where(
+          and(
+            eq(serverInstances.replacesInstanceId, instance.id),
+            ne(serverInstances.lifecycleState, "STOPPED"),
+          ),
+        )
+        .limit(1);
       const replacement = replacements[0];
       if (replacement?.lifecycle_state === "RUNNING") {
         await this.instances.completeReplacement(replacement.id);
       } else if (!replacement) {
-        await this.instances.createWarm(
-          instance.group_id,
-          instance.id,
-          "HOST_MAINTENANCE",
-        );
+        await this.instances.createWarm(instance.group_id, instance.id, "HOST_MAINTENANCE");
       }
     }
   }

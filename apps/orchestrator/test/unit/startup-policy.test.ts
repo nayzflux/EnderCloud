@@ -1,14 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import {
-  countsAsStartupFailure,
-  decideStartupFailure,
-} from "../../src/domain/startup-policy.ts";
+import { countsAsStartupFailure, decideStartupFailure } from "../../src/domain/startup-policy.ts";
 
 describe("variant startup policy", () => {
   test("uses five exponential retries and blocks the sixth failure", () => {
-    expect([1, 2, 3, 4, 5].map((failureCount) =>
-      decideStartupFailure(failureCount, 5, 1_000)
-    )).toEqual([
+    expect(
+      [1, 2, 3, 4, 5].map((failureCount) => decideStartupFailure(failureCount, 5, 1_000)),
+    ).toEqual([
       { state: "BACKING_OFF", delayMs: 1_000 },
       { state: "BACKING_OFF", delayMs: 2_000 },
       { state: "BACKING_OFF", delayMs: 4_000 },

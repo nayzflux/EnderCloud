@@ -1,12 +1,7 @@
 "use client";
 
 import { useInfiniteQuery } from "@tanstack/react-query";
-import {
-  AlertTriangleIcon,
-  CheckCircle2Icon,
-  CircleAlertIcon,
-  HistoryIcon,
-} from "lucide-react";
+import { AlertTriangleIcon, CheckCircle2Icon, CircleAlertIcon, HistoryIcon } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useMemo, useState } from "react";
 import { FilterBar, FilterSelect, SearchField } from "@/components/filter-bar";
@@ -66,26 +61,34 @@ const kindOptions = [
 ];
 
 const recommendations: Readonly<Record<string, string>> = {
-  NO_ONLINE_HOST: "Bring an execution host online and verify that its heartbeat reaches the orchestrator.",
-  INSUFFICIENT_CPU: "Increase the CPU announced by an online host, reduce existing reservations, or add a host.",
+  NO_ONLINE_HOST:
+    "Bring an execution host online and verify that its heartbeat reaches the orchestrator.",
+  INSUFFICIENT_CPU:
+    "Increase the CPU announced by an online host, reduce existing reservations, or add a host.",
   INSUFFICIENT_MEMORY: "Increase allocatable memory, reduce existing reservations, or add a host.",
   INSUFFICIENT_RESOURCES: "Review both CPU and memory reservations across online hosts.",
   GROUP_MAXIMUM_REACHED: "Review the group maximum and the instances already counted toward it.",
   PLACEMENT_CONFLICT: "Inspect host placement constraints and the requested variant resources.",
-  STARTUP_TIMEOUT: "Inspect the affected variant logs and confirm that its readiness signal is emitted.",
-  CREATE_FAILED: "Inspect the affected variant and execution-host logs for container creation errors.",
+  STARTUP_TIMEOUT:
+    "Inspect the affected variant logs and confirm that its readiness signal is emitted.",
+  CREATE_FAILED:
+    "Inspect the affected variant and execution-host logs for container creation errors.",
   RUNTIME_MISSING: "Inspect the retained instance diagnostics and the agent runtime directory.",
-  STARTUP_FAILURE: "Inspect the retained instance diagnostics and retry the blocked revision when fixed.",
+  STARTUP_FAILURE:
+    "Inspect the retained instance diagnostics and retry the blocked revision when fixed.",
   HOST_OFFLINE: "Restore the host agent or move capacity to another online host.",
   HOST_RECOVERING: "Inspect the host agent and its last control error before reactivating it.",
-  REPLACEMENT_UNAVAILABLE: "Ensure another host has enough free resources for the draining instances.",
-  REPLACEMENT_NOT_CREATED: "Ensure another host has enough free resources for the draining instances.",
+  REPLACEMENT_UNAVAILABLE:
+    "Ensure another host has enough free resources for the draining instances.",
+  REPLACEMENT_NOT_CREATED:
+    "Ensure another host has enough free resources for the draining instances.",
   TRANSFER_EXPIRED: "Inspect proxy connectivity and the affected player transfer records.",
   TRANSFER_COMMAND_EXPIRED: "Inspect proxy connectivity and the affected player transfer records.",
   COMMAND_FAILED: "Inspect the persistent command error and the target agent logs.",
   CREATE_COMMAND_FAILED: "Inspect the persistent create command error and the target agent logs.",
   DELETE_COMMAND_FAILED: "Inspect the persistent delete command error and the target agent logs.",
-  SCHEDULED_TASK_FAILED: "Inspect orchestrator logs for the named control loop and its latest exception.",
+  SCHEDULED_TASK_FAILED:
+    "Inspect orchestrator logs for the named control loop and its latest exception.",
 };
 
 function IncidentBadge({ incident }: { readonly incident: DashboardIncident }) {
@@ -106,20 +109,27 @@ function IncidentDetail({
 }) {
   const recommendation = incident ? recommendations[incident.cause] : undefined;
   return (
-    <Sheet open={incident !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
+    <Sheet
+      open={incident !== null}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
       <SheetContent side="right" className="gap-0 p-0 data-[side=right]:w-full sm:max-w-2xl!">
         {incident ? (
           <>
             <SheetHeader className="gap-3 border-b p-4 pr-12">
               <div className="flex items-start gap-3">
                 <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
-                  {incident.status === "RESOLVED" ? <CheckCircle2Icon className="size-4" /> : <AlertTriangleIcon className="size-4" />}
+                  {incident.status === "RESOLVED" ? (
+                    <CheckCircle2Icon className="size-4" />
+                  ) : (
+                    <AlertTriangleIcon className="size-4" />
+                  )}
                 </span>
                 <div className="min-w-0">
                   <SheetTitle>{incident.summary}</SheetTitle>
-                  <SheetDescription className="font-mono text-xs">
-                    {incident.id}
-                  </SheetDescription>
+                  <SheetDescription className="font-mono text-xs">{incident.id}</SheetDescription>
                 </div>
               </div>
               <div className="flex flex-wrap gap-1.5">
@@ -144,12 +154,20 @@ function IncidentDetail({
                 <section className="space-y-3">
                   <SectionTitle>Diagnosis</SectionTitle>
                   <KeyValueGrid>
-                    <KeyValue label="Cause" mono>{incident.cause}</KeyValue>
+                    <KeyValue label="Cause" mono>
+                      {incident.cause}
+                    </KeyValue>
                     <KeyValue label="Occurrences">{incident.occurrenceCount}</KeyValue>
                     <KeyValue label="Scope type">{humanizeState(incident.scope.type)}</KeyValue>
-                    <KeyValue label="Scope identifier" mono>{incident.scope.id}</KeyValue>
-                    <KeyValue label="Group" mono>{incident.scope.groupId ?? "—"}</KeyValue>
-                    <KeyValue label="Variant" mono>{incident.scope.variantId ?? "—"}</KeyValue>
+                    <KeyValue label="Scope identifier" mono>
+                      {incident.scope.id}
+                    </KeyValue>
+                    <KeyValue label="Group" mono>
+                      {incident.scope.groupId ?? "—"}
+                    </KeyValue>
+                    <KeyValue label="Variant" mono>
+                      {incident.scope.variantId ?? "—"}
+                    </KeyValue>
                   </KeyValueGrid>
                 </section>
 
@@ -157,8 +175,12 @@ function IncidentDetail({
                 <section className="space-y-3">
                   <SectionTitle>Timeline</SectionTitle>
                   <KeyValueGrid>
-                    <KeyValue label="First observed">{formatDateTime(incident.firstObservedAt)}</KeyValue>
-                    <KeyValue label="Last observed">{formatDateTime(incident.lastObservedAt)}</KeyValue>
+                    <KeyValue label="First observed">
+                      {formatDateTime(incident.firstObservedAt)}
+                    </KeyValue>
+                    <KeyValue label="Last observed">
+                      {formatDateTime(incident.lastObservedAt)}
+                    </KeyValue>
                     <KeyValue label="Opened">{formatDateTime(incident.openedAt)}</KeyValue>
                     <KeyValue label="Resolved">{formatDateTime(incident.resolvedAt)}</KeyValue>
                   </KeyValueGrid>
@@ -193,15 +215,19 @@ function IncidentsContent() {
   const query = useInfiniteQuery({
     queryKey: ["incidents", status, severity, kind, groupId, scopeId],
     initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam, signal }) => fetchIncidents({
-      status,
-      ...(severity === "all" ? {} : { severity }),
-      ...(kind === "all" ? {} : { kind }),
-      ...(groupId.trim() ? { groupId: groupId.trim() } : {}),
-      ...(scopeId ? { scopeId } : {}),
-      ...(pageParam ? { cursor: pageParam } : {}),
-      limit: 50,
-    }, signal),
+    queryFn: ({ pageParam, signal }) =>
+      fetchIncidents(
+        {
+          status,
+          ...(severity === "all" ? {} : { severity }),
+          ...(kind === "all" ? {} : { kind }),
+          ...(groupId.trim() ? { groupId: groupId.trim() } : {}),
+          ...(scopeId ? { scopeId } : {}),
+          ...(pageParam ? { cursor: pageParam } : {}),
+          limit: 50,
+        },
+        signal,
+      ),
     getNextPageParam: (page) => page.nextCursor ?? undefined,
   });
 
@@ -225,7 +251,9 @@ function IncidentsContent() {
         </div>
         <div className="px-4 py-3">
           <p className="text-xs text-muted-foreground">Critical</p>
-          <p className="font-heading text-xl font-semibold tabular">{counts?.criticalCount ?? "—"}</p>
+          <p className="font-heading text-xl font-semibold tabular">
+            {counts?.criticalCount ?? "—"}
+          </p>
         </div>
         <div className="px-4 py-3">
           <p className="text-xs text-muted-foreground">Current view</p>
@@ -237,7 +265,9 @@ function IncidentsContent() {
         <Tabs value={status} onValueChange={(value) => setStatus(value as StatusFilter)}>
           <TabsList variant="line">
             <TabsTrigger value="active">Active</TabsTrigger>
-            <TabsTrigger value="resolved"><HistoryIcon /> Resolved</TabsTrigger>
+            <TabsTrigger value="resolved">
+              <HistoryIcon /> Resolved
+            </TabsTrigger>
           </TabsList>
         </Tabs>
         <FilterBar>
@@ -272,21 +302,31 @@ function IncidentsContent() {
         <Alert variant="destructive">
           <CircleAlertIcon />
           <AlertTitle>Incidents unavailable</AlertTitle>
-          <AlertDescription>The persistent incident registry could not be refreshed.</AlertDescription>
+          <AlertDescription>
+            The persistent incident registry could not be refreshed.
+          </AlertDescription>
         </Alert>
       ) : null}
 
       {query.isPending ? (
         <div className="space-y-2">
-          {Array.from({ length: 5 }, (_unused, index) => <Skeleton key={index} className="h-14 w-full" />)}
+          {Array.from({ length: 5 }, (_unused, index) => (
+            <Skeleton key={index} className="h-14 w-full" />
+          ))}
         </div>
       ) : null}
 
       {!query.isPending && !query.isError && incidents.length === 0 ? (
         <Empty className="border">
           <EmptyHeader>
-            <EmptyMedia variant="icon"><CheckCircle2Icon /></EmptyMedia>
-            <EmptyTitle>{status === "active" ? "No active operational incident" : "No resolved incident found"}</EmptyTitle>
+            <EmptyMedia variant="icon">
+              <CheckCircle2Icon />
+            </EmptyMedia>
+            <EmptyTitle>
+              {status === "active"
+                ? "No active operational incident"
+                : "No resolved incident found"}
+            </EmptyTitle>
             <EmptyDescription>
               {status === "active"
                 ? "Transient anomalies below their threshold stay invisible and are discarded after recovery."
@@ -312,7 +352,9 @@ function IncidentsContent() {
             <TableBody>
               {incidents.map((incident) => (
                 <TableRow key={incident.id}>
-                  <TableCell><IncidentBadge incident={incident} /></TableCell>
+                  <TableCell>
+                    <IncidentBadge incident={incident} />
+                  </TableCell>
                   <TableCell className="max-w-sm">
                     <button
                       type="button"
@@ -321,15 +363,23 @@ function IncidentsContent() {
                     >
                       {incident.summary}
                     </button>
-                    <p className="mt-1 font-mono text-xs text-muted-foreground">{humanizeState(incident.kind)}</p>
+                    <p className="mt-1 font-mono text-xs text-muted-foreground">
+                      {humanizeState(incident.kind)}
+                    </p>
                   </TableCell>
                   <TableCell>
                     <span className="font-mono text-xs">{incident.scope.id}</span>
-                    <p className="text-xs text-muted-foreground">{humanizeState(incident.scope.type)}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {humanizeState(incident.scope.type)}
+                    </p>
                   </TableCell>
                   <TableCell className="font-mono text-xs">{incident.cause}</TableCell>
-                  <TableCell className="text-right font-mono tabular">{incident.occurrenceCount}</TableCell>
-                  <TableCell><RelativeTime value={incident.lastObservedAt} /></TableCell>
+                  <TableCell className="text-right font-mono tabular">
+                    {incident.occurrenceCount}
+                  </TableCell>
+                  <TableCell>
+                    <RelativeTime value={incident.lastObservedAt} />
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -339,7 +389,11 @@ function IncidentsContent() {
 
       {query.hasNextPage ? (
         <div className="flex justify-center">
-          <Button variant="outline" disabled={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>
+          <Button
+            variant="outline"
+            disabled={query.isFetchingNextPage}
+            onClick={() => void query.fetchNextPage()}
+          >
             {query.isFetchingNextPage ? "Loading…" : "Load older incidents"}
           </Button>
         </div>

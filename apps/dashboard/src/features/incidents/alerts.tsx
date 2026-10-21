@@ -13,7 +13,7 @@ export function OverviewIncidentAlerts() {
   const activeCount = snapshot?.summary.activeIncidentCount ?? 0;
   const query = useQuery({
     queryKey: ["incidents", "overview"],
-    queryFn: ({signal}) => fetchIncidents({ status: "active", limit: 5 }, signal),
+    queryFn: ({ signal }) => fetchIncidents({ status: "active", limit: 5 }, signal),
     enabled: activeCount > 0,
     refetchInterval: refreshInterval === 0 ? false : Math.max(5_000, refreshInterval),
     refetchIntervalInBackground: false,
@@ -25,9 +25,15 @@ export function OverviewIncidentAlerts() {
     return (
       <Alert variant="destructive">
         <CircleAlertIcon />
-        <AlertTitle>{activeCount} active operational incident{activeCount === 1 ? "" : "s"}</AlertTitle>
-        <AlertDescription>The incident summary is current, but diagnostic details could not be refreshed.</AlertDescription>
-        <AlertAction><InspectButton /></AlertAction>
+        <AlertTitle>
+          {activeCount} active operational incident{activeCount === 1 ? "" : "s"}
+        </AlertTitle>
+        <AlertDescription>
+          The incident summary is current, but diagnostic details could not be refreshed.
+        </AlertDescription>
+        <AlertAction>
+          <InspectButton />
+        </AlertAction>
       </Alert>
     );
   }
@@ -46,14 +52,18 @@ export function OverviewIncidentAlerts() {
           <ul className="flex flex-col gap-1">
             {incidents.slice(0, 3).map((incident) => (
               <li key={incident.id}>
-                <span className="font-mono text-xs">{incident.scope.id}</span>{" "}
-                {incident.summary} <span className="font-mono text-xs text-muted-foreground">({incident.cause})</span>
+                <span className="font-mono text-xs">{incident.scope.id}</span> {incident.summary}{" "}
+                <span className="font-mono text-xs text-muted-foreground">({incident.cause})</span>
               </li>
             ))}
           </ul>
-        ) : "Loading persistent diagnoses…"}
+        ) : (
+          "Loading persistent diagnoses…"
+        )}
       </AlertDescription>
-      <AlertAction><InspectButton /></AlertAction>
+      <AlertAction>
+        <InspectButton />
+      </AlertAction>
     </Alert>
   );
 }

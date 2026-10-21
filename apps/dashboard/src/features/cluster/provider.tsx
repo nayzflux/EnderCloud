@@ -1,13 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import {
-  createContext,
-  useContext,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 import { fetchCluster } from "@/lib/api";
 import type { DashboardClusterSnapshot, DashboardGroup } from "@endercloud/contracts";
 
@@ -57,9 +51,7 @@ export function ClusterProvider({ children }: { readonly children: ReactNode }) 
     [query, refreshInterval],
   );
 
-  return (
-    <ClusterContext.Provider value={value}>{children}</ClusterContext.Provider>
-  );
+  return <ClusterContext.Provider value={value}>{children}</ClusterContext.Provider>;
 }
 
 export function useCluster(): ClusterContextValue {
@@ -95,8 +87,6 @@ export function useAllSessions() {
 }
 
 /** Groups that run matchmaking, i.e. the only ones with a queue. */
-export function matchmakingGroups(
-  groups: readonly DashboardGroup[],
-): readonly DashboardGroup[] {
+export function matchmakingGroups(groups: readonly DashboardGroup[]): readonly DashboardGroup[] {
   return groups.filter((group) => group.type === "minigame");
 }

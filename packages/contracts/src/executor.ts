@@ -17,7 +17,11 @@ export interface InstanceSpec {
 
 /** Agent-local materialization; never transmitted by the orchestrator. */
 export interface ResolvedInstanceSpec extends Omit<InstanceSpec, "templateLayers"> {
-  readonly templateLayers: readonly { readonly id: string; readonly checksum: string; readonly templatePath: string }[];
+  readonly templateLayers: readonly {
+    readonly id: string;
+    readonly checksum: string;
+    readonly templatePath: string;
+  }[];
 }
 
 export interface CreatedInstance {
@@ -70,7 +74,10 @@ export class ExecutionHostUnavailableError extends Error {
 }
 
 export class ExecutionCommandSupersededError extends Error {
-  public constructor(message: string) { super(message); this.name = "ExecutionCommandSupersededError"; }
+  public constructor(message: string) {
+    super(message);
+    this.name = "ExecutionCommandSupersededError";
+  }
 }
 
 export interface InstanceTarget {

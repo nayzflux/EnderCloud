@@ -56,12 +56,8 @@ function MiniStat({
       <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
       <div className="min-w-0">
         <p className="text-xs text-muted-foreground">{label}</p>
-        <p className="font-heading text-base leading-tight font-semibold tabular">
-          {value}
-        </p>
-        {hint ? (
-          <div className="truncate text-xs text-muted-foreground">{hint}</div>
-        ) : null}
+        <p className="font-heading text-base leading-tight font-semibold tabular">{value}</p>
+        {hint ? <div className="truncate text-xs text-muted-foreground">{hint}</div> : null}
       </div>
     </div>
   );
@@ -69,20 +65,12 @@ function MiniStat({
 
 function GroupCard({ group }: { readonly group: DashboardGroup }) {
   const { capacity } = group;
-  const players = group.instances.reduce(
-    (total, instance) => total + instance.playerCount,
-    0,
-  );
-  const seats = group.instances.reduce(
-    (total, instance) => total + instance.maximumPlayers,
-    0,
-  );
+  const players = group.instances.reduce((total, instance) => total + instance.playerCount, 0);
+  const seats = group.instances.reduce((total, instance) => total + instance.maximumPlayers, 0);
   const attention = group.instances.filter(needsAttention).length;
   const activeSessions = group.sessions.filter(
     (session) =>
-      session.state !== "FINISHED" &&
-      session.state !== "CANCELLED" &&
-      session.state !== "FAILED",
+      session.state !== "FINISHED" && session.state !== "CANCELLED" && session.state !== "FAILED",
   ).length;
 
   return (
@@ -96,16 +84,14 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
           ) : (
             <StatusBadge tone="neutral" label="Disabled" />
           )}
-          {attention > 0 ? (
-            <StatusBadge tone="danger" label={`${attention} degraded`} />
-          ) : null}
+          {attention > 0 ? <StatusBadge tone="danger" label={`${attention} degraded`} /> : null}
         </CardTitle>
         <CardDescription>
           {group.type === "hub"
             ? "Fallback lobby: players are routed to the least loaded instance."
             : group.type === "proxy"
-            ? "Velocity entry points: fixed capacity managed behind an external load balancer."
-            : "Matchmaking group: parties queue up and are placed on a reserved instance."}
+              ? "Velocity entry points: fixed capacity managed behind an external load balancer."
+              : "Matchmaking group: parties queue up and are placed on a reserved instance."}
         </CardDescription>
         <CardAction>
           <div className="flex items-center gap-2">
@@ -140,7 +126,13 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
       </CardHeader>
 
       <CardContent className="space-y-5">
-        <div className={group.type === "proxy" ? "grid grid-cols-2 gap-4 sm:grid-cols-3" : "grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6"}>
+        <div
+          className={
+            group.type === "proxy"
+              ? "grid grid-cols-2 gap-4 sm:grid-cols-3"
+              : "grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6"
+          }
+        >
           <MiniStat
             icon={ServerIcon}
             label="Instances"
@@ -153,42 +145,52 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
             value={capacity.warmInstances}
             hint={`target ${capacity.minimumWarmInstances}–${capacity.maximumWarmInstances}`}
           />
-          {group.type !== "proxy" ? <MiniStat
-            icon={Layers3Icon}
-            label="Reserved"
-            value={capacity.reservedInstances}
-            hint={
-              capacity.pendingWarmInstances > 0
-                ? `+${capacity.pendingWarmInstances} starting`
-                : undefined
-            }
-          /> : null}
-          {group.type !== "proxy" ? <MiniStat
-            icon={Gamepad2Icon}
-            label="Sessions"
-            value={activeSessions}
-            hint={`${group.sessions.length} tracked`}
-          /> : null}
+          {group.type !== "proxy" ? (
+            <MiniStat
+              icon={Layers3Icon}
+              label="Reserved"
+              value={capacity.reservedInstances}
+              hint={
+                capacity.pendingWarmInstances > 0
+                  ? `+${capacity.pendingWarmInstances} starting`
+                  : undefined
+              }
+            />
+          ) : null}
+          {group.type !== "proxy" ? (
+            <MiniStat
+              icon={Gamepad2Icon}
+              label="Sessions"
+              value={activeSessions}
+              hint={`${group.sessions.length} tracked`}
+            />
+          ) : null}
           <MiniStat
             icon={UsersIcon}
             label="Players"
             value={players}
-            hint={group.type !== "proxy" && seats > 0 ? `${Math.round(ratio(players, seats))}% of seats` : undefined}
-          />
-          {group.type === "minigame" ? <MiniStat
-            icon={ListOrderedIcon}
-            label="Queue"
-            value={group.queue.playerCount}
             hint={
-              group.queue.oldestJoinedAt ? (
-                <>
-                  oldest <Elapsed value={group.queue.oldestJoinedAt} />
-                </>
-              ) : (
-                `${group.queue.partyCount} parties`
-              )
+              group.type !== "proxy" && seats > 0
+                ? `${Math.round(ratio(players, seats))}% of seats`
+                : undefined
             }
-          /> : null}
+          />
+          {group.type === "minigame" ? (
+            <MiniStat
+              icon={ListOrderedIcon}
+              label="Queue"
+              value={group.queue.playerCount}
+              hint={
+                group.queue.oldestJoinedAt ? (
+                  <>
+                    oldest <Elapsed value={group.queue.oldestJoinedAt} />
+                  </>
+                ) : (
+                  `${group.queue.partyCount} parties`
+                )
+              }
+            />
+          ) : null}
         </div>
 
         <Separator />
@@ -196,7 +198,11 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
         <div className="grid gap-6 lg:grid-cols-2">
           <section className="space-y-3">
             <SectionTitle>
-              {group.type === "proxy" ? "Proxy capacity" : group.matchmaking ? "Matchmaking" : "Routing"}
+              {group.type === "proxy"
+                ? "Proxy capacity"
+                : group.matchmaking
+                  ? "Matchmaking"
+                  : "Routing"}
             </SectionTitle>
             {group.type === "proxy" ? (
               <KeyValueGrid>
@@ -206,8 +212,7 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
             ) : group.matchmaking ? (
               <KeyValueGrid>
                 <KeyValue label="Players per match">
-                  {group.matchmaking.minimumPlayers}–
-                  {group.matchmaking.maximumPlayers}
+                  {group.matchmaking.minimumPlayers}–{group.matchmaking.maximumPlayers}
                 </KeyValue>
                 <KeyValue label="Teams">
                   {group.matchmaking.teamCount} × {group.matchmaking.teamSize}
@@ -245,21 +250,17 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
           <section className="space-y-3">
             <SectionTitle>Timeouts</SectionTitle>
             <KeyValueGrid columns={3}>
-              <KeyValue label="Startup">
-                {formatDuration(group.timeouts.startupMs)}
-              </KeyValue>
-              <KeyValue label="Drain">
-                {formatDuration(group.timeouts.drainMs)}
-              </KeyValue>
-              {group.type !== "proxy" ? <KeyValue label="Cancelled drain">
-                {formatDuration(group.timeouts.cancelledDrainMs)}
-              </KeyValue> : null}
-              <KeyValue label="Shutdown">
-                {formatDuration(group.timeouts.shutdownMs)}
-              </KeyValue>
-              {group.type !== "proxy" ? <KeyValue label="Transfer">
-                {formatDuration(group.timeouts.transferMs)}
-              </KeyValue> : null}
+              <KeyValue label="Startup">{formatDuration(group.timeouts.startupMs)}</KeyValue>
+              <KeyValue label="Drain">{formatDuration(group.timeouts.drainMs)}</KeyValue>
+              {group.type !== "proxy" ? (
+                <KeyValue label="Cancelled drain">
+                  {formatDuration(group.timeouts.cancelledDrainMs)}
+                </KeyValue>
+              ) : null}
+              <KeyValue label="Shutdown">{formatDuration(group.timeouts.shutdownMs)}</KeyValue>
+              {group.type !== "proxy" ? (
+                <KeyValue label="Transfer">{formatDuration(group.timeouts.transferMs)}</KeyValue>
+              ) : null}
               <KeyValue label="Player stale">
                 {formatDuration(group.timeouts.playerStaleMs)}
               </KeyValue>
@@ -278,21 +279,13 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead className="text-xs text-muted-foreground">
-                    Variant
-                  </TableHead>
-                  <TableHead className="text-xs text-muted-foreground">
-                    Image
-                  </TableHead>
+                  <TableHead className="text-xs text-muted-foreground">Variant</TableHead>
+                  <TableHead className="text-xs text-muted-foreground">Image</TableHead>
                   <TableHead className="hidden text-xs text-muted-foreground sm:table-cell">
                     Resources
                   </TableHead>
-                  <TableHead className="text-right text-xs text-muted-foreground">
-                    Weight
-                  </TableHead>
-                  <TableHead className="text-right text-xs text-muted-foreground">
-                    Rev.
-                  </TableHead>
+                  <TableHead className="text-right text-xs text-muted-foreground">Weight</TableHead>
+                  <TableHead className="text-right text-xs text-muted-foreground">Rev.</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -312,8 +305,7 @@ function GroupCard({ group }: { readonly group: DashboardGroup }) {
                       {variant.runtime.image}
                     </TableCell>
                     <TableCell className="hidden font-mono text-xs text-muted-foreground sm:table-cell">
-                      {variant.runtime.cpu} vCPU ·{" "}
-                      {formatBytes(variant.runtime.memoryBytes)}
+                      {variant.runtime.cpu} vCPU · {formatBytes(variant.runtime.memoryBytes)}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs tabular">
                       {variant.weight}
@@ -353,36 +345,30 @@ export default function GroupsPage() {
       />
       <ClusterGate>
         {(snapshot) => {
-        const needle = search.trim().toLowerCase();
-        const groups = snapshot.groups.filter(
-          (group) =>
-            !needle ||
-            group.id.toLowerCase().includes(needle) ||
-            group.variants.some((variant) =>
-              variant.id.toLowerCase().includes(needle),
-            ),
-        );
+          const needle = search.trim().toLowerCase();
+          const groups = snapshot.groups.filter(
+            (group) =>
+              !needle ||
+              group.id.toLowerCase().includes(needle) ||
+              group.variants.some((variant) => variant.id.toLowerCase().includes(needle)),
+          );
 
-        return (
-          <>
-            <FilterBar>
-              <SearchField
-                value={search}
-                onChange={setSearch}
-                label="Search groups"
-                placeholder="Group or variant…"
-              />
-              <ResultCount
-                shown={groups.length}
-                total={snapshot.groups.length}
-                noun="group"
-              />
-            </FilterBar>
+          return (
+            <>
+              <FilterBar>
+                <SearchField
+                  value={search}
+                  onChange={setSearch}
+                  label="Search groups"
+                  placeholder="Group or variant…"
+                />
+                <ResultCount shown={groups.length} total={snapshot.groups.length} noun="group" />
+              </FilterBar>
 
-            <div className="flex flex-col gap-4">
-              {groups.map((group) => (
-                <GroupCard key={group.id} group={group} />
-              ))}
+              <div className="flex flex-col gap-4">
+                {groups.map((group) => (
+                  <GroupCard key={group.id} group={group} />
+                ))}
               </div>
             </>
           );

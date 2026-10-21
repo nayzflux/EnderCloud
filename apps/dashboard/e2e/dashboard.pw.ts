@@ -9,8 +9,7 @@ import { expect, test, type Page } from "@playwright/test";
 const desktopOnly = (page: Page) => page.viewportSize()!.width >= 768;
 
 /** Table rows are `tr[role=button]`; some cells hold their own buttons. */
-const tableRows = (page: Page) =>
-  page.getByRole("button").filter({ has: page.locator("td") });
+const tableRows = (page: Page) => page.getByRole("button").filter({ has: page.locator("td") });
 
 /** Clicks a row on its first cell, away from any nested control. */
 async function openRow(page: Page, index = 0) {
@@ -24,7 +23,10 @@ async function openRow(page: Page, index = 0) {
  * cluster snapshot lands, so each test waits on the content it actually needs.
  */
 async function visit(page: Page, path: string) {
-  const snapshot = page.waitForResponse(response => new URL(response.url()).pathname === "/api/cluster" && response.ok(), { timeout: 20_000 });
+  const snapshot = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/cluster" && response.ok(),
+    { timeout: 20_000 },
+  );
   // `load` guarantees the client bundle is in, so clicks land on a hydrated
   // tree rather than on the server-rendered markup.
   await page.goto(path, { waitUntil: "load" });
@@ -44,9 +46,7 @@ async function visitTopology(page: Page) {
 test.describe("overview", () => {
   test("summarises the fleet", async ({ page }) => {
     await visit(page, "/");
-    await expect(
-      page.getByRole("heading", { name: "Cluster overview" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Cluster overview" })).toBeVisible();
 
     await expect(page.getByText("Fleet health", { exact: true })).toBeVisible();
     await expect(page.getByText("Needs attention", { exact: true })).toBeVisible();
@@ -105,9 +105,7 @@ test.describe("instances", () => {
 
     // Well under the five-second refetch: any change comes from the local clock.
     await page.waitForTimeout(2_200);
-    await expect
-      .poll(async () => age.textContent())
-      .not.toBe(first);
+    await expect.poll(async () => age.textContent()).not.toBe(first);
   });
 
   test("keeps the timeline live while refresh is paused", async ({ page }) => {
@@ -150,9 +148,7 @@ test.describe("instances", () => {
     await expect(option).toBeVisible();
     await option.click();
 
-    await expect
-      .poll(async () => page.locator("tbody tr").count())
-      .toBeLessThan(before);
+    await expect.poll(async () => page.locator("tbody tr").count()).toBeLessThan(before);
     await expect(page.getByText("Failed").first()).toBeVisible();
   });
 });
@@ -161,12 +157,8 @@ test.describe("sessions", () => {
   test("separates session occupancy from transferred players", async ({ page }) => {
     await visit(page, "/sessions");
     await expect(page.getByRole("heading", { name: "Sessions" })).toBeVisible();
-    await expect(
-      page.getByRole("columnheader", { name: "Session players" }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("columnheader", { name: "Transferred" }),
-    ).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "Session players" })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "Transferred" })).toBeVisible();
 
     await openRow(page);
 
@@ -185,9 +177,7 @@ test.describe("sessions", () => {
 test.describe("queues", () => {
   test("shows queue pressure per matchmaking group", async ({ page }) => {
     await visit(page, "/queues");
-    await expect(
-      page.getByRole("heading", { name: "Matchmaking queues" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Matchmaking queues" })).toBeVisible();
 
     await expect(page.getByText("PARTIES QUEUED").first()).toBeVisible();
     await expect(page.getByText("LONGEST WAIT").first()).toBeVisible();
@@ -197,9 +187,7 @@ test.describe("queues", () => {
     await expect(page.getByRole("tab", { name: /bedwars-duo/ })).toBeVisible();
     await expect(page.getByRole("tab", { name: /^hub/ })).toHaveCount(0);
 
-    await expect(
-      page.getByText("Wait distribution", { exact: true }),
-    ).toBeVisible();
+    await expect(page.getByText("Wait distribution", { exact: true })).toBeVisible();
     await expect(page.getByText("Queued parties", { exact: true })).toBeVisible();
     await expect(page.locator("tbody tr").first()).toBeVisible();
   });
@@ -222,9 +210,7 @@ test.describe("topology", () => {
     await expect
       .poll(async () => page.locator(".react-flow__node-instance").count())
       .toBeGreaterThan(0);
-    await expect
-      .poll(async () => page.locator(".react-flow__edge").count())
-      .toBeGreaterThan(0);
+    await expect.poll(async () => page.locator(".react-flow__edge").count()).toBeGreaterThan(0);
     // The minimap needs the nodes to carry their own dimensions.
     await expect
       .poll(async () => page.locator(".react-flow__minimap-node").count())
@@ -237,9 +223,7 @@ test.describe("topology", () => {
     const node = page.locator(".react-flow__node-instance").first();
     await expect(node).toBeVisible();
     await node.click();
-    await expect(
-      page.getByRole("dialog").getByText("Instance", { exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole("dialog").getByText("Instance", { exact: true })).toBeVisible();
   });
 });
 
@@ -273,8 +257,7 @@ test.describe("hosts", () => {
 test.describe("monitoring", () => {
   test("renders shadcn time-series charts and switches their windows", async ({ page }) => {
     await visit(page, "/monitoring");
-    await expect(page.getByRole("heading", { name: "Performance monitoring" }))
-      .toBeVisible();
+    await expect(page.getByRole("heading", { name: "Performance monitoring" })).toBeVisible();
     await expect(page.getByText("Startup latency", { exact: true })).toBeVisible();
     await expect(page.getByText("Server TPS", { exact: true })).toBeVisible();
     await expect(page.locator("[data-chart]")).toHaveCount(2);
@@ -290,11 +273,15 @@ test.describe("monitoring", () => {
     await page.getByRole("button", { name: "Minecraft boot" }).click();
     await expect(page.getByText("alert", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "15m", exact: true }).click();
-    await expect(page.getByRole("button", { name: "15m", exact: true }))
-      .toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("button", { name: "15m", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     await page.getByRole("button", { name: "6h", exact: true }).click();
-    await expect(page.getByRole("button", { name: "6h", exact: true }))
-      .toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("button", { name: "6h", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   test("filters monitoring by group", async ({ page }) => {
@@ -312,30 +299,26 @@ test.describe("variant layers", () => {
     await expect(layersLink).toHaveCount(1);
     await layersLink.click();
     await page.waitForURL((url) => url.pathname === "/groups/skywars-solo/variants");
-    await expect(
-      page.getByRole("application", { name: "Variant inheritance map" }),
-    ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("application", { name: "Variant inheritance map" })).toBeVisible({
+      timeout: 30_000,
+    });
   }
 
   test("navigates from Groups and explores the resolved graph", async ({ page }) => {
     await visitSkywarsVariants(page);
 
-    await expect(
-      page.getByRole("button", { name: "Inspect layer minecraft-paper" }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "Inspect layer skywars-solo" }),
-    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Inspect layer minecraft-paper" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Inspect layer skywars-solo" })).toBeVisible();
 
     const japan = page.getByRole("button", {
       name: "Inspect final variant skywars-japan",
     });
     await japan.press("Enter");
     await expect(japan).toHaveAttribute("aria-pressed", "true");
-    await expect(page.locator("aside").getByRole("heading", { name: "skywars-japan" }))
-      .toBeVisible();
-    await expect(page.locator("aside").getByText("60 weight · 60%", { exact: true }))
-      .toBeVisible();
+    await expect(
+      page.locator("aside").getByRole("heading", { name: "skywars-japan" }),
+    ).toBeVisible();
+    await expect(page.locator("aside").getByText("60 weight · 60%", { exact: true })).toBeVisible();
 
     await page.getByLabel("Filter variants").click();
     await page.getByRole("option", { name: "All variants" }).click();

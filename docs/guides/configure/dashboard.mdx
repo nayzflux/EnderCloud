@@ -12,18 +12,18 @@ shadcn/ui.
 
 ## Pages
 
-| Route | Purpose |
-| --- | --- |
-| `/` | Fleet summary, lifecycle distribution, group capacity, host health, and current problems |
-| `/groups` | Group type, capacity, routing or matchmaking policy, timeouts, and variant count |
+| Route                        | Purpose                                                                                           |
+| ---------------------------- | ------------------------------------------------------------------------------------------------- |
+| `/`                          | Fleet summary, lifecycle distribution, group capacity, host health, and current problems          |
+| `/groups`                    | Group type, capacity, routing or matchmaking policy, timeouts, and variant count                  |
 | `/groups/[groupId]/variants` | Ordered template layers, effective Docker settings, revisions, file summaries, and startup status |
-| `/hosts` | Agent health, administration state, resource reservations, drain, and activation |
-| `/instances` | Filterable instance table and detailed lifecycle panel |
-| `/sessions` | Matchmaking sessions, assigned instance, players, profiles, and transfer progress |
-| `/queues` | Queue pressure, wait-time distribution, and oldest parties by minigame group |
-| `/topology` | React Flow graph connecting groups, warm pools, instances, and sessions |
-| `/monitoring` | Startup readiness and Paper TPS time series grouped by variant |
-| `/incidents` | Active and resolved operational incidents with kind, severity, scope, and evidence |
+| `/hosts`                     | Agent health, administration state, resource reservations, drain, and activation                  |
+| `/instances`                 | Filterable instance table and detailed lifecycle panel                                            |
+| `/sessions`                  | Matchmaking sessions, assigned instance, players, profiles, and transfer progress                 |
+| `/queues`                    | Queue pressure, wait-time distribution, and oldest parties by minigame group                      |
+| `/topology`                  | React Flow graph connecting groups, warm pools, instances, and sessions                           |
+| `/monitoring`                | Startup readiness and Paper TPS time series grouped by variant                                    |
+| `/incidents`                 | Active and resolved operational incidents with kind, severity, scope, and evidence                |
 
 Selecting an instance or session opens the same detail panel wherever the record appears. The
 panel shows players, commands, events, profiles, transfers, lifecycle steps, and the one active
@@ -63,11 +63,11 @@ Create a local file from the example:
 Copy-Item .env.example .env.local
 ```
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `ORCHESTRATOR_URL` | `http://localhost:8080` | Server-side orchestrator base URL |
-| `DASHBOARD_PUBLIC_URL` | Local request origin | Public dashboard origin, matching the orchestrator's security configuration |
-| `DASHBOARD_MOCK_DATA` | Disabled | Serve a deterministic synthetic cluster after session validation |
+| Variable               | Default                 | Purpose                                                                     |
+| ---------------------- | ----------------------- | --------------------------------------------------------------------------- |
+| `ORCHESTRATOR_URL`     | `http://localhost:8080` | Server-side orchestrator base URL                                           |
+| `DASHBOARD_PUBLIC_URL` | Local request origin    | Public dashboard origin, matching the orchestrator's security configuration |
+| `DASHBOARD_MOCK_DATA`  | Disabled                | Serve a deterministic synthetic cluster after session validation            |
 
 Mock mode accepts `1`, `true`, `yes`, or `on`, ignoring case and surrounding spaces.
 
@@ -129,18 +129,18 @@ Rendered `<time>` elements retain the exact UTC timestamp in `dateTime` and thei
 
 ## UI structure
 
-| Path | Role |
-| --- | --- |
-| `src/app/` | Next.js pages, layout, global styles, and server route handlers |
-| `src/components/shell/` | Shared application shell and session actions |
-| `src/features/` | Cluster, inspection, monitoring, incidents, topology, variants and server-only demo data |
-| `src/components/ui/` | shadcn/ui primitives managed by the CLI |
-| `src/lib/api.ts` | Browser-facing data functions and clock synchronization |
-| `packages/contracts` | Shared browser-safe dashboard and HTTP contracts |
-| `src/lib/orchestrator-proxy.ts` | Server-side upstream boundary and timeout |
-| `src/features/demo/data.server.ts` | Deterministic synthetic cluster |
-| `test/` | Bun unit and route tests |
-| `e2e/` | Playwright browser suite |
+| Path                               | Role                                                                                     |
+| ---------------------------------- | ---------------------------------------------------------------------------------------- |
+| `src/app/`                         | Next.js pages, layout, global styles, and server route handlers                          |
+| `src/components/shell/`            | Shared application shell and session actions                                             |
+| `src/features/`                    | Cluster, inspection, monitoring, incidents, topology, variants and server-only demo data |
+| `src/components/ui/`               | shadcn/ui primitives managed by the CLI                                                  |
+| `src/lib/api.ts`                   | Browser-facing data functions and clock synchronization                                  |
+| `packages/contracts`               | Shared browser-safe dashboard and HTTP contracts                                         |
+| `src/lib/orchestrator-proxy.ts`    | Server-side upstream boundary and timeout                                                |
+| `src/features/demo/data.server.ts` | Deterministic synthetic cluster                                                          |
+| `test/`                            | Bun unit and route tests                                                                 |
+| `e2e/`                             | Playwright browser suite                                                                 |
 
 The UI was initialized from shadcn preset `b0`, which uses the `base-nova` style, a neutral base
 color, Inter, and Lucide icons. Inspect the preset with:
@@ -182,4 +182,3 @@ authentication backend backed by disposable PostgreSQL. Docker is required. It r
 Chromium and a mobile viewport.
 
 See [the project test reference](/docs/develop/testing) for the full repository validation sequence.
-

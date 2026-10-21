@@ -6,12 +6,7 @@ import { ClusterGate } from "@/features/cluster/gate";
 import { CopyableId } from "@/components/copyable-id";
 import { DataTable, type Column } from "@/components/data-table";
 import { useDetailPanel } from "@/features/inspection/panel";
-import {
-  FilterBar,
-  FilterSelect,
-  ResultCount,
-  SearchField,
-} from "@/components/filter-bar";
+import { FilterBar, FilterSelect, ResultCount, SearchField } from "@/components/filter-bar";
 import { PageHeader } from "@/components/page-header";
 import { SessionStateBadge } from "@/components/status-badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -39,10 +34,7 @@ const stateFilters = [
 
 type StateFilter = (typeof stateFilters)[number]["value"];
 
-function matchesStateFilter(
-  session: DashboardSession,
-  filter: StateFilter,
-): boolean {
+function matchesStateFilter(session: DashboardSession, filter: StateFilter): boolean {
   switch (filter) {
     case "active":
       return (
@@ -58,9 +50,7 @@ function matchesStateFilter(
       );
     case "terminal":
       return (
-        session.state === "FINISHED" ||
-        session.state === "CANCELLED" ||
-        session.state === "FAILED"
+        session.state === "FINISHED" || session.state === "CANCELLED" || session.state === "FAILED"
       );
     case "all":
       return true;
@@ -78,17 +68,13 @@ export default function SessionsPage() {
       {
         id: "id",
         header: "Session",
-        cell: ({ session }) => (
-          <CopyableId value={session.id} label="session id" />
-        ),
+        cell: ({ session }) => <CopyableId value={session.id} label="session id" />,
         sortValue: ({ session }) => session.id,
       },
       {
         id: "group",
         header: "Group",
-        cell: ({ group }) => (
-          <span className="font-mono text-xs">{group.id}</span>
-        ),
+        cell: ({ group }) => <span className="font-mono text-xs">{group.id}</span>,
         sortValue: ({ group }) => group.id,
       },
       {
@@ -127,9 +113,7 @@ export default function SessionsPage() {
             title="Players currently belonging to the session / maximum players allowed"
           >
             {session.activePlayerCount}
-            <span className="text-muted-foreground">
-              /{session.maximumPlayerCount}
-            </span>
+            <span className="text-muted-foreground">/{session.maximumPlayerCount}</span>
           </span>
         ),
         sortValue: ({ session }) => session.activePlayerCount,
@@ -143,9 +127,7 @@ export default function SessionsPage() {
             title="Players connected to the assigned server / players currently in the session"
           >
             {session.connectedPlayerCount}
-            <span className="text-muted-foreground">
-              /{session.activePlayerCount}
-            </span>
+            <span className="text-muted-foreground">/{session.activePlayerCount}</span>
           </span>
         ),
         sortValue: ({ session }) => session.connectedPlayerCount,
@@ -169,10 +151,7 @@ export default function SessionsPage() {
         align: "right",
         cell: ({ session }) => (
           <Countdown
-            value={
-              session.instanceAcquisitionDeadline ??
-              session.lobbyStaleDeadline
-            }
+            value={session.instanceAcquisitionDeadline ?? session.lobbyStaleDeadline}
             fallback="No active deadline"
             className="font-mono text-xs text-muted-foreground tabular"
           />
@@ -181,8 +160,8 @@ export default function SessionsPage() {
           session.instanceAcquisitionDeadline
             ? Date.parse(session.instanceAcquisitionDeadline)
             : session.lobbyStaleDeadline
-                ? Date.parse(session.lobbyStaleDeadline)
-                : Number.MAX_SAFE_INTEGER,
+              ? Date.parse(session.lobbyStaleDeadline)
+              : Number.MAX_SAFE_INTEGER,
       },
       {
         id: "age",
@@ -208,83 +187,75 @@ export default function SessionsPage() {
       />
       <ClusterGate>
         {(snapshot) => {
-        const allRows: Row[] = snapshot.groups.flatMap((group) =>
-          group.sessions.map((session) => ({ group, session })),
-        );
+          const allRows: Row[] = snapshot.groups.flatMap((group) =>
+            group.sessions.map((session) => ({ group, session })),
+          );
 
-        const needle = search.trim().toLowerCase();
-        const rows = allRows.filter(({ group, session }) => {
-          if (groupId !== "all" && group.id !== groupId) return false;
-          if (!matchesStateFilter(session, state)) return false;
-          if (!needle) return true;
-          return [
-            session.id,
-            session.instanceId ?? "",
-            session.state,
-            group.id,
-          ].some((value) => value.toLowerCase().includes(needle));
-        });
+          const needle = search.trim().toLowerCase();
+          const rows = allRows.filter(({ group, session }) => {
+            if (groupId !== "all" && group.id !== groupId) return false;
+            if (!matchesStateFilter(session, state)) return false;
+            if (!needle) return true;
+            return [session.id, session.instanceId ?? "", session.state, group.id].some((value) =>
+              value.toLowerCase().includes(needle),
+            );
+          });
 
-        return (
-          <>
-            <FilterBar>
-              <SearchField
-                value={search}
-                onChange={setSearch}
-                label="Search sessions"
-                placeholder="Session, instance, state…"
-              />
-              <FilterSelect
-                label="Filter by group"
-                value={groupId}
-                onChange={setGroupId}
-                options={[
-                  { value: "all", label: "All groups" },
-                  ...snapshot.groups.map((group) => ({
-                    value: group.id,
-                    label: group.id,
-                  })),
-                ]}
-              />
-              <FilterSelect
-                label="Filter by state"
-                value={state}
-                onChange={(value) => setState(value as StateFilter)}
-                options={stateFilters.map((filter) => ({ ...filter }))}
-              />
-              <ResultCount
-                shown={rows.length}
-                total={allRows.length}
-                noun="session"
-              />
-            </FilterBar>
-
-            <Card className="py-0">
-              <CardContent className="px-0 py-2">
-                <DataTable
-                  rows={rows}
-                  columns={columns}
-                  getRowId={(row) => row.session.id}
-                  onRowClick={(row) => openSession(row.session.id)}
-                  initialSort={{ columnId: "age", desc: true }}
-                  caption="Cluster sessions"
-                  emptyState={
-                    <Empty className="py-12">
-                      <EmptyHeader>
-                        <EmptyMedia variant="icon">
-                          <Gamepad2Icon />
-                        </EmptyMedia>
-                        <EmptyTitle>No session in flight</EmptyTitle>
-                        <EmptyDescription>
-                          Sessions appear as soon as the matchmaker forms a match
-                          from the queues.
-                        </EmptyDescription>
-                      </EmptyHeader>
-                    </Empty>
-                  }
+          return (
+            <>
+              <FilterBar>
+                <SearchField
+                  value={search}
+                  onChange={setSearch}
+                  label="Search sessions"
+                  placeholder="Session, instance, state…"
                 />
-              </CardContent>
-            </Card>
+                <FilterSelect
+                  label="Filter by group"
+                  value={groupId}
+                  onChange={setGroupId}
+                  options={[
+                    { value: "all", label: "All groups" },
+                    ...snapshot.groups.map((group) => ({
+                      value: group.id,
+                      label: group.id,
+                    })),
+                  ]}
+                />
+                <FilterSelect
+                  label="Filter by state"
+                  value={state}
+                  onChange={(value) => setState(value as StateFilter)}
+                  options={stateFilters.map((filter) => ({ ...filter }))}
+                />
+                <ResultCount shown={rows.length} total={allRows.length} noun="session" />
+              </FilterBar>
+
+              <Card className="py-0">
+                <CardContent className="px-0 py-2">
+                  <DataTable
+                    rows={rows}
+                    columns={columns}
+                    getRowId={(row) => row.session.id}
+                    onRowClick={(row) => openSession(row.session.id)}
+                    initialSort={{ columnId: "age", desc: true }}
+                    caption="Cluster sessions"
+                    emptyState={
+                      <Empty className="py-12">
+                        <EmptyHeader>
+                          <EmptyMedia variant="icon">
+                            <Gamepad2Icon />
+                          </EmptyMedia>
+                          <EmptyTitle>No session in flight</EmptyTitle>
+                          <EmptyDescription>
+                            Sessions appear as soon as the matchmaker forms a match from the queues.
+                          </EmptyDescription>
+                        </EmptyHeader>
+                      </Empty>
+                    }
+                  />
+                </CardContent>
+              </Card>
             </>
           );
         }}

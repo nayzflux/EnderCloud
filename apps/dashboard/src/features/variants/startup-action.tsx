@@ -59,18 +59,22 @@ export function VariantStartupAction({
           <AlertDialogMedia>
             <TriangleAlertIcon />
           </AlertDialogMedia>
-          <AlertDialogTitle>Retry {variantId} revision {revision}?</AlertDialogTitle>
+          <AlertDialogTitle>
+            Retry {variantId} revision {revision}?
+          </AlertDialogTitle>
           <AlertDialogDescription>
-            EnderCloud will remove the retained failed runtime and clear the startup block. The capacity scheduler will decide whether a replacement is needed.
+            EnderCloud will remove the retained failed runtime and clear the startup block. The
+            capacity scheduler will decide whether a replacement is needed.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={mutation.isPending}>Cancel</AlertDialogCancel>
-          <Button
-            disabled={mutation.isPending}
-            onClick={() => mutation.mutate()}
-          >
-            {mutation.isPending ? <Spinner data-icon="inline-start" /> : <RotateCcwIcon data-icon="inline-start" />}
+          <Button disabled={mutation.isPending} onClick={() => mutation.mutate()}>
+            {mutation.isPending ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <RotateCcwIcon data-icon="inline-start" />
+            )}
             {mutation.isPending ? "Resetting" : "Reset and retry"}
           </Button>
         </AlertDialogFooter>

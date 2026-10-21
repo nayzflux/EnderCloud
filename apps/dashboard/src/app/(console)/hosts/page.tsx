@@ -1,11 +1,6 @@
 "use client";
 
-import {
-  AlertTriangleIcon,
-  PowerIcon,
-  ServerCogIcon,
-  WrenchIcon,
-} from "lucide-react";
+import { AlertTriangleIcon, PowerIcon, ServerCogIcon, WrenchIcon } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -15,11 +10,7 @@ import { CopyableId } from "@/components/copyable-id";
 import { DataTable, type Column } from "@/components/data-table";
 import { RelativeTime } from "@/components/live-time";
 import { KeyValue, KeyValueGrid, PageHeader, SectionTitle } from "@/components/page-header";
-import {
-  HostAdminBadge,
-  HostHealthBadge,
-  LifecycleBadge,
-} from "@/components/status-badge";
+import { HostAdminBadge, HostHealthBadge, LifecycleBadge } from "@/components/status-badge";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -54,11 +45,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { activateHost, drainHost } from "@/lib/api";
-import type {
-  DashboardGroup,
-  DashboardHost,
-  DashboardInstance,
-} from "@endercloud/contracts";
+import type { DashboardGroup, DashboardHost, DashboardInstance } from "@endercloud/contracts";
 import { formatBytes, formatPercent, ratio } from "@/lib/format";
 
 interface HostInstance {
@@ -105,9 +92,7 @@ function HostAction({
   async function confirm() {
     setPending(true);
     try {
-      const result = draining
-        ? await drainHost(host.id)
-        : await activateHost(host.id);
+      const result = draining ? await drainHost(host.id) : await activateHost(host.id);
       if (!result.accepted) {
         throw new Error("The orchestrator rejected the state transition.");
       }
@@ -124,18 +109,14 @@ function HostAction({
   return (
     <AlertDialog open={open} onOpenChange={setOpen}>
       <AlertDialogTrigger
-        render={
-          <Button variant={draining ? "destructive" : "default"} size="sm" />
-        }
+        render={<Button variant={draining ? "destructive" : "default"} size="sm" />}
       >
         {draining ? <WrenchIcon /> : <PowerIcon />}
         {draining ? "Drain host" : "Reactivate host"}
       </AlertDialogTrigger>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogMedia>
-            {draining ? <AlertTriangleIcon /> : <PowerIcon />}
-          </AlertDialogMedia>
+          <AlertDialogMedia>{draining ? <AlertTriangleIcon /> : <PowerIcon />}</AlertDialogMedia>
           <AlertDialogTitle>
             {draining ? `Drain ${host.id}?` : `Reactivate ${host.id}?`}
           </AlertDialogTitle>
@@ -171,10 +152,7 @@ function HostPanel({
 }) {
   return (
     <Sheet open={host !== null} onOpenChange={onOpenChange}>
-      <SheetContent
-        side="right"
-        className="gap-0 p-0 data-[side=right]:w-full sm:max-w-2xl!"
-      >
+      <SheetContent side="right" className="gap-0 p-0 data-[side=right]:w-full sm:max-w-2xl!">
         {host ? (
           <>
             <SheetHeader className="gap-3 border-b p-4">
@@ -287,9 +265,7 @@ function HostPanel({
                 <AlertTriangleIcon data-icon="inline-start" />
                 View incidents
               </Button>
-              {host.adminState === "ACTIVE" ? (
-                <HostAction host={host} action="drain" />
-              ) : null}
+              {host.adminState === "ACTIVE" ? <HostAction host={host} action="drain" /> : null}
               {host.adminState === "DRAINING" ? (
                 <p className="text-xs text-muted-foreground">
                   Reactivation becomes available after every instance has stopped.
@@ -354,8 +330,7 @@ export default function HostsPage() {
             format={formatBytes}
           />
         ),
-        sortValue: (host) =>
-          ratio(host.reservedMemoryBytes, host.allocatableMemoryBytes),
+        sortValue: (host) => ratio(host.reservedMemoryBytes, host.allocatableMemoryBytes),
       },
       {
         id: "instances",
@@ -394,8 +369,7 @@ export default function HostsPage() {
       />
       <ClusterGate>
         {(snapshot) => {
-          const selectedHost =
-            snapshot.hosts.find((host) => host.id === selectedHostId) ?? null;
+          const selectedHost = snapshot.hosts.find((host) => host.id === selectedHostId) ?? null;
           const instances = snapshot.groups.flatMap((group) =>
             group.instances
               .filter((instance) => instance.hostId === selectedHostId)
@@ -421,8 +395,8 @@ export default function HostsPage() {
                           </EmptyMedia>
                           <EmptyTitle>No execution host</EmptyTitle>
                           <EmptyDescription>
-                            Start an agent on the private network. Its first heartbeat
-                            will register it here.
+                            Start an agent on the private network. Its first heartbeat will register
+                            it here.
                           </EmptyDescription>
                         </EmptyHeader>
                       </Empty>

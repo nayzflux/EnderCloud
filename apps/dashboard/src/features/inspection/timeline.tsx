@@ -32,11 +32,7 @@ interface TimelineProps {
   readonly settled?: boolean;
 }
 
-function DeadlineItem({
-  deadline,
-}: {
-  readonly deadline: NonNullable<TimelineProps["deadline"]>;
-}) {
+function DeadlineItem({ deadline }: { readonly deadline: NonNullable<TimelineProps["deadline"]> }) {
   const now = useNow();
   if (!deadline.at) return null;
   const overdue = now > 0 && Date.parse(deadline.at) <= now;
@@ -50,17 +46,12 @@ function DeadlineItem({
         )}
       />
       <div className="-mt-0.5 min-w-0 flex-1">
-        <p className="text-sm font-medium text-foreground">
-          {deadline.label || "Deadline"}
-        </p>
+        <p className="text-sm font-medium text-foreground">{deadline.label || "Deadline"}</p>
         <p
           className="mt-0.5 font-mono text-xs text-muted-foreground tabular"
           title={formatDateTime(deadline.at)}
         >
-          <Countdown
-            value={deadline.at}
-            className={cn(overdue && toneTextClass.danger)}
-          />
+          <Countdown value={deadline.at} className={cn(overdue && toneTextClass.danger)} />
         </p>
       </div>
     </li>
@@ -84,10 +75,7 @@ function stateOf(
  * on its own.
  */
 export function Timeline({ steps, deadline, settled = false }: TimelineProps) {
-  const lastReached = steps.reduce(
-    (last, step, index) => (step.at ? index : last),
-    -1,
-  );
+  const lastReached = steps.reduce((last, step, index) => (step.at ? index : last), -1);
 
   return (
     <ol className="flex flex-col">
@@ -100,10 +88,7 @@ export function Timeline({ steps, deadline, settled = false }: TimelineProps) {
         const previousAt = steps
           .slice(0, index)
           .reduce<string | null>((last, candidate) => candidate.at ?? last, null);
-        const delta =
-          step.at && previousAt
-            ? Date.parse(step.at) - Date.parse(previousAt)
-            : null;
+        const delta = step.at && previousAt ? Date.parse(step.at) - Date.parse(previousAt) : null;
 
         return (
           <li key={step.id} className="relative flex gap-3 pb-4 last:pb-0">
@@ -169,9 +154,7 @@ export function Timeline({ steps, deadline, settled = false }: TimelineProps) {
               ) : null}
 
               {step.hint ? (
-                <div className="mt-0.5 text-xs text-muted-foreground">
-                  {step.hint}
-                </div>
+                <div className="mt-0.5 text-xs text-muted-foreground">{step.hint}</div>
               ) : null}
             </div>
           </li>

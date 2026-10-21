@@ -8,30 +8,16 @@ interface PageHeaderProps {
   readonly className?: string;
 }
 
-export function PageHeader({
-  title,
-  description,
-  actions,
-  className,
-}: PageHeaderProps) {
+export function PageHeader({ title, description, actions, className }: PageHeaderProps) {
   return (
-    <div
-      className={cn(
-        "flex flex-wrap items-end justify-between gap-x-6 gap-y-3",
-        className,
-      )}
-    >
+    <div className={cn("flex flex-wrap items-end justify-between gap-x-6 gap-y-3", className)}>
       <div className="min-w-0 space-y-1">
-        <h1 className="font-heading text-xl font-semibold tracking-tight">
-          {title}
-        </h1>
+        <h1 className="font-heading text-xl font-semibold tracking-tight">{title}</h1>
         {description ? (
           <p className="max-w-2xl text-sm text-muted-foreground">{description}</p>
         ) : null}
       </div>
-      {actions ? (
-        <div className="flex flex-wrap items-center gap-2">{actions}</div>
-      ) : null}
+      {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
     </div>
   );
 }
@@ -47,12 +33,7 @@ export function KeyValue({ label, children, mono, wide }: KeyValueProps) {
   return (
     <div className={cn("min-w-0 space-y-0.5", wide && "col-span-full")}>
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd
-        className={cn(
-          "text-sm wrap-break-word",
-          mono && "font-mono text-xs leading-5",
-        )}
-      >
+      <dd className={cn("text-sm wrap-break-word", mono && "font-mono text-xs leading-5")}>
         {children}
       </dd>
     </div>

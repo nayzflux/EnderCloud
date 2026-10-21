@@ -1,7 +1,7 @@
 name: EnderCloud
-version: '${version}'
+version: "${version}"
 main: fr.nayz.endercloud.paper.EnderCloudPaperPlugin
 description: Paper bridge for the EnderCloud orchestrator
 author: EnderCloud
-api-version: '26.2'
+api-version: "26.2"
 load: POSTWORLD

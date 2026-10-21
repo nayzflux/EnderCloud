@@ -3,33 +3,52 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfiguration } from "../../src/modules/configuration/load.ts";
-import { parseDuration, parseGroup, parseVariant } from "../../src/modules/configuration/descriptors.ts";
+import {
+  parseDuration,
+  parseGroup,
+  parseVariant,
+} from "../../src/modules/configuration/descriptors.ts";
 import { jsonParameter } from "../../src/db/json.ts";
 
 describe("configuration", () => {
   test("proxy groups maintain fixed capacity without Paper policies", () => {
     const proxy = {
-      id: "edge-proxies", type: "proxy",
+      id: "edge-proxies",
+      type: "proxy",
       variants: [{ id: "velocity-main", weight: 100 }],
       capacity: { minimum_instances: 2, maximum_instances: 2 },
       timeouts: { startup: "90s", drain: "15m", shutdown: "20s", player_stale: "30s" },
     };
     expect(parseGroup(proxy, "proxy.yml")).toMatchObject({
       type: "proxy",
-      capacity: { minimumInstances: 2, maximumInstances: 2, minimumWarmInstances: 2, maximumWarmInstances: 2 },
+      capacity: {
+        minimumInstances: 2,
+        maximumInstances: 2,
+        minimumWarmInstances: 2,
+        maximumWarmInstances: 2,
+      },
     });
-    expect(() => parseGroup({ ...proxy, capacity: { minimum_instances: 1, maximum_instances: 2 } }, "proxy.yml"))
-      .toThrow("must equal");
+    expect(() =>
+      parseGroup(
+        { ...proxy, capacity: { minimum_instances: 1, maximum_instances: 2 } },
+        "proxy.yml",
+      ),
+    ).toThrow("must equal");
     expect(() => parseGroup({ ...proxy, routing: {} }, "proxy.yml")).toThrow("cannot configure");
-    expect(() => parseGroup({ ...proxy, timeouts: { startup: "90s" } }, "proxy.yml")).toThrow("required");
+    expect(() => parseGroup({ ...proxy, timeouts: { startup: "90s" } }, "proxy.yml")).toThrow(
+      "required",
+    );
   });
 
   test("container data directories are explicit and reject unsafe paths", () => {
-    expect(parseVariant({ id: "velocity-base", docker: { data_directory: "/server" } }, "variant.yml").runtime.dataDirectory)
-      .toBe("/server");
+    expect(
+      parseVariant({ id: "velocity-base", docker: { data_directory: "/server" } }, "variant.yml")
+        .runtime.dataDirectory,
+    ).toBe("/server");
     for (const path of ["relative", "/", "/server/../etc", "/server:/etc"]) {
-      expect(() => parseVariant({ id: "velocity-base", docker: { data_directory: path } }, "variant.yml"))
-        .toThrow("absolute container directory");
+      expect(() =>
+        parseVariant({ id: "velocity-base", docker: { data_directory: path } }, "variant.yml"),
+      ).toThrow("absolute container directory");
     }
   });
 
@@ -64,26 +83,36 @@ describe("configuration", () => {
       },
     } as const;
     expect(parseGroup(base, "hub.yml").timeouts.instanceLifetimeMs).toBe(14_400_000);
-    expect(parseGroup({
-      ...base,
-      timeouts: { ...base.timeouts, instance_lifetime: "6h" },
-    }, "hub.yml").timeouts.instanceLifetimeMs).toBe(21_600_000);
-    expect(() => parseGroup({
-      ...base,
-      type: "minigame",
-      matchmaking: {
-        minimum_players: 2,
-        maximum_players: 4,
-        team_count: 2,
-        team_size: 2,
-      },
-      timeouts: {
-        ...base.timeouts,
-        instance_lifetime: "4h",
-        instance_acquisition: "45s",
-        lobby_stale: "135s",
-      },
-    }, "minigame.yml")).toThrow("only valid for hub groups");
+    expect(
+      parseGroup(
+        {
+          ...base,
+          timeouts: { ...base.timeouts, instance_lifetime: "6h" },
+        },
+        "hub.yml",
+      ).timeouts.instanceLifetimeMs,
+    ).toBe(21_600_000);
+    expect(() =>
+      parseGroup(
+        {
+          ...base,
+          type: "minigame",
+          matchmaking: {
+            minimum_players: 2,
+            maximum_players: 4,
+            team_count: 2,
+            team_size: 2,
+          },
+          timeouts: {
+            ...base.timeouts,
+            instance_lifetime: "4h",
+            instance_acquisition: "45s",
+            lobby_stale: "135s",
+          },
+        },
+        "minigame.yml",
+      ),
+    ).toThrow("only valid for hub groups");
   });
 
   test("validates a minigame group", () => {
@@ -180,8 +209,9 @@ describe("configuration", () => {
         lobby_stale: "135s",
       },
     };
-    expect(() => parseGroup(minigame, "legacy-game.yml"))
-      .toThrow("matchmaking.instance_wait_timeout was removed");
+    expect(() => parseGroup(minigame, "legacy-game.yml")).toThrow(
+      "matchmaking.instance_wait_timeout was removed",
+    );
   });
 
   test("rejects non-positive durations and duplicate lobby-stale aliases", () => {
@@ -219,7 +249,7 @@ describe("configuration", () => {
           },
         },
         "invalid.yml",
-      )
+      ),
     ).toThrow("timeouts.ineligible_lobby was removed");
   });
 
@@ -238,11 +268,18 @@ describe("configuration", () => {
   });
 
   test("image references distinguish registry ports, explicit tags and valid digests", () => {
-    for (const image of ["alpine", "registry.example:5000/server", "server@sha256:invalid", "https://registry.example/server:1"]) {
-      expect(() => parseVariant({id: "image-check", docker: {image}}, "variant.yml")).toThrow();
+    for (const image of [
+      "alpine",
+      "registry.example:5000/server",
+      "server@sha256:invalid",
+      "https://registry.example/server:1",
+    ]) {
+      expect(() => parseVariant({ id: "image-check", docker: { image } }, "variant.yml")).toThrow();
     }
     for (const image of ["registry.example:5000/server:1.2.3", `server@sha256:${"a".repeat(64)}`]) {
-      expect(parseVariant({id: "image-check", docker: {image}}, "variant.yml").runtime.image).toBe(image);
+      expect(
+        parseVariant({ id: "image-check", docker: { image } }, "variant.yml").runtime.image,
+      ).toBe(image);
     }
   });
 
@@ -264,7 +301,9 @@ describe("configuration", () => {
     try {
       await mkdir(groups);
       await mkdir(templates);
-      await writeFile(join(groups, "skywars.yml"), `
+      await writeFile(
+        join(groups, "skywars.yml"),
+        `
 id: skywars-solo
 type: hub
 enabled: true
@@ -287,11 +326,14 @@ timeouts:
   shutdown: 20s
   transfer: 20s
   player_stale: 30s
-`);
+`,
+      );
       for (const id of ["skywars", "skywars-solo", "map-one"]) {
         await mkdir(join(templates, id));
       }
-      await writeFile(join(templates, "skywars", "variant.yml"), `
+      await writeFile(
+        join(templates, "skywars", "variant.yml"),
+        `
 id: skywars
 docker:
   image: itzg/minecraft-server:java25
@@ -299,21 +341,28 @@ docker:
   cpu: 2
 environment:
   MODE: base
-`);
+`,
+      );
       await mkdir(join(templates, "skywars", "plugins"));
       await writeFile(join(templates, "skywars", "plugins", "common.jar"), "v1");
-      await writeFile(join(templates, "skywars-solo", "variant.yml"), `
+      await writeFile(
+        join(templates, "skywars-solo", "variant.yml"),
+        `
 id: skywars-solo
 environment:
   MODE: solo
-`);
-      await writeFile(join(templates, "map-one", "variant.yml"), `
+`,
+      );
+      await writeFile(
+        join(templates, "map-one", "variant.yml"),
+        `
 id: map-one
 revision: 3
 parents: [skywars, skywars-solo]
 environment:
   MAP_ID: one
-`);
+`,
+      );
 
       const first = await loadConfiguration(groups, templates);
       expect(first.variants[0]?.runtime.dataDirectory).toBe("/data");
@@ -334,27 +383,35 @@ environment:
       expect(second.variants[0]?.checksum).not.toBe(checksum);
       const basePath = join(templates, "skywars", "variant.yml");
       const baseDescriptor = await Bun.file(basePath).text();
-      await writeFile(basePath, baseDescriptor.replace("docker:", "docker:\n  data_directory: /server"));
+      await writeFile(
+        basePath,
+        baseDescriptor.replace("docker:", "docker:\n  data_directory: /server"),
+      );
       const inherited = await loadConfiguration(groups, templates);
       expect(inherited.variants[0]?.runtime.dataDirectory).toBe("/server");
       const finalPath = join(templates, "map-one", "variant.yml");
-      await writeFile(finalPath, (await Bun.file(finalPath).text()) + "\ndocker:\n  data_directory: /custom\n");
+      await writeFile(
+        finalPath,
+        (await Bun.file(finalPath).text()) + "\ndocker:\n  data_directory: /custom\n",
+      );
       const overridden = await loadConfiguration(groups, templates);
       expect(overridden.variants[0]?.runtime.dataDirectory).toBe("/custom");
-      await writeFile(join(templates, "skywars-solo", "variant.yml"), `
+      await writeFile(
+        join(templates, "skywars-solo", "variant.yml"),
+        `
 id: skywars-solo
 parents: [skywars]
-`);
-      await expect(loadConfiguration(groups, templates)).rejects.toThrow(
-        "cannot declare parents",
+`,
       );
+      await expect(loadConfiguration(groups, templates)).rejects.toThrow("cannot declare parents");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
   test("rejects legacy ownership fields", () => {
-    expect(() => parseVariant({ id: "legacy", group: "skywars" }, "variant.yml"))
-      .toThrow("no longer valid");
+    expect(() => parseVariant({ id: "legacy", group: "skywars" }, "variant.yml")).toThrow(
+      "no longer valid",
+    );
   });
 });

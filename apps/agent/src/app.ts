@@ -1,5 +1,9 @@
 import { Elysia, t } from "elysia";
-import { ApplicationError, denyUnauthorized, type RequestAuthorizer } from "@endercloud/contracts/errors";
+import {
+  ApplicationError,
+  denyUnauthorized,
+  type RequestAuthorizer,
+} from "@endercloud/contracts/errors";
 import { instanceCreateSchema } from "@endercloud/contracts/schemas";
 import type { AgentConfig } from "./config.ts";
 import type { TemplateCache } from "./template-cache.ts";
@@ -50,13 +54,32 @@ export function createAgentApp(
     })
     .onError(({ request, error, code, set }) => {
       const message = error instanceof Error ? error.message : String(error);
-      const infrastructure = typeof error === "object" && error !== null && "code" in error && ["ENOSPC", "EROFS", "EACCES", "ECONNREFUSED", "ECONNRESET", "ENOENT"].includes(String(error.code));
-      set.status = error instanceof ApplicationError ? error.status : infrastructure ? 503 : code === "NOT_FOUND" ? 404 : code === "VALIDATION" || code === "PARSE" ? 400 : 500;
+      const infrastructure =
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        ["ENOSPC", "EROFS", "EACCES", "ECONNREFUSED", "ECONNRESET", "ENOENT"].includes(
+          String(error.code),
+        );
+      set.status =
+        error instanceof ApplicationError
+          ? error.status
+          : infrastructure
+            ? 503
+            : code === "NOT_FOUND"
+              ? 404
+              : code === "VALIDATION" || code === "PARSE"
+                ? 400
+                : 500;
       const context = contextFor(request);
       const requestId = context.requestId;
       context.requestError = error;
       set.headers["x-request-id"] = requestId;
-      return { error: error instanceof ApplicationError ? error.code : code, message: set.status === 500 ? "Internal agent error" : message, requestId };
+      return {
+        error: error instanceof ApplicationError ? error.code : code,
+        message: set.status === 500 ? "Internal agent error" : message,
+        requestId,
+      };
     })
     .onAfterResponse(({ request, route, set }) => {
       const context = contextFor(request);
@@ -89,81 +112,96 @@ export function createAgentApp(
         return { status: "NOT_READY", hostId: config.hostId };
       }
     })
-    .group("/api/v1", (api) => api
-      .get("/instances", () => executor.listManagedInstances(config.hostId))
-      .get(
-        "/instances/:instanceId/logs",
-        async ({ params, query }) => ({
-          logs: await executor.getInstanceLogs(
-            { hostId: config.hostId, instanceId: params.instanceId },
-            query.lines,
-            query.maxBytes,
-          ),
-        }),
-        {
-          params: t.Object({ instanceId: internalId }),
-          query: t.Object({
-            lines: t.Numeric({ minimum: 1, maximum: 1_000 }),
-            maxBytes: t.Numeric({ minimum: 1, maximum: 262_144 }),
+    .group("/api/v1", (api) =>
+      api
+        .get("/instances", () => executor.listManagedInstances(config.hostId))
+        .get(
+          "/instances/:instanceId/logs",
+          async ({ params, query }) => ({
+            logs: await executor.getInstanceLogs(
+              { hostId: config.hostId, instanceId: params.instanceId },
+              query.lines,
+              query.maxBytes,
+            ),
           }),
-        },
-      )
-      .get(
-        "/instances/:instanceId",
-        ({ params }) => executor.inspectInstance({
-          hostId: config.hostId,
-          instanceId: params.instanceId,
-        }),
-        { params: t.Object({ instanceId: internalId }) },
-      )
-      .put(
-        "/instances/:instanceId",
-        async ({ params, body, request }) => {
-          if (params.instanceId !== body.instanceId) {
-            throw new ApplicationError("INVALID_REQUEST", 400, "Path and body instance ids differ");
-          }
-          if (body.hostId !== config.hostId) {
-            throw new ApplicationError("FORBIDDEN", 403, "Host identity does not match this agent");
-          }
-          const templateLayers = await templates.resolveLayers(body.templateLayers, request.signal);
-          return executor.createInstance({ ...body, templateLayers });
-        },
-        { params: t.Object({ instanceId: internalId }), body: instanceCreateSchema },
-      )
-      .post(
-        "/instances/:instanceId/stop",
-        async ({ params, body, set }) => {
-          await executor.stopInstance(
-            { hostId: config.hostId, instanceId: params.instanceId },
-            body.timeoutSeconds,
-          );
-          set.status = 204;
-        },
-        {
-          params: t.Object({ instanceId: internalId }),
-          body: t.Object({ timeoutSeconds: t.Number({ minimum: 0, maximum: 600 }) }),
-        },
-      )
-      .delete(
-        "/instances/:instanceId",
-        async ({ params, body, set }) => {
-          if (body?.containerId) {
-            const instances = await executor.listManagedInstances(config.hostId);
-            const instance = instances.find((candidate) =>
-              candidate.instanceId === params.instanceId &&
-              candidate.containerId === body.containerId
-            );
-            if (!instance) {
-              return { containerRemoved: false, runtimeDirectoryRemoved: false };
+          {
+            params: t.Object({ instanceId: internalId }),
+            query: t.Object({
+              lines: t.Numeric({ minimum: 1, maximum: 1_000 }),
+              maxBytes: t.Numeric({ minimum: 1, maximum: 262_144 }),
+            }),
+          },
+        )
+        .get(
+          "/instances/:instanceId",
+          ({ params }) =>
+            executor.inspectInstance({
+              hostId: config.hostId,
+              instanceId: params.instanceId,
+            }),
+          { params: t.Object({ instanceId: internalId }) },
+        )
+        .put(
+          "/instances/:instanceId",
+          async ({ params, body, request }) => {
+            if (params.instanceId !== body.instanceId) {
+              throw new ApplicationError(
+                "INVALID_REQUEST",
+                400,
+                "Path and body instance ids differ",
+              );
             }
-            return executor.deleteOrphanInstance(instance);
-          }
-          await executor.deleteInstance({ hostId: config.hostId, instanceId: params.instanceId });
-          set.status = 204;
-        },
-        {
-          params: t.Object({ instanceId: internalId }),
-          body: t.Optional(t.Object({ containerId: t.String({ minLength: 1 }) })),
-        },
-      ));
+            if (body.hostId !== config.hostId) {
+              throw new ApplicationError(
+                "FORBIDDEN",
+                403,
+                "Host identity does not match this agent",
+              );
+            }
+            const templateLayers = await templates.resolveLayers(
+              body.templateLayers,
+              request.signal,
+            );
+            return executor.createInstance({ ...body, templateLayers });
+          },
+          { params: t.Object({ instanceId: internalId }), body: instanceCreateSchema },
+        )
+        .post(
+          "/instances/:instanceId/stop",
+          async ({ params, body, set }) => {
+            await executor.stopInstance(
+              { hostId: config.hostId, instanceId: params.instanceId },
+              body.timeoutSeconds,
+            );
+            set.status = 204;
+          },
+          {
+            params: t.Object({ instanceId: internalId }),
+            body: t.Object({ timeoutSeconds: t.Number({ minimum: 0, maximum: 600 }) }),
+          },
+        )
+        .delete(
+          "/instances/:instanceId",
+          async ({ params, body, set }) => {
+            if (body?.containerId) {
+              const instances = await executor.listManagedInstances(config.hostId);
+              const instance = instances.find(
+                (candidate) =>
+                  candidate.instanceId === params.instanceId &&
+                  candidate.containerId === body.containerId,
+              );
+              if (!instance) {
+                return { containerRemoved: false, runtimeDirectoryRemoved: false };
+              }
+              return executor.deleteOrphanInstance(instance);
+            }
+            await executor.deleteInstance({ hostId: config.hostId, instanceId: params.instanceId });
+            set.status = 204;
+          },
+          {
+            params: t.Object({ instanceId: internalId }),
+            body: t.Optional(t.Object({ containerId: t.String({ minLength: 1 }) })),
+          },
+        ),
+    );
 }

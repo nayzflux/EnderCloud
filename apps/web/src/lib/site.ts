@@ -5,6 +5,4 @@ export const site = {
   github: "https://github.com/nayzflux/EnderCloud",
 };
 
-export const siteUrl = new URL(
-  process.env.SITE_URL ?? "http://localhost:3000",
-);
+export const siteUrl = new URL(process.env.SITE_URL ?? "http://localhost:3000");

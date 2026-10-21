@@ -22,10 +22,10 @@ import type { DashboardVariantGraph } from "@endercloud/contracts";
 import { formatBytes } from "@/lib/format";
 import { buildVariantFlow, type VariantFlowNode } from "@/features/variants/model";
 
-const VariantFlow = dynamic(
-  () => import("./variant-flow").then((module) => module.VariantFlow),
-  { ssr: false, loading: () => <Skeleton className="size-full" /> },
-);
+const VariantFlow = dynamic(() => import("./variant-flow").then((module) => module.VariantFlow), {
+  ssr: false,
+  loading: () => <Skeleton className="size-full" />,
+});
 
 function checksum(value: string): string {
   return `${value.slice(0, 12)}…${value.slice(-8)}`;
@@ -36,9 +36,13 @@ function LayerDetails({ node }: { readonly node: VariantFlowNode | undefined }) 
     return (
       <Empty className="min-h-64">
         <EmptyHeader>
-          <EmptyMedia variant="icon"><GitBranchIcon /></EmptyMedia>
+          <EmptyMedia variant="icon">
+            <GitBranchIcon />
+          </EmptyMedia>
           <EmptyTitle>Select a layer</EmptyTitle>
-          <EmptyDescription>Choose a card in the map to inspect what it contributes.</EmptyDescription>
+          <EmptyDescription>
+            Choose a card in the map to inspect what it contributes.
+          </EmptyDescription>
         </EmptyHeader>
       </Empty>
     );
@@ -62,11 +66,15 @@ function LayerDetails({ node }: { readonly node: VariantFlowNode | undefined }) 
               {variant.weight} weight · {Math.round((node.data.percentage ?? 0) * 100)}%
             </KeyValue>
             <KeyValue label="Revision">{variant.revision}</KeyValue>
-            <KeyValue label="Effective image" mono wide>{variant.runtime.image}</KeyValue>
+            <KeyValue label="Effective image" mono wide>
+              {variant.runtime.image}
+            </KeyValue>
             <KeyValue label="Resources">
               {variant.runtime.cpu} vCPU · {formatBytes(variant.runtime.memoryBytes)}
             </KeyValue>
-            <KeyValue label="Effective checksum" mono>{checksum(variant.checksum)}</KeyValue>
+            <KeyValue label="Effective checksum" mono>
+              {checksum(variant.checksum)}
+            </KeyValue>
           </KeyValueGrid>
           <Separator />
         </>
@@ -75,9 +83,13 @@ function LayerDetails({ node }: { readonly node: VariantFlowNode | undefined }) 
       <section className="flex flex-col gap-3">
         <SectionTitle>Layer contribution</SectionTitle>
         <KeyValueGrid>
-          <KeyValue label="Image" mono>{layer.runtime.image ?? "Inherited"}</KeyValue>
+          <KeyValue label="Image" mono>
+            {layer.runtime.image ?? "Inherited"}
+          </KeyValue>
           <KeyValue label="Memory">
-            {layer.runtime.memoryBytes === undefined ? "Inherited" : formatBytes(layer.runtime.memoryBytes)}
+            {layer.runtime.memoryBytes === undefined
+              ? "Inherited"
+              : formatBytes(layer.runtime.memoryBytes)}
           </KeyValue>
           <KeyValue label="CPU">{layer.runtime.cpu ?? "Inherited"}</KeyValue>
           <KeyValue label="Files">
@@ -85,7 +97,11 @@ function LayerDetails({ node }: { readonly node: VariantFlowNode | undefined }) 
           </KeyValue>
         </KeyValueGrid>
         <div className="flex flex-wrap gap-1.5">
-          {layer.files.roots.map((root) => <Badge key={root} variant="outline">{root}</Badge>)}
+          {layer.files.roots.map((root) => (
+            <Badge key={root} variant="outline">
+              {root}
+            </Badge>
+          ))}
         </div>
       </section>
 
@@ -94,13 +110,20 @@ function LayerDetails({ node }: { readonly node: VariantFlowNode | undefined }) 
         {environment.length > 0 ? (
           <dl className="grid gap-2">
             {environment.map(([key, value]) => (
-              <div key={key} className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] gap-3 text-xs">
+              <div
+                key={key}
+                className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] gap-3 text-xs"
+              >
                 <dt className="truncate font-mono text-muted-foreground">{key}</dt>
-                <dd className="truncate font-mono text-right" title={value}>{value}</dd>
+                <dd className="truncate font-mono text-right" title={value}>
+                  {value}
+                </dd>
               </div>
             ))}
           </dl>
-        ) : <p className="text-sm text-muted-foreground">No environment override in this layer.</p>}
+        ) : (
+          <p className="text-sm text-muted-foreground">No environment override in this layer.</p>
+        )}
       </section>
     </aside>
   );
@@ -112,7 +135,10 @@ function StackList({ graph }: { readonly graph: DashboardVariantGraph }) {
       <SectionTitle count={graph.variants.length}>Resolved stacks</SectionTitle>
       <div className="grid gap-2">
         {graph.variants.map((variant) => (
-          <div key={variant.id} className="flex flex-wrap items-center gap-2 border-b py-2 text-sm last:border-b-0">
+          <div
+            key={variant.id}
+            className="flex flex-wrap items-center gap-2 border-b py-2 text-sm last:border-b-0"
+          >
             <span className="min-w-40 font-heading font-medium">{variant.id}</span>
             <span className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
               {variant.layers.map((layer, index) => (
@@ -122,7 +148,9 @@ function StackList({ graph }: { readonly graph: DashboardVariantGraph }) {
                 </span>
               ))}
             </span>
-            <Badge variant="secondary" className="ml-auto">weight {variant.weight}</Badge>
+            <Badge variant="secondary" className="ml-auto">
+              weight {variant.weight}
+            </Badge>
           </div>
         ))}
       </div>
@@ -136,13 +164,14 @@ export function VariantExplorer({ groupId }: { readonly groupId: string }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const query = useQuery({
     queryKey: ["variants", groupId],
-    queryFn: ({signal}) => fetchVariants(groupId, signal),
+    queryFn: ({ signal }) => fetchVariants(groupId, signal),
     staleTime: 30_000,
   });
   const model = useMemo(
-    () => query.data
-      ? buildVariantFlow(query.data, { search, enabledOnly: visibility === "enabled" })
-      : { nodes: [], edges: [] },
+    () =>
+      query.data
+        ? buildVariantFlow(query.data, { search, enabledOnly: visibility === "enabled" })
+        : { nodes: [], edges: [] },
     [query.data, search, visibility],
   );
   const selected = model.nodes.find((node) => node.id === selectedId) ?? model.nodes[0];
@@ -153,7 +182,9 @@ export function VariantExplorer({ groupId }: { readonly groupId: string }) {
     return (
       <Alert variant="destructive">
         <AlertTitle>Variant map unavailable</AlertTitle>
-        <AlertDescription>{query.error?.message ?? "The group could not be loaded."}</AlertDescription>
+        <AlertDescription>
+          {query.error?.message ?? "The group could not be loaded."}
+        </AlertDescription>
       </Alert>
     );
   }
@@ -186,7 +217,9 @@ export function VariantExplorer({ groupId }: { readonly groupId: string }) {
           ) : (
             <Empty className="h-full">
               <EmptyHeader>
-                <EmptyMedia variant="icon"><BoxesIcon /></EmptyMedia>
+                <EmptyMedia variant="icon">
+                  <BoxesIcon />
+                </EmptyMedia>
                 <EmptyTitle>Nothing to draw</EmptyTitle>
                 <EmptyDescription>Change the search or include disabled variants.</EmptyDescription>
               </EmptyHeader>

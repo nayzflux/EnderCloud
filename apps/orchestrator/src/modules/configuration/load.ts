@@ -1,10 +1,14 @@
-import type { ResolvedServerVariantConfig,TemplateLayerSpec,VariantRuntimeSpec } from "@endercloud/contracts/domain";
+import type {
+  ResolvedServerVariantConfig,
+  TemplateLayerSpec,
+  VariantRuntimeSpec,
+} from "@endercloud/contracts/domain";
 import { inspectTemplateDirectory } from "@endercloud/runtime/templates";
 import { createHash } from "node:crypto";
-import { readdir,readFile,stat } from "node:fs/promises";
-import { join,resolve } from "node:path";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { parse } from "yaml";
-import { parseGroup,parseVariant } from "./descriptors.ts";
+import { parseGroup, parseVariant } from "./descriptors.ts";
 
 function mergeRuntime(layers: readonly TemplateLayerSpec[], context: string): VariantRuntimeSpec {
   let dataDirectory = "/data";
@@ -37,20 +41,16 @@ function effectiveChecksum(layers: readonly TemplateLayerSpec[]): string {
 }
 
 // Load all group and variant descriptors and verify their references.
-export async function loadConfiguration(
-  groupsRoot: string,
-  templatesRoot: string,
-) {
+export async function loadConfiguration(groupsRoot: string, templatesRoot: string) {
   const groupFiles = (await readdir(groupsRoot, { withFileTypes: true }))
     .filter((entry) => entry.isFile() && /\.ya?ml$/i.test(entry.name))
     .map((entry) => join(groupsRoot, entry.name));
   // Group files are independent, so parse them concurrently during startup.
   const groups = await Promise.all(
-    groupFiles.map(async (path) =>
-      parseGroup(parse(await readFile(path, "utf8")), path)
-    ),
+    groupFiles.map(async (path) => parseGroup(parse(await readFile(path, "utf8")), path)),
   );
-  if (new Set(groups.map(group => group.id)).size !== groups.length) throw new Error("Duplicate group ids");
+  if (new Set(groups.map((group) => group.id)).size !== groups.length)
+    throw new Error("Duplicate group ids");
   const layers: TemplateLayerSpec[] = [];
   const manifests = new Map<string, ReadonlyMap<string, "directory" | "file">>();
   // Each template directory is optional until it contains a valid variant.yml descriptor.
@@ -62,7 +62,8 @@ export async function loadConfiguration(
       const descriptorStat = await stat(descriptor);
       if (!descriptorStat.isFile()) continue;
     } catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") continue;
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT")
+        continue;
       throw error;
     }
     const variant = parseVariant(parse(await readFile(descriptor, "utf8")), descriptor);
@@ -89,7 +90,8 @@ export async function loadConfiguration(
     if (finalLayer.revision === undefined) {
       throw new Error(`Final variant ${id} must define revision`);
     }
-    if (finalLayer.parents.includes(id)) throw new Error(`Final variant ${id} cannot parent itself`);
+    if (finalLayer.parents.includes(id))
+      throw new Error(`Final variant ${id} cannot parent itself`);
     const parents = finalLayer.parents.map((parentId) => {
       const parent = layersById.get(parentId);
       if (!parent) throw new Error(`Final variant ${id} references unknown parent ${parentId}`);
@@ -119,4 +121,3 @@ export async function loadConfiguration(
   }
   return { groups, layers, variants };
 }
-

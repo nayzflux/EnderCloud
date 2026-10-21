@@ -85,9 +85,7 @@ export function AppSidebar({ mockMode = false }: { readonly mockMode?: boolean }
     },
   ];
 
-  const views: readonly NavItem[] = [
-    { href: "/topology", label: "Topology", icon: NetworkIcon },
-  ];
+  const views: readonly NavItem[] = [{ href: "/topology", label: "Topology", icon: NetworkIcon }];
 
   function isActive(href: string): boolean {
     return href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -105,9 +103,7 @@ export function AppSidebar({ mockMode = false }: { readonly mockMode?: boolean }
           <span>{item.label}</span>
         </SidebarMenuButton>
         {item.badge === undefined || item.badge === 0 ? null : (
-          <SidebarMenuBadge className="tabular">
-            {formatNumber(item.badge)}
-          </SidebarMenuBadge>
+          <SidebarMenuBadge className="tabular">{formatNumber(item.badge)}</SidebarMenuBadge>
         )}
       </SidebarMenuItem>
     ));
@@ -118,11 +114,7 @@ export function AppSidebar({ mockMode = false }: { readonly mockMode?: boolean }
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton
-              size="lg"
-              tooltip="EnderCloud"
-              render={<Link href="/" />}
-            >
+            <SidebarMenuButton size="lg" tooltip="EnderCloud" render={<Link href="/" />}>
               <span
                 aria-hidden
                 className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary font-mono text-xs font-semibold tracking-tighter text-primary-foreground"
@@ -131,9 +123,7 @@ export function AppSidebar({ mockMode = false }: { readonly mockMode?: boolean }
               </span>
               <span className="grid flex-1 text-left leading-tight">
                 <span className="truncate font-medium">EnderCloud</span>
-                <span className="truncate text-xs text-muted-foreground">
-                  Cluster control
-                </span>
+                <span className="truncate text-xs text-muted-foreground">Cluster control</span>
               </span>
             </SidebarMenuButton>
           </SidebarMenuItem>

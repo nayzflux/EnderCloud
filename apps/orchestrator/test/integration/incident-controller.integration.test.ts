@@ -33,7 +33,8 @@ const logger = {
   debug: () => {},
   error: () => {},
   warn: (_event: string, _message: string, fields: Record<string, unknown>) => opened.push(fields),
-  info: (_event: string, _message: string, fields: Record<string, unknown>) => resolved.push(fields),
+  info: (_event: string, _message: string, fields: Record<string, unknown>) =>
+    resolved.push(fields),
 } as unknown as Logger;
 
 async function seedGroup({ minimum = 0, warm = 0 }: { minimum?: number; warm?: number } = {}) {
@@ -70,9 +71,13 @@ async function seedGroup({ minimum = 0, warm = 0 }: { minimum?: number; warm?: n
     runtimePatch: runtime,
     fileSummary: { fileCount: 0, totalBytes: 0, roots: [] },
   });
-  await db.insert(serverVariants).values({ id: variantId, revision: 1, checksum: "none", runtimeSpec: runtime });
+  await db
+    .insert(serverVariants)
+    .values({ id: variantId, revision: 1, checksum: "none", runtimeSpec: runtime });
   await db.insert(serverVariantLayers).values({ variantId, layerId: variantId, ordinal: 0 });
-  await db.insert(serverGroupVariants).values({ groupId, variantId, enabled: true, selectionWeight: 100 });
+  await db
+    .insert(serverGroupVariants)
+    .values({ groupId, variantId, enabled: true, selectionWeight: 100 });
   return { groupId, variantId };
 }
 
@@ -131,9 +136,12 @@ describe("persistent operational incidents", () => {
     expect(stored[0]?.state).toBe("PENDING");
     expect((await new IncidentController(db, config, logger).list({})).incidents).toHaveLength(0);
 
-    await db.update(operationalIncidents).set({
-      firstObservedAt: new Date(Date.now() - 31_000),
-    }).where(eq(operationalIncidents.fingerprint, "capacity:incident-group"));
+    await db
+      .update(operationalIncidents)
+      .set({
+        firstObservedAt: new Date(Date.now() - 31_000),
+      })
+      .where(eq(operationalIncidents.fingerprint, "capacity:incident-group"));
     const recreated = new IncidentController(db, config, logger);
     await recreated.tick();
     await recreated.tick();
@@ -153,9 +161,12 @@ describe("persistent operational incidents", () => {
     expect((await recreated.list({ status: "resolved" })).incidents).toHaveLength(1);
     expect(resolved).toHaveLength(1);
 
-    await db.update(operationalIncidents).set({
-      resolvedAt: new Date(Date.now() - 91 * 24 * 60 * 60 * 1_000),
-    }).where(eq(operationalIncidents.state, "RESOLVED"));
+    await db
+      .update(operationalIncidents)
+      .set({
+        resolvedAt: new Date(Date.now() - 91 * 24 * 60 * 60 * 1_000),
+      })
+      .where(eq(operationalIncidents.state, "RESOLVED"));
     await recreated.prune();
     stored = await db.select().from(operationalIncidents);
     expect(stored).toHaveLength(0);
@@ -165,13 +176,15 @@ describe("persistent operational incidents", () => {
     const { groupId, variantId } = await seedGroup();
     await seedHost();
     const instanceIds = ["failed-instance-1", "failed-instance-2", "failed-instance-3"];
-    await db.insert(serverInstances).values(instanceIds.map((id) => ({
-      id,
-      groupId,
-      variantId,
-      lifecycleState: "FAILED" as const,
-      availabilityState: "OPEN" as const,
-    })));
+    await db.insert(serverInstances).values(
+      instanceIds.map((id) => ({
+        id,
+        groupId,
+        variantId,
+        lifecycleState: "FAILED" as const,
+        availabilityState: "OPEN" as const,
+      })),
+    );
     await db.insert(variantStartStates).values({
       groupId,
       variantId,
@@ -182,35 +195,39 @@ describe("persistent operational incidents", () => {
       lastFailureReason: "STARTUP_TIMEOUT",
       lastFailureAt: new Date(),
     });
-    await db.insert(transferCommands).values(instanceIds.map((instanceId, index) => ({
-      id: `expired-transfer-${index}`,
-      instanceId,
-      payload: { instanceId, endpoint: "127.0.0.1:25565", players: [] },
-      state: "EXPIRED",
-      attempts: 2,
-      expiresAt: new Date(Date.now() - 1_000),
-      completedAt: new Date(),
-    })));
-    await db.insert(commands).values(instanceIds.map((instanceId, index) => ({
-      id: `failed-command-${index}`,
-      instanceId,
-      operation: "DELETE",
-      state: "FAILED" as const,
-      attempts: 2,
-      completedAt: new Date(),
-      lastError: "agent unavailable",
-    })));
+    await db.insert(transferCommands).values(
+      instanceIds.map((instanceId, index) => ({
+        id: `expired-transfer-${index}`,
+        instanceId,
+        payload: { instanceId, endpoint: "127.0.0.1:25565", players: [] },
+        state: "EXPIRED",
+        attempts: 2,
+        expiresAt: new Date(Date.now() - 1_000),
+        completedAt: new Date(),
+      })),
+    );
+    await db.insert(commands).values(
+      instanceIds.map((instanceId, index) => ({
+        id: `failed-command-${index}`,
+        instanceId,
+        operation: "DELETE",
+        state: "FAILED" as const,
+        attempts: 2,
+        completedAt: new Date(),
+        lastError: "agent unavailable",
+      })),
+    );
 
     const controller = new IncidentController(db, config, logger);
     await controller.tick();
     await controller.tick();
     const active = await controller.list({ status: "active", limit: 200 });
-    expect(new Set(active.incidents.map((incident) => incident.kind))).toEqual(new Set([
-      "INSTANCE_FAILURE_LOOP",
-      "TRANSFER_FAILURE_LOOP",
-      "COMMAND_FAILURE_LOOP",
-    ]));
-    const failureLoop = active.incidents.find((incident) => incident.kind === "INSTANCE_FAILURE_LOOP");
+    expect(new Set(active.incidents.map((incident) => incident.kind))).toEqual(
+      new Set(["INSTANCE_FAILURE_LOOP", "TRANSFER_FAILURE_LOOP", "COMMAND_FAILURE_LOOP"]),
+    );
+    const failureLoop = active.incidents.find(
+      (incident) => incident.kind === "INSTANCE_FAILURE_LOOP",
+    );
     expect(failureLoop?.occurrenceCount).toBe(3);
     expect(failureLoop?.evidence.lastFailedInstanceId).toBe(instanceIds.at(-1));
     expect(await db.select().from(operationalIncidents)).toHaveLength(3);
@@ -230,21 +247,35 @@ describe("persistent operational incidents", () => {
     await seedHost();
     const controller = new IncidentController(db, config, logger);
 
-    await db.update(executionHosts).set({ healthState: "OFFLINE" }).where(eq(executionHosts.id, "incident-host"));
+    await db
+      .update(executionHosts)
+      .set({ healthState: "OFFLINE" })
+      .where(eq(executionHosts.id, "incident-host"));
     await controller.tick();
     expect((await controller.list({ kind: "HOST_UNAVAILABLE" })).incidents).toHaveLength(1);
-    await db.update(executionHosts).set({ healthState: "ONLINE" }).where(eq(executionHosts.id, "incident-host"));
+    await db
+      .update(executionHosts)
+      .set({ healthState: "ONLINE" })
+      .where(eq(executionHosts.id, "incident-host"));
     await controller.tick();
     expect((await controller.list({ kind: "HOST_UNAVAILABLE" })).incidents).toHaveLength(0);
 
-    await db.update(executionHosts).set({ healthState: "RECOVERING" }).where(eq(executionHosts.id, "incident-host"));
+    await db
+      .update(executionHosts)
+      .set({ healthState: "RECOVERING" })
+      .where(eq(executionHosts.id, "incident-host"));
     await controller.tick();
     expect((await controller.list({ kind: "HOST_RECOVERY_STUCK" })).incidents).toHaveLength(0);
-    await db.update(operationalIncidents).set({ firstObservedAt: new Date(Date.now() - 61_000) })
+    await db
+      .update(operationalIncidents)
+      .set({ firstObservedAt: new Date(Date.now() - 61_000) })
       .where(eq(operationalIncidents.fingerprint, "host-health:incident-host"));
     await new IncidentController(db, config, logger).tick();
     expect((await controller.list({ kind: "HOST_RECOVERY_STUCK" })).incidents).toHaveLength(1);
-    await db.update(executionHosts).set({ healthState: "ONLINE" }).where(eq(executionHosts.id, "incident-host"));
+    await db
+      .update(executionHosts)
+      .set({ healthState: "ONLINE" })
+      .where(eq(executionHosts.id, "incident-host"));
     await controller.tick();
     expect((await controller.list({ kind: "HOST_RECOVERY_STUCK" })).incidents).toHaveLength(0);
 
@@ -258,9 +289,14 @@ describe("persistent operational incidents", () => {
       lifecycleState: "RUNNING",
       availabilityState: "OPEN",
     });
-    await db.update(executionHosts).set({ adminState: "DRAINING" }).where(eq(executionHosts.id, "incident-host"));
+    await db
+      .update(executionHosts)
+      .set({ adminState: "DRAINING" })
+      .where(eq(executionHosts.id, "incident-host"));
     await controller.tick();
-    await db.update(operationalIncidents).set({ firstObservedAt: new Date(Date.now() - 31_000) })
+    await db
+      .update(operationalIncidents)
+      .set({ firstObservedAt: new Date(Date.now() - 31_000) })
       .where(eq(operationalIncidents.fingerprint, "host-maintenance:incident-host"));
     await new IncidentController(db, config, logger).tick();
     expect((await controller.list({ kind: "HOST_MAINTENANCE_BLOCKED" })).incidents).toHaveLength(1);

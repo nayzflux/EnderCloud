@@ -7,13 +7,13 @@ description: Fast checks, disposable integration tests, browser validation, Java
 
 Run from the repository root after `bun install --frozen-lockfile`:
 
-| Command | Coverage | Requirements |
-| --- | --- | --- |
-| `bun run check` | Boundaries, types, frontend lint, formatter and unit suites | Bun and Node |
-| `bun run typecheck` | All application and shared-package types | Bun and Node |
-| `bun run test` | Orchestrator, agent and dashboard unit suites | Bun |
-| `bun run check:compose` | Central, standalone-agent and two-host Compose interpolation | Docker Compose |
-| `bun run check:release` | All checks below, including Docker images and recovery | Docker, Chromium; JDK 25 or Docker fallback |
+| Command                 | Coverage                                                     | Requirements                                |
+| ----------------------- | ------------------------------------------------------------ | ------------------------------------------- |
+| `bun run check`         | Boundaries, types, frontend lint, formatter and unit suites  | Bun and Node                                |
+| `bun run typecheck`     | All application and shared-package types                     | Bun and Node                                |
+| `bun run test`          | Orchestrator, agent and dashboard unit suites                | Bun                                         |
+| `bun run check:compose` | Central, standalone-agent and two-host Compose interpolation | Docker Compose                              |
+| `bun run check:release` | All checks below, including Docker images and recovery       | Docker, Chromium; JDK 25 or Docker fallback |
 
 Install Chromium with `bun run browsers:install`. On Linux also run
 `bunx --no-install playwright install-deps chromium` from `apps/dashboard`.
@@ -85,4 +85,3 @@ JARs for that additional validation.
 The release workflow pins tool versions and actions, installs Chromium system dependencies and
 runs `bun run check:release`. It does not publish images or push commits. A missing prerequisite
 or skipped mandatory suite is a failed validation, not a release success.
-

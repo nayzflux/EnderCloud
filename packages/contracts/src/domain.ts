@@ -37,13 +37,7 @@ export type IncidentSeverity = (typeof incidentSeverities)[number];
 export const incidentStates = ["PENDING", "ACTIVE", "RESOLVED"] as const;
 export type IncidentState = (typeof incidentStates)[number];
 
-export const incidentScopeTypes = [
-  "CLUSTER",
-  "HOST",
-  "GROUP",
-  "VARIANT",
-  "SESSION",
-] as const;
+export const incidentScopeTypes = ["CLUSTER", "HOST", "GROUP", "VARIANT", "SESSION"] as const;
 export type IncidentScopeType = (typeof incidentScopeTypes)[number];
 
 export const sessionStates = [
@@ -59,12 +53,7 @@ export const sessionStates = [
 ] as const;
 export type SessionState = (typeof sessionStates)[number];
 
-export const sessionPlayerStates = [
-  "SELECTED",
-  "TRANSFERRING",
-  "CONNECTED",
-  "LEFT",
-] as const;
+export const sessionPlayerStates = ["SELECTED", "TRANSFERRING", "CONNECTED", "LEFT"] as const;
 export type SessionPlayerState = (typeof sessionPlayerStates)[number];
 
 export type GroupType = "hub" | "minigame" | "proxy";
@@ -174,10 +163,7 @@ export interface RedisEnvelope<T = unknown> {
   readonly registryRevision?: number;
   readonly eventId: string;
   readonly type:
-    | "SERVER_REGISTERED"
-    | "SERVER_UPDATED"
-    | "SERVER_UNREGISTERED"
-    | "TRANSFER_PLAYERS";
+    "SERVER_REGISTERED" | "SERVER_UPDATED" | "SERVER_UNREGISTERED" | "TRANSFER_PLAYERS";
   readonly occurredAt: string;
   readonly payload: T;
 }

@@ -1,5 +1,10 @@
 export class ApplicationError extends Error {
-  public constructor(public readonly code: string, public readonly status: number, message: string, options?: ErrorOptions) {
+  public constructor(
+    public readonly code: string,
+    public readonly status: number,
+    message: string,
+    options?: ErrorOptions,
+  ) {
     super(message, options);
     this.name = "ApplicationError";
   }

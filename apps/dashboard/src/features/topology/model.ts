@@ -7,12 +7,7 @@ import type {
 } from "@endercloud/contracts";
 import { matchesInstanceFilter, type InstanceFilter } from "../../lib/status";
 
-export type ClusterNodeKind =
-  | "groupFrame"
-  | "queue"
-  | "pool"
-  | "instance"
-  | "session";
+export type ClusterNodeKind = "groupFrame" | "queue" | "pool" | "instance" | "session";
 
 /** Caption drawn inside a group frame to name a row of nodes. */
 export interface LaneLabel {
@@ -143,10 +138,7 @@ export function buildClusterFlow(
       if (session.instanceId && !visibleInstanceIds.has(session.instanceId)) {
         return false;
       }
-      return matchesSearch(
-        [group.id, session.id, session.instanceId ?? "", session.state],
-        search,
-      );
+      return matchesSearch([group.id, session.id, session.instanceId ?? "", session.state], search);
     });
     const waitingSessions = sessions.filter((session) => !session.instanceId);
     const hasQueue = group.type === "minigame";
@@ -154,19 +146,13 @@ export function buildClusterFlow(
     // Rows.
     const queueY = HEADER_HEIGHT + PADDING;
     const poolY = hasQueue ? queueY + QUEUE_SIZE.height + QUEUE_TO_POOL_GAP : queueY;
-    const instancesY =
-      poolY + POOL_SIZE.height + POOL_TO_INSTANCES_GAP + LANE_LABEL_HEIGHT;
+    const instancesY = poolY + POOL_SIZE.height + POOL_TO_INSTANCES_GAP + LANE_LABEL_HEIGHT;
     const sessionsY = instancesY + INSTANCE_SIZE.height + INSTANCE_TO_SESSION_GAP;
 
     // Columns: instances first, then any session still waiting for capacity.
     const columnCount = instances.length + waitingSessions.length;
     const rowSpan = columnCount > 0 ? columnCount * COLUMN_PITCH - COLUMN_GAP : 0;
-    const contentWidth = Math.max(
-      rowSpan,
-      POOL_SIZE.width,
-      QUEUE_SIZE.width,
-      MIN_CONTENT_WIDTH,
-    );
+    const contentWidth = Math.max(rowSpan, POOL_SIZE.width, QUEUE_SIZE.width, MIN_CONTENT_WIDTH);
     const columnsX = PADDING + (contentWidth - rowSpan) / 2;
     const groupWidth = contentWidth + PADDING * 2;
 
@@ -203,9 +189,8 @@ export function buildClusterFlow(
         });
       }
       groupHeight =
-        (hasHostedSession
-          ? sessionsY + SESSION_SIZE.height
-          : instancesY + INSTANCE_SIZE.height) + PADDING;
+        (hasHostedSession ? sessionsY + SESSION_SIZE.height : instancesY + INSTANCE_SIZE.height) +
+        PADDING;
     }
 
     nodes.push({
@@ -273,9 +258,7 @@ export function buildClusterFlow(
       });
       edges.push(edge(poolId, instanceNodeId));
 
-      const hosted = sessions.find(
-        (session) => session.id === instance.sessionId,
-      );
+      const hosted = sessions.find((session) => session.id === instance.sessionId);
       if (hosted) {
         const sessionNodeId = `session:${hosted.id}`;
         nodes.push({

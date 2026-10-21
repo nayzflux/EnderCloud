@@ -18,9 +18,7 @@ import {
 } from "@/components/ui/select";
 
 export function FilterBar({ children }: { readonly children: ReactNode }) {
-  return (
-    <div className="flex flex-wrap items-center gap-2">{children}</div>
-  );
+  return <div className="flex flex-wrap items-center gap-2">{children}</div>;
 }
 
 export function SearchField({
@@ -47,11 +45,7 @@ export function SearchField({
       />
       {value ? (
         <InputGroupAddon align="inline-end">
-          <InputGroupButton
-            size="icon-xs"
-            aria-label="Clear search"
-            onClick={() => onChange("")}
-          >
+          <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => onChange("")}>
             <XIcon />
           </InputGroupButton>
         </InputGroupAddon>

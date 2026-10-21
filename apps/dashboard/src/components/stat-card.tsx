@@ -1,11 +1,5 @@
 import type { ComponentType, ReactNode } from "react";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatNumber } from "@/lib/format";
 import { toneTextClass, type Tone } from "@/lib/status";
@@ -41,7 +35,10 @@ export function StatCard({
         {Icon ? (
           <CardAction>
             <Icon
-              className={cn("size-4", tone === "neutral" ? "text-muted-foreground" : toneTextClass[tone])}
+              className={cn(
+                "size-4",
+                tone === "neutral" ? "text-muted-foreground" : toneTextClass[tone],
+              )}
             />
           </CardAction>
         ) : null}
@@ -56,16 +53,11 @@ export function StatCard({
           >
             {typeof value === "number" ? formatNumber(value) : value}
           </span>
-          {hint ? (
-            <span className="text-xs text-muted-foreground">{hint}</span>
-          ) : null}
+          {hint ? <span className="text-xs text-muted-foreground">{hint}</span> : null}
         </div>
         {progress === undefined ? null : (
           <div className="flex flex-col gap-1">
-            <div
-              className="h-1 w-full overflow-hidden rounded-full bg-muted"
-              role="presentation"
-            >
+            <div className="h-1 w-full overflow-hidden rounded-full bg-muted" role="presentation">
               <div
                 className={cn(
                   "h-full rounded-full transition-[width] duration-500",
@@ -75,9 +67,7 @@ export function StatCard({
               />
             </div>
             {progressLabel ? (
-              <span className="text-[0.7rem] text-muted-foreground tabular">
-                {progressLabel}
-              </span>
+              <span className="text-[0.7rem] text-muted-foreground tabular">{progressLabel}</span>
             ) : null}
           </div>
         )}

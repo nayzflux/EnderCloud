@@ -1,8 +1,8 @@
 import type { Executor } from "@endercloud/contracts/executor";
 import type { Logger } from "@endercloud/runtime/logger";
-import { and,asc,eq,inArray,lte,sql } from "drizzle-orm";
+import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.ts";
-import { commands,serverInstances } from "../../db/schema.ts";
+import { commands, serverInstances } from "../../db/schema.ts";
 import type { InstanceController } from "./lifecycle.ts";
 
 interface ClaimedCreate {
@@ -28,18 +28,23 @@ export class InstanceStartWorker {
   ) {}
 
   public async recoverInterrupted(): Promise<number> {
-    const recovered = await this.db.update(commands).set({
-      state: "PENDING",
-      startedAt: null,
-      lastError: null,
-    }).where(and(
-      eq(commands.operation, "CREATE"),
-      eq(commands.state, "RUNNING"),
-    )).returning({ id: commands.id });
+    const recovered = await this.db
+      .update(commands)
+      .set({
+        state: "PENDING",
+        startedAt: null,
+        lastError: null,
+      })
+      .where(and(eq(commands.operation, "CREATE"), eq(commands.state, "RUNNING")))
+      .returning({ id: commands.id });
     if (recovered.length > 0) {
-      this.logger.info("instance.worker.recovered", "Interrupted instance startups returned to the queue", {
-        commandCount: recovered.length,
-      });
+      this.logger.info(
+        "instance.worker.recovered",
+        "Interrupted instance startups returned to the queue",
+        {
+          commandCount: recovered.length,
+        },
+      );
     }
     return recovered.length;
   }
@@ -50,17 +55,22 @@ export class InstanceStartWorker {
     }
     this.claiming = true;
     let finishClaim!: () => void;
-    this.claimSettled = new Promise(resolve => { finishClaim = resolve; });
+    this.claimSettled = new Promise((resolve) => {
+      finishClaim = resolve;
+    });
     try {
       // A failed persistence attempt remains here until PostgreSQL accepts it.
       // Never turn a local command failure into an unhandled process rejection.
       for (const [commandId, message] of this.recoveries) {
-        await this.db.update(commands).set({
-          state: "PENDING",
-          startedAt: null,
-          lastError: message,
-          nextAttemptAt: sql`now() + interval '1 second'`,
-        }).where(and(eq(commands.id, commandId), eq(commands.state, "RUNNING")));
+        await this.db
+          .update(commands)
+          .set({
+            state: "PENDING",
+            startedAt: null,
+            lastError: message,
+            nextAttemptAt: sql`now() + interval '1 second'`,
+          })
+          .where(and(eq(commands.id, commandId), eq(commands.state, "RUNNING")));
         this.recoveries.delete(commandId);
       }
       if (!this.accepting) return;
@@ -70,8 +80,11 @@ export class InstanceStartWorker {
       }
       const claimed = await this.claim(available);
       if (!this.accepting) {
-        for (const command of claimed) await this.db.update(commands).set({ state: "PENDING", startedAt: null })
-          .where(and(eq(commands.id, command.commandId), eq(commands.state, "RUNNING")));
+        for (const command of claimed)
+          await this.db
+            .update(commands)
+            .set({ state: "PENDING", startedAt: null })
+            .where(and(eq(commands.id, command.commandId), eq(commands.state, "RUNNING")));
         return;
       }
       if (claimed.length > 0) {
@@ -95,7 +108,12 @@ export class InstanceStartWorker {
     this.stopping = true;
     this.executor.cancelPending?.();
     let claimTimeout: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([this.claimSettled, new Promise<void>(resolve => { claimTimeout = setTimeout(resolve, graceMs); })]);
+    await Promise.race([
+      this.claimSettled,
+      new Promise<void>((resolve) => {
+        claimTimeout = setTimeout(resolve, graceMs);
+      }),
+    ]);
     if (claimTimeout) clearTimeout(claimTimeout);
     if (this.active.size > 0) {
       let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -111,10 +129,14 @@ export class InstanceStartWorker {
       ]);
       if (timeout) clearTimeout(timeout);
       if (timedOut) {
-        this.logger.warn("instance.worker.shutdown_timeout", "Instance startup worker exceeded its shutdown grace period", {
-          activeCount: this.active.size,
-          graceMs,
-        });
+        this.logger.warn(
+          "instance.worker.shutdown_timeout",
+          "Instance startup worker exceeded its shutdown grace period",
+          {
+            activeCount: this.active.size,
+            graceMs,
+          },
+        );
       }
     }
     await this.recoverInterrupted();
@@ -122,18 +144,21 @@ export class InstanceStartWorker {
 
   private async claim(limit: number): Promise<ClaimedCreate[]> {
     return this.db.transaction(async (tx) => {
-      const rows = await tx.select({
-        commandId: commands.id,
-        instanceId: serverInstances.id,
-        attempts: commands.attempts,
-      }).from(commands)
+      const rows = await tx
+        .select({
+          commandId: commands.id,
+          instanceId: serverInstances.id,
+          attempts: commands.attempts,
+        })
+        .from(commands)
         .innerJoin(serverInstances, eq(serverInstances.id, commands.instanceId))
-        .where(and(
-          eq(commands.operation, "CREATE"),
-          eq(commands.state, "PENDING"),
-          lte(commands.nextAttemptAt, sql`now()`),
-          inArray(serverInstances.lifecycleState, ["CREATING", "STARTING"]),
-          sql`NOT EXISTS (
+        .where(
+          and(
+            eq(commands.operation, "CREATE"),
+            eq(commands.state, "PENDING"),
+            lte(commands.nextAttemptAt, sql`now()`),
+            inArray(serverInstances.lifecycleState, ["CREATING", "STARTING"]),
+            sql`NOT EXISTS (
             SELECT 1 FROM variant_start_states startup_policy
             WHERE startup_policy.group_id = ${serverInstances.groupId}
               AND startup_policy.variant_id = ${serverInstances.variantId}
@@ -143,19 +168,23 @@ export class InstanceStartWorker {
                 AND startup_policy.probe_instance_id = ${serverInstances.id}
               )
           )`,
-        ))
+          ),
+        )
         .orderBy(asc(commands.createdAt), asc(commands.id))
         .limit(limit)
         .for("update", { skipLocked: true });
       if (rows.length === 0) return [];
       const ids = rows.map((row) => row.commandId);
-      await tx.update(commands).set({
-        state: "RUNNING",
-        attempts: sql`${commands.attempts} + 1`,
-        startedAt: sql`now()`,
-        completedAt: null,
-        lastError: null,
-      }).where(inArray(commands.id, ids));
+      await tx
+        .update(commands)
+        .set({
+          state: "RUNNING",
+          attempts: sql`${commands.attempts} + 1`,
+          startedAt: sql`now()`,
+          completedAt: null,
+          lastError: null,
+        })
+        .where(inArray(commands.id, ids));
       return rows.map((row) => ({
         commandId: row.commandId,
         instanceId: row.instanceId,
@@ -165,39 +194,52 @@ export class InstanceStartWorker {
   }
 
   private launch(command: ClaimedCreate): void {
-    const operation = Promise.resolve().then(() => this.logger.runWithContext({
-      commandId: command.commandId,
-      instanceId: command.instanceId,
-      attempt: command.attempt,
-    }, async () => {
-      const startedAt = performance.now();
-      this.logger.debug("instance.worker.started", "Instance startup command started");
-      try {
-        await this.instances.executeCreate(
-          command.instanceId,
-          command.commandId,
-          () => this.stopping,
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.recoveries.set(command.commandId, message);
-        this.logger.error("instance.worker.command_failed", "Startup command will be recovered", {
-          error,
+    const operation = Promise.resolve().then(() =>
+      this.logger.runWithContext(
+        {
           commandId: command.commandId,
           instanceId: command.instanceId,
-        });
-      } finally {
-        this.logger.debug("instance.worker.completed", "Instance startup command completed", {
-          durationMs: Math.round(performance.now() - startedAt),
-        });
-        this.active.delete(command.commandId);
-        if (this.accepting) {
-          void this.tick().catch((error) => {
-            this.logger.error("instance.worker.tick_failed", "Instance startup worker tick failed", { error });
-          });
-        }
-      }
-    }));
+          attempt: command.attempt,
+        },
+        async () => {
+          const startedAt = performance.now();
+          this.logger.debug("instance.worker.started", "Instance startup command started");
+          try {
+            await this.instances.executeCreate(
+              command.instanceId,
+              command.commandId,
+              () => this.stopping,
+            );
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.recoveries.set(command.commandId, message);
+            this.logger.error(
+              "instance.worker.command_failed",
+              "Startup command will be recovered",
+              {
+                error,
+                commandId: command.commandId,
+                instanceId: command.instanceId,
+              },
+            );
+          } finally {
+            this.logger.debug("instance.worker.completed", "Instance startup command completed", {
+              durationMs: Math.round(performance.now() - startedAt),
+            });
+            this.active.delete(command.commandId);
+            if (this.accepting) {
+              void this.tick().catch((error) => {
+                this.logger.error(
+                  "instance.worker.tick_failed",
+                  "Instance startup worker tick failed",
+                  { error },
+                );
+              });
+            }
+          }
+        },
+      ),
+    );
     this.active.set(command.commandId, operation);
   }
 }

@@ -1,19 +1,19 @@
-import type {SqlRow} from "../../db/client.ts";
+import type { SqlRow } from "../../db/client.ts";
 import type {
-DashboardMonitoringAlert,
-DashboardMonitoringSeries,
-DashboardMonitoringSummary,
-MonitoringRange,
+  DashboardMonitoringAlert,
+  DashboardMonitoringSeries,
+  DashboardMonitoringSummary,
+  MonitoringRange,
 } from "@endercloud/contracts/dashboard";
 import type { TpsSnapshot } from "@endercloud/contracts/domain";
 import type { Logger } from "@endercloud/runtime/logger";
-import { asc,eq,lt,sql } from "drizzle-orm";
+import { asc, eq, lt, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.ts";
 import {
-serverGroups,
-serverGroupVariants,
-serverInstances,
-serverTpsMetrics,
+  serverGroups,
+  serverGroupVariants,
+  serverInstances,
+  serverTpsMetrics,
 } from "../../db/schema.ts";
 
 export const TPS_ALERT_THRESHOLD = 19;
@@ -281,8 +281,18 @@ export class MonitoringService {
       `),
     ]);
 
-    const startupByVariant = new Map<string, DashboardMonitoringSeries["variants"][number]["startup"] extends readonly (infer T)[] ? T[] : never>();
-    const tpsByVariant = new Map<string, DashboardMonitoringSeries["variants"][number]["tps"] extends readonly (infer T)[] ? T[] : never>();
+    const startupByVariant = new Map<
+      string,
+      DashboardMonitoringSeries["variants"][number]["startup"] extends readonly (infer T)[]
+        ? T[]
+        : never
+    >();
+    const tpsByVariant = new Map<
+      string,
+      DashboardMonitoringSeries["variants"][number]["tps"] extends readonly (infer T)[]
+        ? T[]
+        : never
+    >();
     for (const row of startupRows) {
       const points = startupByVariant.get(row.variant_id) ?? [];
       points.push({

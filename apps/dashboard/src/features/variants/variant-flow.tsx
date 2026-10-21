@@ -25,11 +25,12 @@ export function VariantFlow({
   readonly selectedId?: string;
 }) {
   const nodes = useMemo(
-    () => model.nodes.map((node) => ({
-      ...node,
-      selected: node.id === selectedId,
-      data: { ...node.data, onSelect: () => onSelect(node) },
-    })),
+    () =>
+      model.nodes.map((node) => ({
+        ...node,
+        selected: node.id === selectedId,
+        data: { ...node.data, onSelect: () => onSelect(node) },
+      })),
     [model.nodes, onSelect, selectedId],
   );
   return (

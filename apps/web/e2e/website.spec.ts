@@ -15,7 +15,10 @@ test("landing presents the product without a dashboard action", async ({ page },
     }),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "Read the docs" })).toHaveAttribute("href", "/docs");
-  await expect(page.getByRole("link", { name: "View on GitHub" })).toHaveAttribute("href", /github\.com\/nayzflux\/EnderCloud/);
+  await expect(page.getByRole("link", { name: "View on GitHub" })).toHaveAttribute(
+    "href",
+    /github\.com\/nayzflux\/EnderCloud/,
+  );
   await expect(page.getByText(/Open dashboard/i)).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Expand .* screenshot/i })).toHaveCount(4);
 
@@ -35,19 +38,29 @@ test("landing presents the product without a dashboard action", async ({ page },
 
 test("documentation navigation, table of contents, and search work", async ({ page, request }) => {
   await page.goto("/docs");
-  await expect(page.getByRole("heading", { level: 1, name: "EnderCloud documentation" })).toBeVisible();
-  await page.getByRole("link", { name: /architecture/i }).last().click();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "EnderCloud documentation" }),
+  ).toBeVisible();
+  await page
+    .getByRole("link", { name: /architecture/i })
+    .last()
+    .click();
   await expect(page).toHaveURL(/\/docs\/getting-started\/architecture$/);
   await expect(page.getByRole("heading", { level: 2, name: "System view" })).toBeVisible();
   if (test.info().project.name === "desktop-chromium") {
-    await expect(page.locator("#nd-toc").getByRole("link", { name: "System view", exact: true })).toBeVisible();
+    await expect(
+      page.locator("#nd-toc").getByRole("link", { name: "System view", exact: true }),
+    ).toBeVisible();
   }
 
   const response = await request.get("/api/search?query=orchestrator");
   expect(response.ok()).toBeTruthy();
   expect(JSON.stringify(await response.json()).toLowerCase()).toContain("orchestrator");
 
-  await page.getByRole("button", { name: /search/i }).first().click();
+  await page
+    .getByRole("button", { name: /search/i })
+    .first()
+    .click();
   await page.getByRole("textbox").fill("multi-host");
   await expect(page.getByText(/Multi-host deployment/i).first()).toBeVisible();
   await page.keyboard.press("Escape");

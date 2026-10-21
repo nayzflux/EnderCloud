@@ -33,20 +33,20 @@ The minigame plugin must not call PostgreSQL, Redis, Docker, or an execution age
 
 ## Responsibilities
 
-| Responsibility | EnderCloud | Minigame plugin |
-| --- | :---: | :---: |
-| Queue entries and atomic parties | Owns | Calls `enqueue` and `leaveQueue` |
-| Feasible anonymous team profiles | Calculates | Chooses the final ticket-to-team mapping |
-| Instance creation and placement | Owns | Does not manage |
-| Velocity transfer | Owns | Does not manage |
-| Assignment revision | Owns | Applies each new revision |
-| Map initialization | Does not manage | Owns |
-| Kits and inventories | Does not manage | Owns |
-| Start decision | Accepts reported event | Owns |
-| Victory and result calculation | Does not manage | Owns |
-| Durable result storage | Stores event payload | Publishes `GAME_FINISHED` |
-| Cancellation and evacuation | Executes | Publishes `GAME_CANCELLED` |
-| Presence heartbeat | Paper bridge | Reacts to Bukkit events as needed |
+| Responsibility                   |       EnderCloud       |             Minigame plugin              |
+| -------------------------------- | :--------------------: | :--------------------------------------: |
+| Queue entries and atomic parties |          Owns          |     Calls `enqueue` and `leaveQueue`     |
+| Feasible anonymous team profiles |       Calculates       | Chooses the final ticket-to-team mapping |
+| Instance creation and placement  |          Owns          |             Does not manage              |
+| Velocity transfer                |          Owns          |             Does not manage              |
+| Assignment revision              |          Owns          |        Applies each new revision         |
+| Map initialization               |    Does not manage     |                   Owns                   |
+| Kits and inventories             |    Does not manage     |                   Owns                   |
+| Start decision                   | Accepts reported event |                   Owns                   |
+| Victory and result calculation   |    Does not manage     |                   Owns                   |
+| Durable result storage           |  Stores event payload  |        Publishes `GAME_FINISHED`         |
+| Cancellation and evacuation      |        Executes        |        Publishes `GAME_CANCELLED`        |
+| Presence heartbeat               |      Paper bridge      |    Reacts to Bukkit events as needed     |
 
 ## Installation
 
@@ -83,11 +83,11 @@ disable its EnderCloud-dependent behavior.
 
 The Paper bridge reads:
 
-| Variable | Required | Default | Purpose |
-| --- | :---: | --- | --- |
-| `ENDERCLOUD_INSTANCE_ID` | Yes | None | Stable managed instance ID |
-| `ENDERCLOUD_ORCHESTRATOR_URL` | No | `http://localhost:8080` | Private orchestrator callback URL |
-| `ENDERCLOUD_REPORTED_ENDPOINT` | No | Agent-allocated endpoint | Optional endpoint override for `SERVER_READY` |
+| Variable                       | Required | Default                  | Purpose                                       |
+| ------------------------------ | :------: | ------------------------ | --------------------------------------------- |
+| `ENDERCLOUD_INSTANCE_ID`       |   Yes    | None                     | Stable managed instance ID                    |
+| `ENDERCLOUD_ORCHESTRATOR_URL`  |    No    | `http://localhost:8080`  | Private orchestrator callback URL             |
+| `ENDERCLOUD_REPORTED_ENDPOINT` |    No    | Agent-allocated endpoint | Optional endpoint override for `SERVER_READY` |
 
 The agent generates the first two values for managed containers. Most templates should not set an
 endpoint override.
@@ -167,17 +167,17 @@ RUNNING
 FINISHED
 ```
 
-| State | Meaning for the game plugin |
-| --- | --- |
-| `FORMING` | The session is collecting tickets and has no locked game roster |
-| `WAITING_FOR_INSTANCE` | The session is eligible but no server can be reserved yet |
-| `TRANSFERRING` | EnderCloud is sending selected players to the reserved instance |
-| `WAITING` | The instance is waiting for arrivals or compatible backfill |
-| `STARTING` | The minigame plugin closed backfill and is performing final preparation |
-| `RUNNING` | The match has officially started |
-| `FINISHED` | EnderCloud stored the result payload |
-| `CANCELLED` | The session was explicitly cancelled and players are being evacuated |
-| `FAILED` | The session cannot continue because infrastructure or state failed |
+| State                  | Meaning for the game plugin                                             |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `FORMING`              | The session is collecting tickets and has no locked game roster         |
+| `WAITING_FOR_INSTANCE` | The session is eligible but no server can be reserved yet               |
+| `TRANSFERRING`         | EnderCloud is sending selected players to the reserved instance         |
+| `WAITING`              | The instance is waiting for arrivals or compatible backfill             |
+| `STARTING`             | The minigame plugin closed backfill and is performing final preparation |
+| `RUNNING`              | The match has officially started                                        |
+| `FINISHED`             | EnderCloud stored the result payload                                    |
+| `CANCELLED`            | The session was explicitly cancelled and players are being evacuated    |
+| `FAILED`               | The session cannot continue because infrastructure or state failed      |
 
 The minigame plugin owns the move into `STARTING` and `RUNNING`. EnderCloud rejects skipped,
 stale, or cross-instance transitions.
@@ -513,4 +513,3 @@ See [the group reference](/docs/configure/groups) for every field.
 - Game lifecycle retries reuse the same current `sessionId`.
 - Cancellation evacuates players before shutdown.
 - Network failures are logged without blocking Paper's main thread.
-

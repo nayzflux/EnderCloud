@@ -3,7 +3,6 @@ title: Managed Velocity proxies
 description: EnderCloud release operations and integration.
 ---
 
-
 EnderCloud can run Velocity as managed instances alongside Paper. A `proxy` group maintains a
 fixed number of instances. Agents deploy its template layers, reserve CPU and memory, allocate
 proxy ports, and recover failed processes using the existing instance lifecycle.
@@ -128,7 +127,7 @@ EnderCloud does not configure the load balancer or DNS.
 The plugin sends `PUT /api/v1/proxies/:instanceId/heartbeat` every ten seconds with:
 
 ```json
-{"ready": true, "playerCount": 12, "acceptingConnections": true}
+{ "ready": true, "playerCount": 12, "acceptingConnections": true }
 ```
 
 The response contains `lifecycleState`, desired `acceptingConnections`, and `controlLeaseMs`.

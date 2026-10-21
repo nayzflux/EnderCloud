@@ -7,10 +7,26 @@ import type { HubRouter } from "../../src/modules/routing/hubs.ts";
 import { Logger } from "@endercloud/runtime/logger";
 
 test("session stages continue independently but report partial failure to the scheduler", async () => {
-  const controller = new SessionController({} as Database, {} as InstanceController, {} as TransferService, {} as HubRouter, new Logger("error", { sink: () => {} }));
+  const controller = new SessionController(
+    {} as Database,
+    {} as InstanceController,
+    {} as TransferService,
+    {} as HubRouter,
+    new Logger("error", { sink: () => {} }),
+  );
   let calls = 0;
-  for (const method of ["expireTransfers", "expirePlayerPresence", "advanceWaitingSessions", "recoverFailedInstances", "releaseTerminalReservations", "finishDrainingInstances"]) {
-    Reflect.set(controller, method, async () => { calls += 1; if (method === "recoverFailedInstances") throw Error("SQL unavailable"); });
+  for (const method of [
+    "expireTransfers",
+    "expirePlayerPresence",
+    "advanceWaitingSessions",
+    "recoverFailedInstances",
+    "releaseTerminalReservations",
+    "finishDrainingInstances",
+  ]) {
+    Reflect.set(controller, method, async () => {
+      calls += 1;
+      if (method === "recoverFailedInstances") throw Error("SQL unavailable");
+    });
   }
   await expect(controller.tick()).rejects.toBeInstanceOf(AggregateError);
   expect(calls).toBe(6);

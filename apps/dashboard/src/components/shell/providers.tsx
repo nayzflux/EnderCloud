@@ -24,12 +24,7 @@ export function Providers({ children }: { readonly children: ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider
-        attribute="class"
-        defaultTheme="system"
-        enableSystem
-        disableTransitionOnChange
-      >
+      <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
         <TooltipProvider>
           <ClusterProvider>
             <DetailPanelProvider>{children}</DetailPanelProvider>

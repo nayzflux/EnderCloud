@@ -1,8 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { createDatabase } from "../../src/db/client.ts";
 import { migrateDatabase } from "../../src/db/migrate.ts";
 import {

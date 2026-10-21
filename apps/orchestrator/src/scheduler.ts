@@ -20,34 +20,40 @@ export class Scheduler {
     const run = () => {
       if (!this.accepting) return;
       if (this.running.has(name)) {
-        this.logger.debug("scheduler.tick.skipped", "Scheduled task overlap skipped", { task: name });
+        this.logger.debug("scheduler.tick.skipped", "Scheduled task overlap skipped", {
+          task: name,
+        });
         return;
       }
       const runId = nanoid();
       const startedAt = performance.now();
       const operation = this.logger.runWithContext({ task: name, runId }, async () => {
         this.logger.debug("scheduler.tick.started", "Scheduled task started", { intervalMs });
-      try {
-        await task();
-        await this.incidents?.recordLoopSuccess(name);
-        this.logger.debug("scheduler.tick.completed", "Scheduled task completed", {
-          durationMs: Math.round(performance.now() - startedAt),
-          outcome: "success",
-        });
-      } catch (error) {
-        this.logger.error("scheduler.tick.failed", "Scheduled task failed", {
-          error,
-          durationMs: Math.round(performance.now() - startedAt),
-          outcome: "failure",
-        });
-        await this.incidents?.recordLoopFailure(name, error).catch((incidentError) =>
-          this.logger.error("scheduler.incident.failed", "Unable to record scheduled task incident", {
-            error: incidentError,
-          })
-        );
-      } finally {
-        this.running.delete(name);
-      }
+        try {
+          await task();
+          await this.incidents?.recordLoopSuccess(name);
+          this.logger.debug("scheduler.tick.completed", "Scheduled task completed", {
+            durationMs: Math.round(performance.now() - startedAt),
+            outcome: "success",
+          });
+        } catch (error) {
+          this.logger.error("scheduler.tick.failed", "Scheduled task failed", {
+            error,
+            durationMs: Math.round(performance.now() - startedAt),
+            outcome: "failure",
+          });
+          await this.incidents?.recordLoopFailure(name, error).catch((incidentError) =>
+            this.logger.error(
+              "scheduler.incident.failed",
+              "Unable to record scheduled task incident",
+              {
+                error: incidentError,
+              },
+            ),
+          );
+        } finally {
+          this.running.delete(name);
+        }
       });
       this.running.set(name, operation);
     };

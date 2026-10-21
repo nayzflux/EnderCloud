@@ -1,9 +1,13 @@
 import { openapi } from "@elysiajs/openapi";
-import { ApplicationError, denyUnauthorized, type RequestAuthorizer } from "@endercloud/contracts/errors";
+import {
+  ApplicationError,
+  denyUnauthorized,
+  type RequestAuthorizer,
+} from "@endercloud/contracts/errors";
 import { paperEventSchema } from "@endercloud/contracts/schemas";
 import { nanoid } from "@endercloud/runtime/id";
 import type { Logger } from "@endercloud/runtime/logger";
-import { Elysia,t } from "elysia";
+import { Elysia, t } from "elysia";
 import type { TemplateArchiveService } from "../modules/configuration/archives.ts";
 import type { DashboardService } from "../modules/dashboard/queries.ts";
 import type { HostService } from "../modules/hosts/service.ts";
@@ -76,7 +80,8 @@ export function createApp(dependencies: ApiDependencies) {
       requestContexts.set(request, context);
       dependencies.logger.enterContext({ requestId: context.requestId });
       const path = new URL(request.url).pathname;
-      if (path.startsWith("/api/auth/")) return dependencies.authentication?.(request) ?? new Response(null, { status: 404 });
+      if (path.startsWith("/api/auth/"))
+        return dependencies.authentication?.(request) ?? new Response(null, { status: 404 });
       if (!path.startsWith("/health/")) await (dependencies.authorize ?? denyUnauthorized)(request);
     })
     .onAfterHandle(({ request, set }) => {
@@ -115,14 +120,22 @@ export function createApp(dependencies: ApiDependencies) {
         outcome: status >= 500 ? "failure" : "success",
       };
       if (status >= 500) {
-        dependencies.logger.error("orchestrator.request.server_error", "Orchestrator API request returned a server error", {
-          ...fields,
-          error: context.requestError,
-        });
+        dependencies.logger.error(
+          "orchestrator.request.server_error",
+          "Orchestrator API request returned a server error",
+          {
+            ...fields,
+            error: context.requestError,
+          },
+        );
       }
-      dependencies.logger.debug("orchestrator.request.completed", "Orchestrator API request completed", {
-        ...fields,
-      });
+      dependencies.logger.debug(
+        "orchestrator.request.completed",
+        "Orchestrator API request completed",
+        {
+          ...fields,
+        },
+      );
     })
     .get("/health/live", () => ({ status: "UP" }), {
       detail: { tags: ["Health"] },
@@ -140,22 +153,41 @@ export function createApp(dependencies: ApiDependencies) {
         .get("/proxy/servers", () => dependencies.instances.getRegistrySnapshot(), {
           detail: { tags: ["Proxy"] },
         })
-        .post("/proxies/:instanceId/transfers/:commandId/players/:playerId/abandon", async ({ params, body, set }) => {
-          await dependencies.instances.abandonTransfer(params.commandId, params.playerId, body.generation);
-          set.status = 204;
-        }, { params: t.Object({ instanceId: internalId, commandId: internalId, playerId: playerUuid }),
-          body: t.Object({ generation: t.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }) }) })
+        .post(
+          "/proxies/:instanceId/transfers/:commandId/players/:playerId/abandon",
+          async ({ params, body, set }) => {
+            await dependencies.instances.abandonTransfer(
+              params.commandId,
+              params.playerId,
+              body.generation,
+            );
+            set.status = 204;
+          },
+          {
+            params: t.Object({
+              instanceId: internalId,
+              commandId: internalId,
+              playerId: playerUuid,
+            }),
+            body: t.Object({
+              generation: t.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+            }),
+          },
+        )
         .get("/proxies", () => dependencies.proxies.list(), { detail: { tags: ["Proxy"] } })
-        .put("/proxies/:instanceId/heartbeat", ({ params, body }) =>
-          dependencies.proxies.heartbeat(params.instanceId, body), {
-          params: t.Object({ instanceId: internalId }),
-          body: t.Object({
-            ready: t.Boolean(),
-            playerCount: t.Integer({ minimum: 0 }),
-            acceptingConnections: t.Boolean(),
-          }),
-          detail: { tags: ["Proxy"] },
-        })
+        .put(
+          "/proxies/:instanceId/heartbeat",
+          ({ params, body }) => dependencies.proxies.heartbeat(params.instanceId, body),
+          {
+            params: t.Object({ instanceId: internalId }),
+            body: t.Object({
+              ready: t.Boolean(),
+              playerCount: t.Integer({ minimum: 0 }),
+              acceptingConnections: t.Boolean(),
+            }),
+            detail: { tags: ["Proxy"] },
+          },
+        )
         .put(
           "/hosts/:hostId/heartbeat",
           async ({ params, body, set }) => {
@@ -167,11 +199,13 @@ export function createApp(dependencies: ApiDependencies) {
             body: t.Object({
               controlUrl: t.String({ format: "uri" }),
               gameAddress: t.String({ minLength: 1, maxLength: 255 }),
-              proxy: t.Optional(t.Object({
-                address: t.String({ minLength: 1, maxLength: 255 }),
-                portStart: t.Integer({ minimum: 1, maximum: 65535 }),
-                portEnd: t.Integer({ minimum: 1, maximum: 65535 }),
-              })),
+              proxy: t.Optional(
+                t.Object({
+                  address: t.String({ minLength: 1, maxLength: 255 }),
+                  portStart: t.Integer({ minimum: 1, maximum: 65535 }),
+                  portEnd: t.Integer({ minimum: 1, maximum: 65535 }),
+                }),
+              ),
               allocatableCpu: t.Number({ exclusiveMinimum: 0 }),
               allocatableMemoryBytes: t.Number({ minimum: 1 }),
               agentVersion: t.String({ minLength: 1, maxLength: 64 }),
@@ -240,36 +274,39 @@ export function createApp(dependencies: ApiDependencies) {
           },
           {
             query: t.Object({
-              status: t.Optional(t.Union([t.Literal("active"), t.Literal("resolved"), t.Literal("all")])),
+              status: t.Optional(
+                t.Union([t.Literal("active"), t.Literal("resolved"), t.Literal("all")]),
+              ),
               severity: t.Optional(t.Union([t.Literal("WARNING"), t.Literal("CRITICAL")])),
-              kind: t.Optional(t.Union([
-                t.Literal("CAPACITY_BLOCKED"),
-                t.Literal("INSTANCE_FAILURE_LOOP"),
-                t.Literal("HOST_UNAVAILABLE"),
-                t.Literal("HOST_RECOVERY_STUCK"),
-                t.Literal("HOST_MAINTENANCE_BLOCKED"),
-                t.Literal("TRANSFER_FAILURE_LOOP"),
-                t.Literal("COMMAND_FAILURE_LOOP"),
-                t.Literal("CONTROL_LOOP_FAILURE"),
-              ])),
+              kind: t.Optional(
+                t.Union([
+                  t.Literal("CAPACITY_BLOCKED"),
+                  t.Literal("INSTANCE_FAILURE_LOOP"),
+                  t.Literal("HOST_UNAVAILABLE"),
+                  t.Literal("HOST_RECOVERY_STUCK"),
+                  t.Literal("HOST_MAINTENANCE_BLOCKED"),
+                  t.Literal("TRANSFER_FAILURE_LOOP"),
+                  t.Literal("COMMAND_FAILURE_LOOP"),
+                  t.Literal("CONTROL_LOOP_FAILURE"),
+                ]),
+              ),
               groupId: t.Optional(groupId),
               scopeId: t.Optional(t.String({ minLength: 1, maxLength: 128 })),
               cursor: t.Optional(t.String({ minLength: 1, maxLength: 512 })),
               limit: t.Optional(t.Numeric({ minimum: 1, maximum: 200 })),
             }),
-            detail: { tags: ["Dashboard"], summary: "Read active and resolved operational incidents" },
-          },
-        )
-        .get(
-          "/dashboard/monitoring/summary",
-          () => dependencies.monitoring.getSummary(),
-          {
             detail: {
               tags: ["Dashboard"],
-              summary: "Read compact performance alerts",
+              summary: "Read active and resolved operational incidents",
             },
           },
         )
+        .get("/dashboard/monitoring/summary", () => dependencies.monitoring.getSummary(), {
+          detail: {
+            tags: ["Dashboard"],
+            summary: "Read compact performance alerts",
+          },
+        })
         .get(
           "/dashboard/groups/:groupId/monitoring",
           async ({ params, query, set, request }) => {
@@ -288,12 +325,7 @@ export function createApp(dependencies: ApiDependencies) {
           {
             params: t.Object({ groupId }),
             query: t.Object({
-              range: t.Union([
-                t.Literal("1h"),
-                t.Literal("6h"),
-                t.Literal("24h"),
-                t.Literal("7d"),
-              ]),
+              range: t.Union([t.Literal("1h"), t.Literal("6h"), t.Literal("24h"), t.Literal("7d")]),
             }),
             detail: {
               tags: ["Dashboard"],
@@ -324,10 +356,7 @@ export function createApp(dependencies: ApiDependencies) {
         .get(
           "/dashboard/groups/:groupId/queue",
           async ({ params, query, set, request }) => {
-            const detail = await dependencies.dashboard.getQueue(
-              params.groupId,
-              query.limit,
-            );
+            const detail = await dependencies.dashboard.getQueue(params.groupId, query.limit);
             if (detail) return detail;
             set.status = 404;
             return {
@@ -458,10 +487,7 @@ export function createApp(dependencies: ApiDependencies) {
         .delete(
           "/queue/groups/:groupId/parties/:partyId",
           async ({ params }) => {
-            const removed = await dependencies.queues.leaveParty(
-              params.groupId,
-              params.partyId,
-            );
+            const removed = await dependencies.queues.leaveParty(params.groupId, params.partyId);
             return { removed };
           },
           {

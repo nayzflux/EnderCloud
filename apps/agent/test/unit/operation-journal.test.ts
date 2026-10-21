@@ -9,14 +9,24 @@ test("delete fences a delayed create, including after journal restart", async ()
   const file = join(root, "operations.sqlite");
   let journal = new OperationJournal(file);
   let release!: () => void;
-  const wait = new Promise<void>(resolve => { release = resolve; });
-  let started!: () => void;
-  const admitted = new Promise<void>(resolve => { started = resolve; });
-  let created = false;
-  const create = journal.run("instance", 1, { image: "game:1" }, async assertCurrent => {
-    started(); await wait; assertCurrent(); created = true;
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
   });
-  const outcome = create.then(() => null, error => error as Error);
+  let started!: () => void;
+  const admitted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let created = false;
+  const create = journal.run("instance", 1, { image: "game:1" }, async (assertCurrent) => {
+    started();
+    await wait;
+    assertCurrent();
+    created = true;
+  });
+  const outcome = create.then(
+    () => null,
+    (error) => error as Error,
+  );
   await admitted;
   const deleted = journal.run("instance", 3, { desired: "ABSENT" }, async () => {});
   release();
@@ -25,7 +35,9 @@ test("delete fences a delayed create, including after journal restart", async ()
   expect(created).toBe(false);
   await journal.close();
   journal = new OperationJournal(file);
-  await expect(journal.run("instance", 1, { image: "game:1" }, async () => {})).rejects.toThrow("superseded");
+  await expect(journal.run("instance", 1, { image: "game:1" }, async () => {})).rejects.toThrow(
+    "superseded",
+  );
   await journal.close();
   await rm(root, { recursive: true, force: true });
 });

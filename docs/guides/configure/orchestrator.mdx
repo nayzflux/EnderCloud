@@ -72,35 +72,35 @@ mode.
 Each named loop refuses to overlap with its previous run. A slow tick is skipped instead of
 running the same controller twice.
 
-| Loop | Frequency | Work |
-| --- | --- | --- |
-| Capacity | `SCHEDULER_CAPACITY_INTERVAL` | Create or drain instances to match group capacity |
-| Instance start worker | 250 ms | Claim and execute durable create commands with bounded concurrency |
-| Matchmaking | `SCHEDULER_MATCHMAKING_INTERVAL` | Select queued parties and form or fill sessions |
-| Sessions | `SCHEDULER_MATCHMAKING_INTERVAL` | Advance transfers, deadlines, cancellation, and completion |
-| Transfers | `SCHEDULER_MATCHMAKING_INTERVAL` | Retry durable Velocity commands until completion or expiry |
-| Reconciliation | `SCHEDULER_RECONCILIATION_INTERVAL` | Reconcile hosts, containers, and desired instances |
-| Host maintenance | `SCHEDULER_CAPACITY_INTERVAL` | Replace and drain instances on hosts under maintenance |
-| Incidents | `SCHEDULER_INCIDENT_INTERVAL` | Detect, update, and resolve operational incidents |
-| Variant startup policy | `SCHEDULER_RECONCILIATION_INTERVAL` | Process retry backoff, blocks, and reset cleanup |
-| Monitoring retention | 1 hour | Remove expired monitoring buckets |
-| Incident retention | 1 hour | Remove resolved incidents older than the retention policy |
+| Loop                   | Frequency                           | Work                                                               |
+| ---------------------- | ----------------------------------- | ------------------------------------------------------------------ |
+| Capacity               | `SCHEDULER_CAPACITY_INTERVAL`       | Create or drain instances to match group capacity                  |
+| Instance start worker  | 250 ms                              | Claim and execute durable create commands with bounded concurrency |
+| Matchmaking            | `SCHEDULER_MATCHMAKING_INTERVAL`    | Select queued parties and form or fill sessions                    |
+| Sessions               | `SCHEDULER_MATCHMAKING_INTERVAL`    | Advance transfers, deadlines, cancellation, and completion         |
+| Transfers              | `SCHEDULER_MATCHMAKING_INTERVAL`    | Retry durable Velocity commands until completion or expiry         |
+| Reconciliation         | `SCHEDULER_RECONCILIATION_INTERVAL` | Reconcile hosts, containers, and desired instances                 |
+| Host maintenance       | `SCHEDULER_CAPACITY_INTERVAL`       | Replace and drain instances on hosts under maintenance             |
+| Incidents              | `SCHEDULER_INCIDENT_INTERVAL`       | Detect, update, and resolve operational incidents                  |
+| Variant startup policy | `SCHEDULER_RECONCILIATION_INTERVAL` | Process retry backoff, blocks, and reset cleanup                   |
+| Monitoring retention   | 1 hour                              | Remove expired monitoring buckets                                  |
+| Incident retention     | 1 hour                              | Remove resolved incidents older than the retention policy          |
 
 ## HTTP API
 
 The generated OpenAPI page is available at `/openapi`. Treat it as the request and response
 schema reference. The route groups are:
 
-| Prefix | Caller | Purpose |
-| --- | --- | --- |
-| `/health/*` | Compose and operators | Liveness and readiness |
-| `/api/v1/hosts/*` | Agents and dashboard | Heartbeats, drain, and activation |
-| `/api/v1/template-layers/*` | Agents | Checksum-bound template archive download |
-| `/api/v1/proxy/*` | Velocity | Registry snapshot and disconnect reporting |
-| `/api/v1/queue/*` | Paper integrations | Enqueue and remove atomic parties |
-| `/api/v1/instances/*` | Paper integrations | Events, hub transfers, assignments, and acknowledgements |
-| `/api/v1/dashboard/*` | Dashboard server routes | Cluster, group, queue, instance, session, monitoring, and incident reads |
-| `/api/v1/groups/*/startup-retry` | Dashboard server routes | Reset a blocked variant revision |
+| Prefix                           | Caller                  | Purpose                                                                  |
+| -------------------------------- | ----------------------- | ------------------------------------------------------------------------ |
+| `/health/*`                      | Compose and operators   | Liveness and readiness                                                   |
+| `/api/v1/hosts/*`                | Agents and dashboard    | Heartbeats, drain, and activation                                        |
+| `/api/v1/template-layers/*`      | Agents                  | Checksum-bound template archive download                                 |
+| `/api/v1/proxy/*`                | Velocity                | Registry snapshot and disconnect reporting                               |
+| `/api/v1/queue/*`                | Paper integrations      | Enqueue and remove atomic parties                                        |
+| `/api/v1/instances/*`            | Paper integrations      | Events, hub transfers, assignments, and acknowledgements                 |
+| `/api/v1/dashboard/*`            | Dashboard server routes | Cluster, group, queue, instance, session, monitoring, and incident reads |
+| `/api/v1/groups/*/startup-retry` | Dashboard server routes | Reset a blocked variant revision                                         |
 
 Every request receives an `x-request-id`. If the caller provides one, the orchestrator keeps it.
 Durable work also adds a command identifier to logs and agent calls.
@@ -117,35 +117,35 @@ This table lists every variable read by the orchestrator process. Defaults come 
 Durations require an integer and one of `ms`, `s`, `m`, `h`, or `d`. A bare number is invalid.
 Explicit relative paths resolve against the working directory; default configuration directories resolve from the repository.
 
-| Variable | Required | Default | Validation and purpose |
-| --- | :---: | --- | --- |
-| `DATABASE_URL` | Yes | None | `postgres:` or `postgresql:` URL with an explicit password. PostgreSQL source of truth |
-| `REDIS_URL` | No | `redis://localhost:6379` | `redis:` or `rediss:` URL for proxy events |
-| `ORCHESTRATOR_LISTEN_PORT` | No | `8080` | Integer from 1 to 65535. Internal HTTP listen port |
-| `AUTH_SECRET` | Yes | None | At least 32 random characters for administrator authentication |
-| `CREDENTIAL_ENCRYPTION_KEY` | Yes | None | 32 random bytes encoded as base64 for recoverable service credentials |
-| `DASHBOARD_PUBLIC_URL` | Yes | None | Browser origin; HTTPS in production except loopback development |
-| `PROXY_REDIS_URL` | For proxies | None | Subscriber Redis URL injected into managed Velocity instances |
-| `ORCHESTRATOR_GROUPS_DIRECTORY` | No | Root `groups/` | Directory containing group YAML files |
-| `ORCHESTRATOR_TEMPLATES_DIRECTORY` | No | Root `templates/` | Directory containing immediate template-layer directories |
-| `ORCHESTRATOR_LOG_LEVEL` | No | `info` | One of `debug`, `info`, `warn`, or `error` |
-| `INSTANCE_START_CONCURRENCY` | No | `4` | Integer from 1 to 64. Maximum concurrent claimed create commands |
-| `INSTANCE_START_RETRY_LIMIT` | No | `5` | Integer from 0 to 20. Number of counted failures allowed to enter backoff. The next failure blocks the revision |
-| `INSTANCE_START_RETRY_BASE_DELAY` | No | `1s` | Positive duration. Base of exponential startup backoff |
-| `SCHEDULER_CAPACITY_INTERVAL` | No | `5s` | Duration of at least 100 ms. Capacity and maintenance cadence |
-| `SCHEDULER_MATCHMAKING_INTERVAL` | No | `1s` | Duration of at least 100 ms. Matchmaking, session, and transfer cadence |
-| `SCHEDULER_RECONCILIATION_INTERVAL` | No | `5s` | Duration of at least 1 second. Host reconciliation and startup-policy cadence |
-| `SCHEDULER_INCIDENT_INTERVAL` | No | `5s` | Duration of at least 1 second. Incident detection cadence |
-| `HOST_OFFLINE_TIMEOUT` | No | `30s` | Duration of at least 5 seconds without heartbeat or successful control contact |
-| `PAPER_HEALTH_LEASE` | No | `30s` | Duration of at least 1 second before Paper is withdrawn from routing |
-| `PAPER_HEALTH_CONFIRMATION` | No | `30s` | Additional confirmation grace before Paper failure recovery |
-| `EXECUTOR_PROBE_TIMEOUT` | No | `3s` | Duration of at least 100 ms for agent inventory and inspection calls |
-| `EXECUTOR_OPERATION_TIMEOUT` | No | `10m` | Duration of at least 1 second for long agent create, stop, and delete calls |
-| `INCIDENT_BLOCKED_AFTER` | No | `30s` | Duration of at least 1 second before a blocked condition becomes incident evidence |
-| `INCIDENT_FAILURE_THRESHOLD` | No | `3` | Positive integer count for repeated-failure incidents |
-| `INCIDENT_FAILURE_WINDOW` | No | `15m` | Duration of at least 1 second in which repeated failures are counted |
-| `INCIDENT_HOST_RECOVERY_AFTER` | No | `1m` | Duration of at least 1 second before a recovering host is considered stuck |
-| `INCIDENT_HISTORY_RETENTION` | No | `90d` | Duration of at least 1 minute for resolved incident history |
+| Variable                            |  Required   | Default                  | Validation and purpose                                                                                          |
+| ----------------------------------- | :---------: | ------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                      |     Yes     | None                     | `postgres:` or `postgresql:` URL with an explicit password. PostgreSQL source of truth                          |
+| `REDIS_URL`                         |     No      | `redis://localhost:6379` | `redis:` or `rediss:` URL for proxy events                                                                      |
+| `ORCHESTRATOR_LISTEN_PORT`          |     No      | `8080`                   | Integer from 1 to 65535. Internal HTTP listen port                                                              |
+| `AUTH_SECRET`                       |     Yes     | None                     | At least 32 random characters for administrator authentication                                                  |
+| `CREDENTIAL_ENCRYPTION_KEY`         |     Yes     | None                     | 32 random bytes encoded as base64 for recoverable service credentials                                           |
+| `DASHBOARD_PUBLIC_URL`              |     Yes     | None                     | Browser origin; HTTPS in production except loopback development                                                 |
+| `PROXY_REDIS_URL`                   | For proxies | None                     | Subscriber Redis URL injected into managed Velocity instances                                                   |
+| `ORCHESTRATOR_GROUPS_DIRECTORY`     |     No      | Root `groups/`           | Directory containing group YAML files                                                                           |
+| `ORCHESTRATOR_TEMPLATES_DIRECTORY`  |     No      | Root `templates/`        | Directory containing immediate template-layer directories                                                       |
+| `ORCHESTRATOR_LOG_LEVEL`            |     No      | `info`                   | One of `debug`, `info`, `warn`, or `error`                                                                      |
+| `INSTANCE_START_CONCURRENCY`        |     No      | `4`                      | Integer from 1 to 64. Maximum concurrent claimed create commands                                                |
+| `INSTANCE_START_RETRY_LIMIT`        |     No      | `5`                      | Integer from 0 to 20. Number of counted failures allowed to enter backoff. The next failure blocks the revision |
+| `INSTANCE_START_RETRY_BASE_DELAY`   |     No      | `1s`                     | Positive duration. Base of exponential startup backoff                                                          |
+| `SCHEDULER_CAPACITY_INTERVAL`       |     No      | `5s`                     | Duration of at least 100 ms. Capacity and maintenance cadence                                                   |
+| `SCHEDULER_MATCHMAKING_INTERVAL`    |     No      | `1s`                     | Duration of at least 100 ms. Matchmaking, session, and transfer cadence                                         |
+| `SCHEDULER_RECONCILIATION_INTERVAL` |     No      | `5s`                     | Duration of at least 1 second. Host reconciliation and startup-policy cadence                                   |
+| `SCHEDULER_INCIDENT_INTERVAL`       |     No      | `5s`                     | Duration of at least 1 second. Incident detection cadence                                                       |
+| `HOST_OFFLINE_TIMEOUT`              |     No      | `30s`                    | Duration of at least 5 seconds without heartbeat or successful control contact                                  |
+| `PAPER_HEALTH_LEASE`                |     No      | `30s`                    | Duration of at least 1 second before Paper is withdrawn from routing                                            |
+| `PAPER_HEALTH_CONFIRMATION`         |     No      | `30s`                    | Additional confirmation grace before Paper failure recovery                                                     |
+| `EXECUTOR_PROBE_TIMEOUT`            |     No      | `3s`                     | Duration of at least 100 ms for agent inventory and inspection calls                                            |
+| `EXECUTOR_OPERATION_TIMEOUT`        |     No      | `10m`                    | Duration of at least 1 second for long agent create, stop, and delete calls                                     |
+| `INCIDENT_BLOCKED_AFTER`            |     No      | `30s`                    | Duration of at least 1 second before a blocked condition becomes incident evidence                              |
+| `INCIDENT_FAILURE_THRESHOLD`        |     No      | `3`                      | Positive integer count for repeated-failure incidents                                                           |
+| `INCIDENT_FAILURE_WINDOW`           |     No      | `15m`                    | Duration of at least 1 second in which repeated failures are counted                                            |
+| `INCIDENT_HOST_RECOVERY_AFTER`      |     No      | `1m`                     | Duration of at least 1 second before a recovering host is considered stuck                                      |
+| `INCIDENT_HISTORY_RETENTION`        |     No      | `90d`                    | Duration of at least 1 minute for resolved incident history                                                     |
 
 The root `compose.yml` sets internal ports and configuration paths explicitly. It forwards the
 startup, scheduler, host, executor, and log settings shown in its `orchestrator.environment`
@@ -158,13 +158,13 @@ orchestrator outside that Compose service.
 These values are consumed by Docker Compose or the PostgreSQL image. The orchestrator process does
 not read them directly.
 
-| Variable | Default in `compose.yml` | Purpose |
-| --- | --- | --- |
-| `POSTGRES_DB` | `endercloud` | Database created by the PostgreSQL image |
-| `POSTGRES_USER` | `endercloud` | PostgreSQL role created by the image |
-| `POSTGRES_PASSWORD` | Required | Password created by the image. Keep it in sync with `DATABASE_URL` |
-| `ORCHESTRATOR_PUBLISH_ADDRESS` | `127.0.0.1` | Host interface that publishes the orchestrator API |
-| `ORCHESTRATOR_PUBLISH_PORT` | `8080` | Host port mapped to internal port 8080 |
+| Variable                       | Default in `compose.yml` | Purpose                                                            |
+| ------------------------------ | ------------------------ | ------------------------------------------------------------------ |
+| `POSTGRES_DB`                  | `endercloud`             | Database created by the PostgreSQL image                           |
+| `POSTGRES_USER`                | `endercloud`             | PostgreSQL role created by the image                               |
+| `POSTGRES_PASSWORD`            | Required                 | Password created by the image. Keep it in sync with `DATABASE_URL` |
+| `ORCHESTRATOR_PUBLISH_ADDRESS` | `127.0.0.1`              | Host interface that publishes the orchestrator API                 |
+| `ORCHESTRATOR_PUBLISH_PORT`    | `8080`                   | Host port mapped to internal port 8080                             |
 
 `ORCHESTRATOR_PUBLISH_ADDRESS` does not change the URL used inside the Compose network. The primary
 agent uses `http://orchestrator:8080`. Remote agents need a private address that resolves to the
@@ -205,4 +205,3 @@ inspect the retained log tail and runtime before requesting a retry.
 
 See [Environment configuration](/docs/configure/environment) for removed names and [Agent](/docs/configure/agent) for the
 execution-side settings.
-

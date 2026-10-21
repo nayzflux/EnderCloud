@@ -30,13 +30,7 @@ interface StatusBadgeProps extends ComponentProps<typeof Badge> {
   readonly dot?: boolean;
 }
 
-export function StatusBadge({
-  tone,
-  label,
-  dot = true,
-  className,
-  ...props
-}: StatusBadgeProps) {
+export function StatusBadge({ tone, label, dot = true, className, ...props }: StatusBadgeProps) {
   return (
     <Badge
       variant="secondary"
@@ -44,10 +38,7 @@ export function StatusBadge({
       {...props}
     >
       {dot ? (
-        <span
-          aria-hidden
-          className={cn("size-1.5 shrink-0 rounded-full", toneDotClass[tone])}
-        />
+        <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", toneDotClass[tone])} />
       ) : null}
       {label}
     </Badge>
@@ -58,58 +49,24 @@ export function LifecycleBadge({ state }: { readonly state: LifecycleState }) {
   return <StatusBadge tone={lifecycleTone(state)} label={humanizeState(state)} />;
 }
 
-export function AvailabilityBadge({
-  state,
-}: {
-  readonly state: AvailabilityState;
-}) {
-  return (
-    <StatusBadge
-      tone={availabilityTone(state)}
-      label={humanizeState(state)}
-      dot={false}
-    />
-  );
+export function AvailabilityBadge({ state }: { readonly state: AvailabilityState }) {
+  return <StatusBadge tone={availabilityTone(state)} label={humanizeState(state)} dot={false} />;
 }
 
-export function HostHealthBadge({
-  state,
-}: {
-  readonly state: ExecutionHostHealthState;
-}) {
+export function HostHealthBadge({ state }: { readonly state: ExecutionHostHealthState }) {
   return <StatusBadge tone={hostHealthTone(state)} label={humanizeState(state)} />;
 }
 
-export function HostAdminBadge({
-  state,
-}: {
-  readonly state: ExecutionHostAdminState;
-}) {
-  return (
-    <StatusBadge
-      tone={hostAdminTone(state)}
-      label={humanizeState(state)}
-      dot={false}
-    />
-  );
+export function HostAdminBadge({ state }: { readonly state: ExecutionHostAdminState }) {
+  return <StatusBadge tone={hostAdminTone(state)} label={humanizeState(state)} dot={false} />;
 }
 
 export function SessionStateBadge({ state }: { readonly state: SessionState }) {
   return <StatusBadge tone={sessionTone(state)} label={humanizeState(state)} />;
 }
 
-export function SessionPlayerBadge({
-  state,
-}: {
-  readonly state: SessionPlayerState;
-}) {
-  return (
-    <StatusBadge
-      tone={sessionPlayerTone(state)}
-      label={humanizeState(state)}
-      dot={false}
-    />
-  );
+export function SessionPlayerBadge({ state }: { readonly state: SessionPlayerState }) {
+  return <StatusBadge tone={sessionPlayerTone(state)} label={humanizeState(state)} dot={false} />;
 }
 
 export function WorkStateBadge({ state }: { readonly state: string }) {

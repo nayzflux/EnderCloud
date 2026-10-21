@@ -74,9 +74,7 @@ export function profileQuality(profile: TeamProfile): ProfileQuality {
   const total = profile.reduce((sum, value) => sum + value, 0);
   const minimum = profile[0]!;
   const maximum = profile.at(-1)!;
-  const scaledDistances = profile.map((value) =>
-    Math.abs(value * profile.length - total)
-  );
+  const scaledDistances = profile.map((value) => Math.abs(value * profile.length - total));
   return {
     spread: maximum - minimum,
     variance: scaledDistances.reduce((sum, value) => sum + value * value, 0),
@@ -98,9 +96,7 @@ export function compareProfileQuality(left: TeamProfile, right: TeamProfile): nu
   );
 }
 
-export function selectRecommendedProfile(
-  profiles: readonly TeamProfile[],
-): TeamProfile | null {
+export function selectRecommendedProfile(profiles: readonly TeamProfile[]): TeamProfile | null {
   let recommended: TeamProfile | null = null;
   for (const profile of profiles) {
     if (!recommended || compareProfileQuality(profile, recommended) < 0) {
@@ -116,10 +112,7 @@ export function isProfileEligible(
   maximumTeamSpread: number,
 ): boolean {
   if (!profile || profile.length === 0) return false;
-  return (
-    profile[0]! >= minimumPlayersPerTeam &&
-    profile.at(-1)! - profile[0]! <= maximumTeamSpread
-  );
+  return profile[0]! >= minimumPlayersPerTeam && profile.at(-1)! - profile[0]! <= maximumTeamSpread;
 }
 
 export function isSessionLockEligible(
@@ -133,11 +126,7 @@ export function isSessionLockEligible(
   if (!recommendedProfile || connectedPlayerCount < minimumPlayers) return false;
   return (
     connectedPlayerCount === maximumPlayers ||
-    isProfileEligible(
-      recommendedProfile,
-      minimumPlayersPerTeam,
-      maximumTeamSpread,
-    )
+    isProfileEligible(recommendedProfile, minimumPlayersPerTeam, maximumTeamSpread)
   );
 }
 
@@ -166,12 +155,13 @@ export function rankSessionCandidates(
       complete: playerCount === maximumPlayers,
     });
   }
-  return ranked.sort((left, right) =>
-    Number(right.complete) - Number(left.complete) ||
-    left.placesRemaining - right.placesRemaining ||
-    compareProfileQuality(left.recommendedProfile, right.recommendedProfile) ||
-    left.createdAt.getTime() - right.createdAt.getTime() ||
-    right.profiles.length - left.profiles.length ||
-    left.sessionId.localeCompare(right.sessionId)
+  return ranked.sort(
+    (left, right) =>
+      Number(right.complete) - Number(left.complete) ||
+      left.placesRemaining - right.placesRemaining ||
+      compareProfileQuality(left.recommendedProfile, right.recommendedProfile) ||
+      left.createdAt.getTime() - right.createdAt.getTime() ||
+      right.profiles.length - left.profiles.length ||
+      left.sessionId.localeCompare(right.sessionId),
   );
 }

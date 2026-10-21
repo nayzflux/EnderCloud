@@ -25,9 +25,8 @@ export function decideStartupFailure(
 }
 
 export function countsAsStartupFailure(reason: string, becameReady: boolean): boolean {
-  return !becameReady && (
-    reason === "CREATE_FAILED" ||
-    reason === "STARTUP_TIMEOUT" ||
-    reason === "RUNTIME_MISSING"
+  return (
+    !becameReady &&
+    (reason === "CREATE_FAILED" || reason === "STARTUP_TIMEOUT" || reason === "RUNTIME_MISSING")
   );
 }

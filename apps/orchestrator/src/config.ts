@@ -1,11 +1,11 @@
 import {
-duration,
-integer,
-logLevel,
-optionalString,
-rejectDeprecatedEnvironment,
-url,
-type Environment,
+  duration,
+  integer,
+  logLevel,
+  optionalString,
+  rejectDeprecatedEnvironment,
+  url,
+  type Environment,
 } from "@endercloud/runtime/env";
 import type { LogLevel } from "@endercloud/runtime/logger";
 import { resolve } from "node:path";
@@ -61,12 +61,7 @@ export interface AppConfig {
 
 export function loadConfig(environment: Environment = process.env): AppConfig {
   rejectDeprecatedEnvironment(environment, deprecated);
-  const databaseUrl = url(
-    environment,
-    "DATABASE_URL",
-    undefined,
-    ["postgres:", "postgresql:"],
-  );
+  const databaseUrl = url(environment, "DATABASE_URL", undefined, ["postgres:", "postgresql:"]);
   if (!new URL(databaseUrl).password) {
     throw new Error("DATABASE_URL must contain an explicit PostgreSQL password");
   }
@@ -74,11 +69,28 @@ export function loadConfig(environment: Environment = process.env): AppConfig {
     databaseUrl,
     redisUrl: url(environment, "REDIS_URL", "redis://localhost:6379", ["redis:", "rediss:"]),
     port: integer(environment, "ORCHESTRATOR_LISTEN_PORT", 8_080, 1, 65_535),
-    groupsRoot: resolve(optionalString(environment, "ORCHESTRATOR_GROUPS_DIRECTORY", fileURLToPath(new URL("../../../groups", import.meta.url)))),
-    templatesRoot: resolve(optionalString(environment, "ORCHESTRATOR_TEMPLATES_DIRECTORY", fileURLToPath(new URL("../../../templates", import.meta.url)))),
+    groupsRoot: resolve(
+      optionalString(
+        environment,
+        "ORCHESTRATOR_GROUPS_DIRECTORY",
+        fileURLToPath(new URL("../../../groups", import.meta.url)),
+      ),
+    ),
+    templatesRoot: resolve(
+      optionalString(
+        environment,
+        "ORCHESTRATOR_TEMPLATES_DIRECTORY",
+        fileURLToPath(new URL("../../../templates", import.meta.url)),
+      ),
+    ),
     capacityIntervalMs: duration(environment, "SCHEDULER_CAPACITY_INTERVAL", "5s", 100),
     matchmakingIntervalMs: duration(environment, "SCHEDULER_MATCHMAKING_INTERVAL", "1s", 100),
-    hostReconcileIntervalMs: duration(environment, "SCHEDULER_RECONCILIATION_INTERVAL", "5s", 1_000),
+    hostReconcileIntervalMs: duration(
+      environment,
+      "SCHEDULER_RECONCILIATION_INTERVAL",
+      "5s",
+      1_000,
+    ),
     paperHealthLeaseMs: duration(environment, "PAPER_HEALTH_LEASE", "30s", 1_000),
     paperHealthConfirmationMs: duration(environment, "PAPER_HEALTH_CONFIRMATION", "30s", 1_000),
     hostOfflineAfterMs: duration(environment, "HOST_OFFLINE_TIMEOUT", "30s", 5_000),
@@ -89,7 +101,13 @@ export function loadConfig(environment: Environment = process.env): AppConfig {
     incidentFailureThreshold: integer(environment, "INCIDENT_FAILURE_THRESHOLD", 3),
     incidentFailureWindowMs: duration(environment, "INCIDENT_FAILURE_WINDOW", "15m", 1_000),
     incidentHostRecoveryAfterMs: duration(environment, "INCIDENT_HOST_RECOVERY_AFTER", "1m", 1_000),
-    incidentHistoryRetentionMs: duration(environment, "INCIDENT_HISTORY_RETENTION", "90d", 60_000, 3_650 * 86_400_000),
+    incidentHistoryRetentionMs: duration(
+      environment,
+      "INCIDENT_HISTORY_RETENTION",
+      "90d",
+      60_000,
+      3_650 * 86_400_000,
+    ),
     instanceStartConcurrency: integer(environment, "INSTANCE_START_CONCURRENCY", 4, 1, 64),
     instanceStartRetryLimit: integer(environment, "INSTANCE_START_RETRY_LIMIT", 5, 0, 20),
     instanceStartRetryBaseDelayMs: duration(environment, "INSTANCE_START_RETRY_BASE_DELAY", "1s"),

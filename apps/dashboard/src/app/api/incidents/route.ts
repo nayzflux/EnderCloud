@@ -21,11 +21,19 @@ export const GET = withDashboardSession(async (request: Request) => {
   if (severity && !["WARNING", "CRITICAL"].includes(severity)) {
     return validationErrorResponse("Invalid incident severity.");
   }
-  if (kind && ![
-    "CAPACITY_BLOCKED", "INSTANCE_FAILURE_LOOP", "HOST_UNAVAILABLE",
-    "HOST_RECOVERY_STUCK", "HOST_MAINTENANCE_BLOCKED",
-    "TRANSFER_FAILURE_LOOP", "COMMAND_FAILURE_LOOP", "CONTROL_LOOP_FAILURE",
-  ].includes(kind)) {
+  if (
+    kind &&
+    ![
+      "CAPACITY_BLOCKED",
+      "INSTANCE_FAILURE_LOOP",
+      "HOST_UNAVAILABLE",
+      "HOST_RECOVERY_STUCK",
+      "HOST_MAINTENANCE_BLOCKED",
+      "TRANSFER_FAILURE_LOOP",
+      "COMMAND_FAILURE_LOOP",
+      "CONTROL_LOOP_FAILURE",
+    ].includes(kind)
+  ) {
     return validationErrorResponse("Invalid incident type.");
   }
   if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
@@ -35,13 +43,16 @@ export const GET = withDashboardSession(async (request: Request) => {
     const data = mockIncidents();
     const groupId = query.get("groupId");
     const scopeId = query.get("scopeId");
-    const incidents = data.incidents.filter((incident) =>
-      (!status || status === "all" || incident.status === status.toUpperCase())
-      && (!severity || incident.severity === severity)
-      && (!kind || incident.kind === kind)
-      && (!groupId || incident.scope.groupId === groupId)
-      && (!scopeId || incident.scope.id === scopeId)
-    ).slice(0, limit);
+    const incidents = data.incidents
+      .filter(
+        (incident) =>
+          (!status || status === "all" || incident.status === status.toUpperCase()) &&
+          (!severity || incident.severity === severity) &&
+          (!kind || incident.kind === kind) &&
+          (!groupId || incident.scope.groupId === groupId) &&
+          (!scopeId || incident.scope.id === scopeId),
+      )
+      .slice(0, limit);
     return jsonResponse({ ...data, incidents });
   }
   const suffix = query.size > 0 ? `?${query}` : "";

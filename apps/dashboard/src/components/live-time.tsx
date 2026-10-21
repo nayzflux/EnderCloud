@@ -1,12 +1,7 @@
 "use client";
 
 import { useNow } from "@/lib/clock";
-import {
-  formatAge,
-  formatCountdown,
-  formatDateTime,
-  formatRelativeTime,
-} from "@/lib/format";
+import { formatAge, formatCountdown, formatDateTime, formatRelativeTime } from "@/lib/format";
 
 /**
  * Leaf components for anything that measures elapsed time.
@@ -55,38 +50,17 @@ function Rendered({
 /** Time since `value`, without a suffix: `3m 20s`. */
 export function Elapsed({ value, className, fallback }: LiveTimeProps) {
   const text = useRendered(value, formatAge);
-  return (
-    <Rendered
-      value={value}
-      text={text}
-      className={className}
-      fallback={fallback}
-    />
-  );
+  return <Rendered value={value} text={text} className={className} fallback={fallback} />;
 }
 
 /** Time since `value`, as prose: `3m 20s ago`, `in 45s`, `just now`. */
 export function RelativeTime({ value, className, fallback }: LiveTimeProps) {
   const text = useRendered(value, formatRelativeTime);
-  return (
-    <Rendered
-      value={value}
-      text={text}
-      className={className}
-      fallback={fallback}
-    />
-  );
+  return <Rendered value={value} text={text} className={className} fallback={fallback} />;
 }
 
 /** Time left before `value`, or how far past it we are. */
 export function Countdown({ value, className, fallback }: LiveTimeProps) {
   const text = useRendered(value, formatCountdown);
-  return (
-    <Rendered
-      value={value}
-      text={text}
-      className={className}
-      fallback={fallback}
-    />
-  );
+  return <Rendered value={value} text={text} className={className} fallback={fallback} />;
 }

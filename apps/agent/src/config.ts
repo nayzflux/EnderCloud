@@ -49,7 +49,11 @@ export function loadAgentConfig(environment: Environment = process.env): AgentCo
   rejectDeprecatedEnvironment(environment, deprecated);
   const portStart = integer(environment, "AGENT_GAME_PORT_START", 25_565, 1, 65_535);
   const portEnd = integer(environment, "AGENT_GAME_PORT_END", 25_664, portStart, 65_535);
-  const proxyKeys = ["AGENT_PROXY_PORT_START", "AGENT_PROXY_PORT_END", "AGENT_ADVERTISED_PROXY_ADDRESS"];
+  const proxyKeys = [
+    "AGENT_PROXY_PORT_START",
+    "AGENT_PROXY_PORT_END",
+    "AGENT_ADVERTISED_PROXY_ADDRESS",
+  ];
   const proxyConfigured = proxyKeys.some((key) => Boolean(environment[key]?.trim()));
   let proxy: AgentConfig["proxy"];
   if (proxyConfigured) {
@@ -59,9 +63,15 @@ export function loadAgentConfig(environment: Environment = process.env): AgentCo
     if (start <= portEnd && end >= portStart) {
       throw new Error("Agent proxy and game port ranges must not overlap");
     }
-    proxy = { address: requiredString(environment, "AGENT_ADVERTISED_PROXY_ADDRESS"), portStart: start, portEnd: end };
+    proxy = {
+      address: requiredString(environment, "AGENT_ADVERTISED_PROXY_ADDRESS"),
+      portStart: start,
+      portEnd: end,
+    };
   }
-  const runtimeRoot = resolve(optionalString(environment, "AGENT_RUNTIME_DIRECTORY", "/data/runtime"));
+  const runtimeRoot = resolve(
+    optionalString(environment, "AGENT_RUNTIME_DIRECTORY", "/data/runtime"),
+  );
   const orchestratorUrl = url(environment, "ORCHESTRATOR_URL", undefined, ["http:", "https:"]);
   const hostId = requiredString(environment, "AGENT_ID");
   if (!/^[a-z0-9][a-z0-9-]{1,62}$/.test(hostId)) {
@@ -79,16 +89,32 @@ export function loadAgentConfig(environment: Environment = process.env): AgentCo
     allocatableMemoryBytes: integer(environment, "AGENT_ALLOCATABLE_MEMORY_BYTES"),
     heartbeatIntervalMs: duration(environment, "AGENT_HEARTBEAT_INTERVAL", "5s", 1_000),
     agentVersion: optionalString(environment, "AGENT_VERSION", "0.1.0"),
-    dockerSocket: optionalString(environment, "AGENT_DOCKER_SOCKET", process.platform === "win32" ? "//./pipe/docker_engine" : "/var/run/docker.sock"),
+    dockerSocket: optionalString(
+      environment,
+      "AGENT_DOCKER_SOCKET",
+      process.platform === "win32" ? "//./pipe/docker_engine" : "/var/run/docker.sock",
+    ),
     dockerNetwork: optionalString(environment, "AGENT_DOCKER_NETWORK", "endercloud"),
     runtimeRoot,
     runtimeHostRoot: requiredString(environment, "AGENT_RUNTIME_HOST_DIRECTORY"),
-    templateCacheRoot: resolve(optionalString(environment, "AGENT_TEMPLATE_CACHE_DIRECTORY", "/data/template-cache")),
+    templateCacheRoot: resolve(
+      optionalString(environment, "AGENT_TEMPLATE_CACHE_DIRECTORY", "/data/template-cache"),
+    ),
     templateDownloadTimeoutMs: duration(environment, "AGENT_TEMPLATE_DOWNLOAD_TIMEOUT", "5m"),
     templateIdleTimeoutMs: duration(environment, "AGENT_TEMPLATE_IDLE_TIMEOUT", "30s"),
-    templateMaxExpandedBytes: integer(environment, "AGENT_TEMPLATE_MAX_EXPANDED_BYTES", 8 * 1024 ** 3),
+    templateMaxExpandedBytes: integer(
+      environment,
+      "AGENT_TEMPLATE_MAX_EXPANDED_BYTES",
+      8 * 1024 ** 3,
+    ),
     templateMaxEntries: integer(environment, "AGENT_TEMPLATE_MAX_ENTRIES", 100_000),
-    templateDownloadConcurrency: integer(environment, "AGENT_TEMPLATE_DOWNLOAD_CONCURRENCY", 4, 1, 32),
+    templateDownloadConcurrency: integer(
+      environment,
+      "AGENT_TEMPLATE_DOWNLOAD_CONCURRENCY",
+      4,
+      1,
+      32,
+    ),
     portStart,
     portEnd,
     logLevel: logLevel(environment, "AGENT_LOG_LEVEL"),

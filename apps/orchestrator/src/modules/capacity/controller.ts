@@ -1,7 +1,7 @@
 import type { Logger } from "@endercloud/runtime/logger";
-import { and,asc,eq,notInArray,sql } from "drizzle-orm";
+import { and, asc, eq, notInArray, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.ts";
-import { serverGroups,serverInstances } from "../../db/schema.ts";
+import { serverGroups, serverInstances } from "../../db/schema.ts";
 import { decideCapacity } from "../../domain/capacity.ts";
 import type { InstanceController } from "../instances/lifecycle.ts";
 
@@ -38,26 +38,24 @@ export class CapacityController {
             .where(
               and(
                 eq(serverInstances.groupId, group.id),
-                notInArray(serverInstances.lifecycleState, ['STOPPED', 'FAILED'])
-              )
+                notInArray(serverInstances.lifecycleState, ["STOPPED", "FAILED"]),
+              ),
             )
             .orderBy(
               sql`${serverInstances.runningAt} ASC NULLS LAST`,
-              asc(serverInstances.createdAt)
+              asc(serverInstances.createdAt),
             );
 
           const byId = new Map(current.map((instance) => [instance.id, instance]));
-          const activeRenewals = current
-            .filter((replacement) => {
-              if (!replacement.replaces_instance_id) return false;
-              const source = byId.get(replacement.replaces_instance_id);
-              return source !== undefined;
-            });
+          const activeRenewals = current.filter((replacement) => {
+            if (!replacement.replaces_instance_id) return false;
+            const source = byId.get(replacement.replaces_instance_id);
+            return source !== undefined;
+          });
           const readyReplacement = activeRenewals.find((replacement) => {
             const source = byId.get(replacement.replaces_instance_id!);
             return (
-              replacement.lifecycle_state === "RUNNING" &&
-              source?.lifecycle_state === "RUNNING"
+              replacement.lifecycle_state === "RUNNING" && source?.lifecycle_state === "RUNNING"
             );
           });
           if (readyReplacement) {
@@ -66,15 +64,16 @@ export class CapacityController {
             continue;
           }
 
-          const dueHub = group.enabled && group.type === "hub" && activeRenewals.length === 0
-            ? current.find(
-                (instance) =>
-                  instance.lifecycle_state === "RUNNING" &&
-                  instance.availability_state === "OPEN" &&
-                  instance.renewal_deadline !== null &&
-                  instance.renewal_deadline.getTime() <= Date.now(),
-              )
-            : undefined;
+          const dueHub =
+            group.enabled && group.type === "hub" && activeRenewals.length === 0
+              ? current.find(
+                  (instance) =>
+                    instance.lifecycle_state === "RUNNING" &&
+                    instance.availability_state === "OPEN" &&
+                    instance.renewal_deadline !== null &&
+                    instance.renewal_deadline.getTime() <= Date.now(),
+                )
+              : undefined;
           if (dueHub && current.length < group.maximumInstances) {
             const created = await this.instances.createWarm(group.id, dueHub.id);
             if (created) {
@@ -101,10 +100,7 @@ export class CapacityController {
             })),
             group.enabled,
             group.type === "hub" && group.targetPlayersPerInstance
-              ? await this.requiredHubInstances(
-                  group.id,
-                  group.targetPlayersPerInstance,
-                )
+              ? await this.requiredHubInstances(group.id, group.targetPlayersPerInstance)
               : 0,
           );
           this.logger.debug("capacity.group.decided", "Capacity decision calculated", {
@@ -130,11 +126,7 @@ export class CapacityController {
               instance.lifecycle_state === "RUNNING" &&
               instance.availability_state === "OPEN" &&
               !protectedInstanceIds.has(instance.id) &&
-              (
-                group.type !== "hub" ||
-                !group.enabled ||
-                instance.player_count === 0
-              ),
+              (group.type !== "hub" || !group.enabled || instance.player_count === 0),
           );
           // The earlier SQL ordering makes this slice the deterministic scale-down set.
           for (const candidate of drainCandidates.slice(0, decision.drain)) {

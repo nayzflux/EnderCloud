@@ -76,12 +76,7 @@ async function exists(path: string): Promise<boolean> {
 }
 
 test("Docker instance names include the variant and unique instance id", () => {
-  expect(
-    instanceName(
-      "skywars-solo-japan",
-      "aB3dE5fG7hJ9kL2m",
-    ),
-  ).toBe(
+  expect(instanceName("skywars-solo-japan", "aB3dE5fG7hJ9kL2m")).toBe(
     "endercloud-skywars-solo-japan-aB3dE5fG7hJ9kL2m",
   );
 });
@@ -89,43 +84,73 @@ test("Docker instance names include the variant and unique instance id", () => {
 test("proxy execution uses its dedicated ports, advertised address and container data directory", async () => {
   const root = await mkdtemp(join(tmpdir(), "endercloud-proxy-executor-"));
   const spec = {
-    hostId: "test-host", instanceId: "proxyinstance001", groupId: "edge-proxies", variantId: "velocity-main",
-    instanceType: "proxy" as const, templateLayers: [], environment: {},
-    runtime: { image: "itzg/mc-proxy:java25", cpu: 1, memoryBytes: 1024 ** 3, environment: {}, dataDirectory: "/server" },
+    hostId: "test-host",
+    instanceId: "proxyinstance001",
+    groupId: "edge-proxies",
+    variantId: "velocity-main",
+    instanceType: "proxy" as const,
+    templateLayers: [],
+    environment: {},
+    runtime: {
+      image: "itzg/mc-proxy:java25",
+      cpu: 1,
+      memoryBytes: 1024 ** 3,
+      environment: {},
+      dataDirectory: "/server",
+    },
   };
-  const executor = new LocalDockerExecutor({
-    ...config(root), proxy: { address: "edge.example", portStart: 25700, portEnd: 25702 },
-  }, { debug: () => {}, info: () => {} } as unknown as Logger);
+  const executor = new LocalDockerExecutor(
+    {
+      ...config(root),
+      proxy: { address: "edge.example", portStart: 25700, portEnd: 25702 },
+    },
+    { debug: () => {}, info: () => {} } as unknown as Logger,
+  );
   let existing: unknown[] = [];
   const createContainer = mock(async () => ({ id: "proxy-container", start: async () => {} }));
   const docker = {
-    listContainers: async (options: { filters?: unknown }) => options.filters ? existing : [
-      { Ports: [{ PublicPort: 25700 }], Labels: {} },
-      { Ports: [], Labels: { "orchestrator.host-port": "25702" } },
-    ],
+    listContainers: async (options: { filters?: unknown }) =>
+      options.filters
+        ? existing
+        : [
+            { Ports: [{ PublicPort: 25700 }], Labels: {} },
+            { Ports: [], Labels: { "orchestrator.host-port": "25702" } },
+          ],
     getImage: () => ({ inspect: async () => ({}) }),
     createContainer,
   };
   Object.defineProperty(executor, "docker", { value: docker });
   try {
     expect(await executor.createInstance(spec)).toMatchObject({ endpoint: "edge.example:25701" });
-    expect(createContainer).toHaveBeenCalledWith(expect.objectContaining({
-      Labels: expect.objectContaining({ "orchestrator.instance-type": "proxy" }),
-      HostConfig: expect.objectContaining({
-        Binds: [join(root, "instances", spec.instanceId) + ":/server"],
-        PortBindings: { "25565/tcp": [{ HostIp: "0.0.0.0", HostPort: "25701" }] },
+    expect(createContainer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        Labels: expect.objectContaining({ "orchestrator.instance-type": "proxy" }),
+        HostConfig: expect.objectContaining({
+          Binds: [join(root, "instances", spec.instanceId) + ":/server"],
+          PortBindings: { "25565/tcp": [{ HostIp: "0.0.0.0", HostPort: "25701" }] },
+        }),
       }),
-    }));
-    existing = [{ Id: "proxy-container", State: "running", Labels: { "orchestrator.host-port": "25701" } }];
-    expect(await executor.createInstance(spec)).toMatchObject({ containerId: "proxy-container", endpoint: "edge.example:25701" });
+    );
+    existing = [
+      { Id: "proxy-container", State: "running", Labels: { "orchestrator.host-port": "25701" } },
+    ];
+    expect(await executor.createInstance(spec)).toMatchObject({
+      containerId: "proxy-container",
+      endpoint: "edge.example:25701",
+    });
     expect(createContainer).toHaveBeenCalledTimes(1);
     existing = [];
-    const fullRange = new LocalDockerExecutor({
-      ...config(root), proxy: { address: "edge.example", portStart: 25700, portEnd: 25700 },
-    }, { debug: () => {}, info: () => {} } as unknown as Logger);
+    const fullRange = new LocalDockerExecutor(
+      {
+        ...config(root),
+        proxy: { address: "edge.example", portStart: 25700, portEnd: 25700 },
+      },
+      { debug: () => {}, info: () => {} } as unknown as Logger,
+    );
     Object.defineProperty(fullRange, "docker", { value: docker });
-    await expect(fullRange.createInstance({ ...spec, instanceId: "proxyinstance002" }))
-      .rejects.toThrow("No proxy port is available");
+    await expect(
+      fullRange.createInstance({ ...spec, instanceId: "proxyinstance002" }),
+    ).rejects.toThrow("No proxy port is available");
     const paperOnly = new LocalDockerExecutor(config(root), {} as Logger);
     await expect(paperOnly.createInstance(spec)).rejects.toThrow("does not support proxy");
   } finally {
@@ -146,13 +171,11 @@ test("Docker log frames are demultiplexed before diagnostics are retained", () =
     header.writeUInt32BE(content.length, 4);
     return Buffer.concat([header, content]);
   };
-  const multiplexed = Buffer.concat([
-    frame(1, "server output\n"),
-    frame(2, "server error\n"),
-  ]);
-  expect(decodeDockerLogBuffer(multiplexed).toString("utf8"))
-    .toBe("server output\nserver error\n");
-  expect(decodeDockerLogBuffer(Buffer.from("plain tty output"))).toEqual(Buffer.from("plain tty output"));
+  const multiplexed = Buffer.concat([frame(1, "server output\n"), frame(2, "server error\n")]);
+  expect(decodeDockerLogBuffer(multiplexed).toString("utf8")).toBe("server output\nserver error\n");
+  expect(decodeDockerLogBuffer(Buffer.from("plain tty output"))).toEqual(
+    Buffer.from("plain tty output"),
+  );
 });
 
 test("ordered layers merge recursively and omit control descriptors", async () => {
@@ -253,16 +276,9 @@ test("orphan cleanup refuses deletion when ownership labels changed", async () =
   try {
     const orphan = runtime("aB3dE5fG7hJ9kL2m");
     const removeContainer = mock(async () => {});
-    const { executor } = executorWithDocker(
-      root,
-      orphan,
-      removeContainer,
-      "differentInstance",
-    );
+    const { executor } = executorWithDocker(root, orphan, removeContainer, "differentInstance");
 
-    await expect(executor.deleteOrphanInstance(orphan)).rejects.toThrow(
-      "ownership labels changed",
-    );
+    await expect(executor.deleteOrphanInstance(orphan)).rejects.toThrow("ownership labels changed");
     expect(removeContainer).not.toHaveBeenCalled();
   } finally {
     await rm(root, { recursive: true, force: true });

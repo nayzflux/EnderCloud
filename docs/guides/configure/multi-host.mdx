@@ -16,14 +16,14 @@ network, VPN or overlay network and restrict each control port with a firewall. 
 agent's outgoing key and separate inbound token through the
 [local security CLI](/docs/configure/authentication); copy its protected file to that worker.
 
-| Source | Destination | Purpose |
-| --- | --- | --- |
-| Agent | `ORCHESTRATOR_URL` | Heartbeats and template archives |
-| Managed Paper container | `ORCHESTRATOR_URL` | Readiness, presence, assignments, and game events |
-| Orchestrator | `AGENT_ADVERTISED_CONTROL_URL` | Inventory, create, inspect, logs, stop, and delete |
-| Velocity | `AGENT_ADVERTISED_GAME_ADDRESS` and game-port range | Backend Minecraft connections |
-| Velocity | Central Redis and orchestrator | Registry events, transfers, and HTTP snapshot |
-| Dashboard server | Orchestrator | Operational reads and confirmed actions |
+| Source                  | Destination                                         | Purpose                                            |
+| ----------------------- | --------------------------------------------------- | -------------------------------------------------- |
+| Agent                   | `ORCHESTRATOR_URL`                                  | Heartbeats and template archives                   |
+| Managed Paper container | `ORCHESTRATOR_URL`                                  | Readiness, presence, assignments, and game events  |
+| Orchestrator            | `AGENT_ADVERTISED_CONTROL_URL`                      | Inventory, create, inspect, logs, stop, and delete |
+| Velocity                | `AGENT_ADVERTISED_GAME_ADDRESS` and game-port range | Backend Minecraft connections                      |
+| Velocity                | Central Redis and orchestrator                      | Registry events, transfers, and HTTP snapshot      |
+| Dashboard server        | Orchestrator                                        | Operational reads and confirmed actions            |
 
 PostgreSQL, Redis, Docker sockets, agent control APIs, and the orchestrator API must not be
 Internet-facing. Only Velocity's public listener normally needs public player access. Backend game
@@ -38,13 +38,13 @@ agents need it. Remote agents do not need dashboard access.
 
 Several variables describe different sides of the same connection:
 
-| Variable | Who must reach it |
-| --- | --- |
-| `ORCHESTRATOR_URL` | The agent and every managed Paper container on that host |
-| `AGENT_ADVERTISED_CONTROL_URL` | The central orchestrator |
-| `AGENT_ADVERTISED_GAME_ADDRESS` | Velocity on the path to published Minecraft ports |
-| `AGENT_PUBLISH_ADDRESS` | Host interface where standalone Compose binds the control API |
-| `ORCHESTRATOR_PUBLISH_ADDRESS` | Central host interface where Compose binds the orchestrator API |
+| Variable                        | Who must reach it                                               |
+| ------------------------------- | --------------------------------------------------------------- |
+| `ORCHESTRATOR_URL`              | The agent and every managed Paper container on that host        |
+| `AGENT_ADVERTISED_CONTROL_URL`  | The central orchestrator                                        |
+| `AGENT_ADVERTISED_GAME_ADDRESS` | Velocity on the path to published Minecraft ports               |
+| `AGENT_PUBLISH_ADDRESS`         | Host interface where standalone Compose binds the control API   |
+| `ORCHESTRATOR_PUBLISH_ADDRESS`  | Central host interface where Compose binds the orchestrator API |
 
 An advertised URL is part of application protocol. A publish address is a Compose host binding.
 They often contain the same IP on a remote Linux host, but they are not interchangeable.
@@ -279,4 +279,3 @@ latency, firewall rules, MTU, or failure between physical machines.
 
 See [Agent](/docs/configure/agent) for the complete variable reference and [Tests](/docs/develop/testing) for the local smoke
 test.
-

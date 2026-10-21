@@ -49,9 +49,7 @@ export function buildVariantFlow(
   const visibleVariants = graph.variants.filter((variant) => {
     if (options.enabledOnly && !variant.enabled) return false;
     if (!search) return true;
-    return [variant.id, ...variant.layers].some((value) =>
-      value.toLowerCase().includes(search),
-    );
+    return [variant.id, ...variant.layers].some((value) => value.toLowerCase().includes(search));
   });
 
   const roots = new Map<string, TrieNode>();

@@ -7,17 +7,31 @@ import { createAuth } from "./auth.ts";
 import { loadSecurityConfig } from "./config.ts";
 import { Credentials } from "./credentials.ts";
 
-export async function createAdministrator(db: ReturnType<typeof createDatabase>["db"], config: ReturnType<typeof loadSecurityConfig>, email: string, password: string) {
-  return createAuth(db, config, true).api.signUpEmail({ body: { email, password, name: "Administrator" } });
+export async function createAdministrator(
+  db: ReturnType<typeof createDatabase>["db"],
+  config: ReturnType<typeof loadSecurityConfig>,
+  email: string,
+  password: string,
+) {
+  return createAuth(db, config, true).api.signUpEmail({
+    body: { email, password, name: "Administrator" },
+  });
 }
 
-export async function resetAdministrator(db: ReturnType<typeof createDatabase>["db"], password: string) {
-  if (password.length < 14 || password.length > 128) throw new Error("Password must contain 14 to 128 characters");
+export async function resetAdministrator(
+  db: ReturnType<typeof createDatabase>["db"],
+  password: string,
+) {
+  if (password.length < 14 || password.length > 128)
+    throw new Error("Password must contain 14 to 128 characters");
   const [admin] = await db.select().from(user).limit(1);
   if (!admin) throw new Error("Administrator not initialized");
   const hashed = await hashPassword(password);
-  await db.transaction(async tx => {
-    await tx.update(account).set({ password: hashed }).where(and(eq(account.userId, admin.id), eq(account.providerId, "credential")));
+  await db.transaction(async (tx) => {
+    await tx
+      .update(account)
+      .set({ password: hashed })
+      .where(and(eq(account.userId, admin.id), eq(account.providerId, "credential")));
     await tx.delete(session).where(eq(session.userId, admin.id));
   });
 }
@@ -33,28 +47,46 @@ if (import.meta.main) {
   try {
     await lock`SELECT pg_advisory_lock(18523418)`;
     if (command === "admin:create" || command === "admin:reset") {
-      if (process.stdin.isTTY) throw new Error("Pipe the password on standard input; do not place it in command arguments");
+      if (process.stdin.isTTY)
+        throw new Error(
+          "Pipe the password on standard input; do not place it in command arguments",
+        );
       const password = (await Bun.stdin.text()).replace(/\r?\n$/, "");
       if (command === "admin:create") {
         if (!identity) throw new Error("An administrator email is required");
         await createAdministrator(database.db, config, identity, password);
       } else await resetAdministrator(database.db, password);
-      console.log("Administrator updated; existing sessions were invalidated when resetting the password.");
+      console.log(
+        "Administrator updated; existing sessions were invalidated when resetting the password.",
+      );
     } else if (["agent:provision", "agent:rotate", "agent:revoke"].includes(command ?? "")) {
-      if (!identity || !/^[a-z0-9][a-z0-9-]{1,62}$/.test(identity)) throw new Error("A valid host id is required");
+      if (!identity || !/^[a-z0-9][a-z0-9-]{1,62}$/.test(identity))
+        throw new Error("A valid host id is required");
       const credentials = new Credentials(database.db, createAuth(database.db, config), config);
       if (command === "agent:revoke") await credentials.revoke("agent", identity);
       else {
-        if (option !== "--stdout") throw new Error("Use --stdout and redirect to the worker's protected environment file");
+        if (option !== "--stdout")
+          throw new Error("Use --stdout and redirect to the worker's protected environment file");
         const values = await credentials.ensure("agent", identity, command === "agent:rotate");
-        console.log(`AGENT_ID=${identity}\nAGENT_ORCHESTRATOR_TOKEN=${values.apiToken}\nAGENT_CONTROL_TOKEN=${values.controlToken}`);
+        console.log(
+          `AGENT_ID=${identity}\nAGENT_ORCHESTRATOR_TOKEN=${values.apiToken}\nAGENT_CONTROL_TOKEN=${values.controlToken}`,
+        );
       }
     } else if (command === "instance:rotate" || command === "instance:revoke") {
-      if (!identity || !/^[A-Za-z0-9]{16}$/.test(identity)) throw new Error("A valid instance id is required");
+      if (!identity || !/^[A-Za-z0-9]{16}$/.test(identity))
+        throw new Error("A valid instance id is required");
       const credentials = new Credentials(database.db, createAuth(database.db, config), config);
-      await credentials.retireInstance(identity, command === "instance:rotate" ? "CREDENTIAL_ROTATED" : "CREDENTIAL_REVOKED");
-      console.log("Instance credential revoked. The control plane will remove its runtime and restore configured capacity with a new identity.");
-    } else throw new Error("Commands: admin:create <email>, admin:reset, agent:provision|rotate <host> --stdout, agent:revoke <host>, instance:rotate|revoke <id>");
+      await credentials.retireInstance(
+        identity,
+        command === "instance:rotate" ? "CREDENTIAL_ROTATED" : "CREDENTIAL_REVOKED",
+      );
+      console.log(
+        "Instance credential revoked. The control plane will remove its runtime and restore configured capacity with a new identity.",
+      );
+    } else
+      throw new Error(
+        "Commands: admin:create <email>, admin:reset, agent:provision|rotate <host> --stdout, agent:revoke <host>, instance:rotate|revoke <id>",
+      );
   } finally {
     await lock`SELECT pg_advisory_unlock(18523418)`.catch(() => {});
     lock.release();

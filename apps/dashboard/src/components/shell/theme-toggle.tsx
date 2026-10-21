@@ -28,9 +28,7 @@ export function ThemeToggle() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        render={
-          <Button variant="ghost" size="icon-sm" aria-label="Change theme" />
-        }
+        render={<Button variant="ghost" size="icon-sm" aria-label="Change theme" />}
       >
         <Icon />
       </DropdownMenuTrigger>
@@ -39,9 +37,7 @@ export function ThemeToggle() {
           <DropdownMenuItem
             key={option.value}
             onClick={() => setTheme(option.value)}
-            className={
-              mounted && theme === option.value ? "bg-accent" : undefined
-            }
+            className={mounted && theme === option.value ? "bg-accent" : undefined}
           >
             <option.icon />
             {option.label}

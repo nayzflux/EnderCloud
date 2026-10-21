@@ -1,5 +1,9 @@
-import type { AvailabilityState,CapacityPolicy,LifecycleState } from "@endercloud/contracts/domain";
-import { isWarmPending,isWarmReady } from "./state-machines.ts";
+import type {
+  AvailabilityState,
+  CapacityPolicy,
+  LifecycleState,
+} from "@endercloud/contracts/domain";
+import { isWarmPending, isWarmReady } from "./state-machines.ts";
 
 export interface InstanceCapacityState {
   readonly lifecycle: LifecycleState;
@@ -45,28 +49,18 @@ export function decideCapacity(
   // Two independent deficits are considered: total resilience and immediately usable warm capacity.
   const desiredForMinimumInstances = Math.max(0, policy.minimumInstances - active);
   const desiredForPlayerDemand = Math.max(0, requiredActiveInstances - active);
-  const desiredForWarm = Math.max(
-    0,
-    policy.minimumWarmInstances - warmReady - warmPending,
-  );
+  const desiredForWarm = Math.max(0, policy.minimumWarmInstances - warmReady - warmPending);
   const room = Math.max(0, policy.maximumInstances - active);
   // Create enough for the larger deficit, but never cross the absolute maximum.
   const create = Math.min(
     room,
-    Math.max(
-      desiredForMinimumInstances,
-      desiredForPlayerDemand,
-      desiredForWarm,
-    ),
+    Math.max(desiredForMinimumInstances, desiredForPlayerDemand, desiredForWarm),
   );
   // Drain only the overlap between excess warm capacity and instances above the minimum floor.
   const activeFloor = Math.max(policy.minimumInstances, requiredActiveInstances);
   const drain = Math.max(
     0,
-    Math.min(
-      warmReady - policy.maximumWarmInstances,
-      active - activeFloor,
-    ),
+    Math.min(warmReady - policy.maximumWarmInstances, active - activeFloor),
   );
 
   return { warmReady, warmPending, active, create, drain };

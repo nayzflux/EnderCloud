@@ -41,9 +41,7 @@ export function MobileNav() {
         <nav aria-label="Mobile navigation" className="grid p-5">
           {links.map((link) => (
             <SheetClose key={link.href} nativeButton={false} render={<Link href={link.href} />}>
-              <span className="border-b border-border py-4 text-lg font-medium">
-                {link.label}
-              </span>
+              <span className="border-b border-border py-4 text-lg font-medium">{link.label}</span>
             </SheetClose>
           ))}
           <a

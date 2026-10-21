@@ -1,13 +1,13 @@
-import type {SqlRow} from "../../db/client.ts";
+import type { SqlRow } from "../../db/client.ts";
 import type { DashboardIncidentPage } from "@endercloud/contracts/dashboard";
 import type {
-IncidentKind,
-IncidentScopeType,
-IncidentSeverity,
+  IncidentKind,
+  IncidentScopeType,
+  IncidentSeverity,
 } from "@endercloud/contracts/domain";
 import { nanoid } from "@endercloud/runtime/id";
 import type { Logger } from "@endercloud/runtime/logger";
-import { and,desc,eq,inArray,lt,ne,or,sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, ne, or, sql } from "drizzle-orm";
 import type { AppConfig } from "../../config.ts";
 import type { Database } from "../../db/client.ts";
 import { operationalIncidents } from "../../db/schema.ts";
@@ -126,7 +126,9 @@ export class IncidentController {
       const observations = await this.detect();
       await this.reconcile(observations);
     } catch (error) {
-      this.logger.error("incident.reconciliation.failed", "Incident reconciliation failed", { error });
+      this.logger.error("incident.reconciliation.failed", "Incident reconciliation failed", {
+        error,
+      });
       throw error;
     } finally {
       this.running = false;
@@ -135,17 +137,20 @@ export class IncidentController {
 
   public async recordLoopFailure(task: string, error: unknown): Promise<void> {
     this.healthyLoops.delete(task);
-    await this.observe({
-      fingerprint: `control-loop:${task}`,
-      kind: "CONTROL_LOOP_FAILURE",
-      severity: "CRITICAL",
-      scopeType: "CLUSTER",
-      scopeId: task,
-      summary: `Control loop ${task} is repeatedly failing`,
-      cause: "SCHEDULED_TASK_FAILED",
-      evidence: { task, error: error instanceof Error ? error.message : String(error) },
-      openAfterOccurrences: this.config.incidentFailureThreshold,
-    }, true);
+    await this.observe(
+      {
+        fingerprint: `control-loop:${task}`,
+        kind: "CONTROL_LOOP_FAILURE",
+        severity: "CRITICAL",
+        scopeType: "CLUSTER",
+        scopeId: task,
+        summary: `Control loop ${task} is repeatedly failing`,
+        cause: "SCHEDULED_TASK_FAILED",
+        evidence: { task, error: error instanceof Error ? error.message : String(error) },
+        openAfterOccurrences: this.config.incidentFailureThreshold,
+      },
+      true,
+    );
   }
 
   public async recordLoopSuccess(task: string): Promise<void> {
@@ -155,19 +160,24 @@ export class IncidentController {
   }
 
   public async prune(): Promise<void> {
-    await this.db.delete(operationalIncidents).where(and(
-      eq(operationalIncidents.state, "RESOLVED"),
-      lt(
-        operationalIncidents.resolvedAt,
-        new Date(Date.now() - this.config.incidentHistoryRetentionMs),
-      ),
-    ));
+    await this.db
+      .delete(operationalIncidents)
+      .where(
+        and(
+          eq(operationalIncidents.state, "RESOLVED"),
+          lt(
+            operationalIncidents.resolvedAt,
+            new Date(Date.now() - this.config.incidentHistoryRetentionMs),
+          ),
+        ),
+      );
   }
 
   public async list(query: IncidentListQuery): Promise<DashboardIncidentPage> {
     const limit = Math.max(1, Math.min(200, Math.trunc(query.limit ?? 50)));
     const filters = [];
-    if ((query.status ?? "active") === "active") filters.push(eq(operationalIncidents.state, "ACTIVE"));
+    if ((query.status ?? "active") === "active")
+      filters.push(eq(operationalIncidents.state, "ACTIVE"));
     if (query.status === "resolved") filters.push(eq(operationalIncidents.state, "RESOLVED"));
     if (query.status === "all") filters.push(ne(operationalIncidents.state, "PENDING"));
     if (query.severity) filters.push(eq(operationalIncidents.severity, query.severity));
@@ -176,26 +186,35 @@ export class IncidentController {
     if (query.scopeId) filters.push(eq(operationalIncidents.scopeId, query.scopeId));
     const cursor = query.cursor ? this.decodeCursor(query.cursor) : null;
     if (cursor) {
-      filters.push(or(
-        lt(operationalIncidents.lastObservedAt, cursor.at),
-        and(
-          eq(operationalIncidents.lastObservedAt, cursor.at),
-          lt(operationalIncidents.id, cursor.id),
-        ),
-      )!);
+      filters.push(
+        or(
+          lt(operationalIncidents.lastObservedAt, cursor.at),
+          and(
+            eq(operationalIncidents.lastObservedAt, cursor.at),
+            lt(operationalIncidents.id, cursor.id),
+          ),
+        )!,
+      );
     }
     const [rows, counts] = await Promise.all([
-      this.db.select().from(operationalIncidents)
+      this.db
+        .select()
+        .from(operationalIncidents)
         .where(and(...filters))
         .orderBy(desc(operationalIncidents.lastObservedAt), desc(operationalIncidents.id))
         .limit(limit + 1),
-      this.db.select({
-        active: sql<number>`count(*) FILTER (WHERE ${operationalIncidents.state} = 'ACTIVE')::int`.mapWith(Number),
-        critical: sql<number>`count(*) FILTER (
+      this.db
+        .select({
+          active:
+            sql<number>`count(*) FILTER (WHERE ${operationalIncidents.state} = 'ACTIVE')::int`.mapWith(
+              Number,
+            ),
+          critical: sql<number>`count(*) FILTER (
           WHERE ${operationalIncidents.state} = 'ACTIVE'
             AND ${operationalIncidents.severity} = 'CRITICAL'
         )::int`.mapWith(Number),
-      }).from(operationalIncidents),
+        })
+        .from(operationalIncidents),
     ]);
     const page = rows.slice(0, limit);
     const last = page.at(-1);
@@ -224,9 +243,12 @@ export class IncidentController {
         openedAt: row.openedAt!.toISOString(),
         resolvedAt: row.resolvedAt?.toISOString() ?? null,
       })),
-      nextCursor: rows.length > limit && last
-        ? Buffer.from(JSON.stringify({ at: last.lastObservedAt.toISOString(), id: last.id })).toString("base64url")
-        : null,
+      nextCursor:
+        rows.length > limit && last
+          ? Buffer.from(
+              JSON.stringify({ at: last.lastObservedAt.toISOString(), id: last.id }),
+            ).toString("base64url")
+          : null,
     };
   }
 
@@ -306,54 +328,58 @@ export class IncidentController {
     return rows.flatMap((row): Observation[] => {
       const requiredCpu = row.requested_cpu * row.needed_instance_count;
       const requiredMemoryBytes = Number(row.requested_memory_bytes) * row.needed_instance_count;
-      const cpuBlocked = row.maximum_free_cpu < row.requested_cpu
-        || row.aggregate_free_cpu < requiredCpu;
-      const memoryBlocked = row.maximum_free_memory_bytes < row.requested_memory_bytes
-        || Number(row.aggregate_free_memory_bytes) < requiredMemoryBytes;
-      const cause = row.active_count >= row.maximum_instances
-        ? "GROUP_MAXIMUM_REACHED"
-        : row.online_host_count === 0
-          ? "NO_ONLINE_HOST"
-          : cpuBlocked && memoryBlocked
-            ? "INSUFFICIENT_RESOURCES"
-            : cpuBlocked
-              ? "INSUFFICIENT_CPU"
-              : memoryBlocked
-                ? "INSUFFICIENT_MEMORY"
-                : row.feasible_host_count > 0
-                  ? "PLACEMENT_CONFLICT"
-                  : "INSUFFICIENT_RESOURCES";
+      const cpuBlocked =
+        row.maximum_free_cpu < row.requested_cpu || row.aggregate_free_cpu < requiredCpu;
+      const memoryBlocked =
+        row.maximum_free_memory_bytes < row.requested_memory_bytes ||
+        Number(row.aggregate_free_memory_bytes) < requiredMemoryBytes;
+      const cause =
+        row.active_count >= row.maximum_instances
+          ? "GROUP_MAXIMUM_REACHED"
+          : row.online_host_count === 0
+            ? "NO_ONLINE_HOST"
+            : cpuBlocked && memoryBlocked
+              ? "INSUFFICIENT_RESOURCES"
+              : cpuBlocked
+                ? "INSUFFICIENT_CPU"
+                : memoryBlocked
+                  ? "INSUFFICIENT_MEMORY"
+                  : row.feasible_host_count > 0
+                    ? "PLACEMENT_CONFLICT"
+                    : "INSUFFICIENT_RESOURCES";
       // A deficit with a feasible placement is normal convergence: the capacity
       // controller can create the next instance, so it must not age into an incident.
       if (cause === "PLACEMENT_CONFLICT") return [];
-      return [{
-        fingerprint: `capacity:${row.group_id}`,
-        kind: "CAPACITY_BLOCKED",
-        severity: "CRITICAL",
-        scopeType: "GROUP",
-        scopeId: row.group_id,
-        groupId: row.group_id,
-        summary: `Group ${row.group_id} cannot reach its configured minimum capacity`,
-        cause,
-        evidence: {
-          active: row.active_count,
-          minimumInstances: row.minimum_instances,
-          warmReady: row.warm_ready,
-          warmPending: row.warm_pending,
-          minimumWarmInstances: row.minimum_warm_instances,
-          requestedCpu: row.requested_cpu,
-          requestedMemoryBytes: Number(row.requested_memory_bytes),
-          neededInstanceCount: row.needed_instance_count,
-          requiredCpu,
-          requiredMemoryBytes,
-          onlineHostCount: row.online_host_count,
-          maximumFreeCpu: row.maximum_free_cpu,
-          maximumFreeMemoryBytes: Number(row.maximum_free_memory_bytes),
-          aggregateFreeCpu: row.aggregate_free_cpu,
-          aggregateFreeMemoryBytes: Number(row.aggregate_free_memory_bytes),
-        },
-        openAfterMs: this.config.incidentBlockedAfterMs,
-      } satisfies Observation];
+      return [
+        {
+          fingerprint: `capacity:${row.group_id}`,
+          kind: "CAPACITY_BLOCKED",
+          severity: "CRITICAL",
+          scopeType: "GROUP",
+          scopeId: row.group_id,
+          groupId: row.group_id,
+          summary: `Group ${row.group_id} cannot reach its configured minimum capacity`,
+          cause,
+          evidence: {
+            active: row.active_count,
+            minimumInstances: row.minimum_instances,
+            warmReady: row.warm_ready,
+            warmPending: row.warm_pending,
+            minimumWarmInstances: row.minimum_warm_instances,
+            requestedCpu: row.requested_cpu,
+            requestedMemoryBytes: Number(row.requested_memory_bytes),
+            neededInstanceCount: row.needed_instance_count,
+            requiredCpu,
+            requiredMemoryBytes,
+            onlineHostCount: row.online_host_count,
+            maximumFreeCpu: row.maximum_free_cpu,
+            maximumFreeMemoryBytes: Number(row.maximum_free_memory_bytes),
+            aggregateFreeCpu: row.aggregate_free_cpu,
+            aggregateFreeMemoryBytes: Number(row.aggregate_free_memory_bytes),
+          },
+          openAfterMs: this.config.incidentBlockedAfterMs,
+        } satisfies Observation,
+      ];
     });
   }
 
@@ -401,9 +427,10 @@ export class IncidentController {
       severity: row.health_state === "OFFLINE" && row.assigned_count > 0 ? "CRITICAL" : "WARNING",
       scopeType: "HOST",
       scopeId: row.id,
-      summary: row.health_state === "OFFLINE"
-        ? `Execution host ${row.id} is offline`
-        : `Execution host ${row.id} is not completing recovery`,
+      summary:
+        row.health_state === "OFFLINE"
+          ? `Execution host ${row.id} is offline`
+          : `Execution host ${row.id} is not completing recovery`,
       cause: row.health_state === "OFFLINE" ? "HOST_OFFLINE" : "HOST_RECOVERING",
       evidence: { assignedInstanceCount: row.assigned_count, lastError: row.last_error },
       openAfterMs: row.health_state === "OFFLINE" ? 0 : this.config.incidentHostRecoveryAfterMs,
@@ -484,7 +511,11 @@ export class IncidentController {
       groupId: row.group_id,
       summary: `${row.operation} commands for group ${row.group_id} are repeatedly failing`,
       cause: `${row.operation}_COMMAND_FAILED`,
-      evidence: { commandIds: row.affected_ids, operation: row.operation, windowMs: this.config.incidentFailureWindowMs },
+      evidence: {
+        commandIds: row.affected_ids,
+        operation: row.operation,
+        windowMs: this.config.incidentFailureWindowMs,
+      },
       occurrenceCount: Number(row.occurrence_count),
     }));
   }
@@ -492,12 +523,17 @@ export class IncidentController {
   private async reconcile(observations: readonly Observation[]): Promise<void> {
     const observed = new Set(observations.map((item) => item.fingerprint));
     for (const observation of observations) await this.observe(observation, false);
-    const unresolved = await this.db.select({
-      fingerprint: operationalIncidents.fingerprint,
-    }).from(operationalIncidents).where(and(
-      inArray(operationalIncidents.kind, detectorKinds),
-      ne(operationalIncidents.state, "RESOLVED"),
-    ));
+    const unresolved = await this.db
+      .select({
+        fingerprint: operationalIncidents.fingerprint,
+      })
+      .from(operationalIncidents)
+      .where(
+        and(
+          inArray(operationalIncidents.kind, detectorKinds),
+          ne(operationalIncidents.state, "RESOLVED"),
+        ),
+      );
     for (const incident of unresolved) {
       if (!observed.has(incident.fingerprint)) await this.resolve(incident.fingerprint);
     }
@@ -505,57 +541,74 @@ export class IncidentController {
 
   private async observe(observation: Observation, increment: boolean): Promise<void> {
     const transition = await this.db.transaction(async (tx) => {
-      const current = await tx.select().from(operationalIncidents).where(and(
-        eq(operationalIncidents.fingerprint, observation.fingerprint),
-        ne(operationalIncidents.state, "RESOLVED"),
-      )).for("update").limit(1);
+      const current = await tx
+        .select()
+        .from(operationalIncidents)
+        .where(
+          and(
+            eq(operationalIncidents.fingerprint, observation.fingerprint),
+            ne(operationalIncidents.state, "RESOLVED"),
+          ),
+        )
+        .for("update")
+        .limit(1);
       const now = new Date();
       const existing = current[0];
       if (!existing) {
         const occurrences = observation.occurrenceCount ?? 1;
-        const active = (observation.openAfterMs ?? 0) === 0
-          && occurrences >= (observation.openAfterOccurrences ?? 1);
-        const inserted = await tx.insert(operationalIncidents).values({
-          id: nanoid(),
-          fingerprint: observation.fingerprint,
+        const active =
+          (observation.openAfterMs ?? 0) === 0 &&
+          occurrences >= (observation.openAfterOccurrences ?? 1);
+        const inserted = await tx
+          .insert(operationalIncidents)
+          .values({
+            id: nanoid(),
+            fingerprint: observation.fingerprint,
+            kind: observation.kind,
+            severity: observation.severity,
+            state: active ? "ACTIVE" : "PENDING",
+            scopeType: observation.scopeType,
+            scopeId: observation.scopeId,
+            groupId: observation.groupId ?? null,
+            variantId: observation.variantId ?? null,
+            summary: observation.summary,
+            cause: observation.cause,
+            evidence: observation.evidence,
+            occurrenceCount: occurrences,
+            firstObservedAt: now,
+            lastObservedAt: now,
+            openedAt: active ? now : null,
+          })
+          .returning();
+        return active ? { type: "opened" as const, incident: inserted[0]! } : null;
+      }
+      const occurrences =
+        observation.occurrenceCount ??
+        (increment ? existing.occurrenceCount + 1 : existing.occurrenceCount);
+      const age = now.getTime() - existing.firstObservedAt.getTime();
+      const hasTimeThreshold = observation.openAfterMs !== undefined;
+      const hasOccurrenceThreshold = observation.openAfterOccurrences !== undefined;
+      const active =
+        existing.state === "ACTIVE" ||
+        (!hasTimeThreshold && !hasOccurrenceThreshold) ||
+        (hasTimeThreshold && age >= observation.openAfterMs!) ||
+        (hasOccurrenceThreshold && occurrences >= observation.openAfterOccurrences!);
+      const changed = await tx
+        .update(operationalIncidents)
+        .set({
           kind: observation.kind,
           severity: observation.severity,
           state: active ? "ACTIVE" : "PENDING",
-          scopeType: observation.scopeType,
-          scopeId: observation.scopeId,
-          groupId: observation.groupId ?? null,
-          variantId: observation.variantId ?? null,
           summary: observation.summary,
           cause: observation.cause,
           evidence: observation.evidence,
           occurrenceCount: occurrences,
-          firstObservedAt: now,
           lastObservedAt: now,
-          openedAt: active ? now : null,
-        }).returning();
-        return active ? { type: "opened" as const, incident: inserted[0]! } : null;
-      }
-      const occurrences = observation.occurrenceCount
-        ?? (increment ? existing.occurrenceCount + 1 : existing.occurrenceCount);
-      const age = now.getTime() - existing.firstObservedAt.getTime();
-      const hasTimeThreshold = observation.openAfterMs !== undefined;
-      const hasOccurrenceThreshold = observation.openAfterOccurrences !== undefined;
-      const active = existing.state === "ACTIVE"
-        || (!hasTimeThreshold && !hasOccurrenceThreshold)
-        || (hasTimeThreshold && age >= observation.openAfterMs!)
-        || (hasOccurrenceThreshold && occurrences >= observation.openAfterOccurrences!);
-      const changed = await tx.update(operationalIncidents).set({
-        kind: observation.kind,
-        severity: observation.severity,
-        state: active ? "ACTIVE" : "PENDING",
-        summary: observation.summary,
-        cause: observation.cause,
-        evidence: observation.evidence,
-        occurrenceCount: occurrences,
-        lastObservedAt: now,
-        openedAt: active ? existing.openedAt ?? now : null,
-        updatedAt: now,
-      }).where(eq(operationalIncidents.id, existing.id)).returning();
+          openedAt: active ? (existing.openedAt ?? now) : null,
+          updatedAt: now,
+        })
+        .where(eq(operationalIncidents.id, existing.id))
+        .returning();
       return existing.state === "PENDING" && active
         ? { type: "opened" as const, incident: changed[0]! }
         : null;
@@ -565,10 +618,17 @@ export class IncidentController {
 
   private async resolve(fingerprint: string): Promise<void> {
     const transition = await this.db.transaction(async (tx) => {
-      const rows = await tx.select().from(operationalIncidents).where(and(
-        eq(operationalIncidents.fingerprint, fingerprint),
-        ne(operationalIncidents.state, "RESOLVED"),
-      )).for("update").limit(1);
+      const rows = await tx
+        .select()
+        .from(operationalIncidents)
+        .where(
+          and(
+            eq(operationalIncidents.fingerprint, fingerprint),
+            ne(operationalIncidents.state, "RESOLVED"),
+          ),
+        )
+        .for("update")
+        .limit(1);
       const incident = rows[0];
       if (!incident) return null;
       if (incident.state === "PENDING") {
@@ -576,17 +636,24 @@ export class IncidentController {
         return null;
       }
       const now = new Date();
-      const resolved = await tx.update(operationalIncidents).set({
-        state: "RESOLVED",
-        resolvedAt: now,
-        updatedAt: now,
-      }).where(eq(operationalIncidents.id, incident.id)).returning();
+      const resolved = await tx
+        .update(operationalIncidents)
+        .set({
+          state: "RESOLVED",
+          resolvedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(operationalIncidents.id, incident.id))
+        .returning();
       return resolved[0] ?? null;
     });
     if (transition) this.logTransition("resolved", transition);
   }
 
-  private logTransition(action: "opened" | "resolved", incident: typeof operationalIncidents.$inferSelect): void {
+  private logTransition(
+    action: "opened" | "resolved",
+    incident: typeof operationalIncidents.$inferSelect,
+  ): void {
     const fields = {
       incidentId: incident.id,
       fingerprint: incident.fingerprint,

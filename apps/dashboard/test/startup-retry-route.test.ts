@@ -1,4 +1,8 @@
-import { authenticatedRequest, installAuthenticatedFetch, restoreFetch } from "./authenticated-request";
+import {
+  authenticatedRequest,
+  installAuthenticatedFetch,
+  restoreFetch,
+} from "./authenticated-request";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { POST } from "../src/app/api/groups/[groupId]/variants/[variantId]/revisions/[revision]/startup-retry/route";
 

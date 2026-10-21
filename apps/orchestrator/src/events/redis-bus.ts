@@ -30,7 +30,9 @@ export class RedisEventBus {
   public async close(): Promise<void> {
     try {
       if (this.redis.status === "ready") await this.redis.quit();
-    } finally { this.redis.disconnect(); }
+    } finally {
+      this.redis.disconnect();
+    }
   }
 
   // Notify proxies when a backend becomes available or unavailable.

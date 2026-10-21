@@ -8,7 +8,11 @@ test("shared contract fixtures match the TypeScript protocol", async () => {
     new URL("../../../../contracts/fixtures/proxy-control.json", import.meta.url),
   ).json();
   expect(heartbeat).toEqual({ ready: true, playerCount: 12, acceptingConnections: false });
-  expect(control).toEqual({ lifecycleState: "DRAINING", acceptingConnections: false, controlLeaseMs: 30_000 });
+  expect(control).toEqual({
+    lifecycleState: "DRAINING",
+    acceptingConnections: false,
+    controlLeaseMs: 30_000,
+  });
   const transfer = await Bun.file(
     new URL("../../../../contracts/fixtures/transfer-players.json", import.meta.url),
   ).json();

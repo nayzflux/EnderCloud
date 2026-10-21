@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { createReadStream } from "node:fs";
-import { readdir,stat } from "node:fs/promises";
-import { relative,resolve,sep } from "node:path";
+import { readdir, stat } from "node:fs/promises";
+import { relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
@@ -13,10 +13,14 @@ export class TemplateArchiveService {
   public constructor(private readonly db: Database) {}
 
   public async open(layerId: string, checksum: string): Promise<Response | null> {
-    const rows = await this.db.select({
-      templatePath: templateLayers.templatePath,
-      checksum: templateLayers.checksum,
-    }).from(templateLayers).where(eq(templateLayers.id, layerId)).limit(1);
+    const rows = await this.db
+      .select({
+        templatePath: templateLayers.templatePath,
+        checksum: templateLayers.checksum,
+      })
+      .from(templateLayers)
+      .where(eq(templateLayers.id, layerId))
+      .limit(1);
     const layer = rows[0];
     if (!layer || layer.checksum !== checksum) return null;
 
@@ -52,12 +56,15 @@ export class TemplateArchiveService {
         await this.appendDirectory(archive, root, path);
       } else if (entry.isFile()) {
         const metadata = await stat(path);
-        await pipeline(createReadStream(path), archive.entry({
-          name,
-          type: "file",
-          size: metadata.size,
-          mode: 0o644,
-        }));
+        await pipeline(
+          createReadStream(path),
+          archive.entry({
+            name,
+            type: "file",
+            size: metadata.size,
+            mode: 0o644,
+          }),
+        );
       }
     }
   }
@@ -67,8 +74,7 @@ export class TemplateArchiveService {
     headers: Parameters<ReturnType<typeof pack>["entry"]>[0],
   ): Promise<void> {
     await new Promise<void>((resolveEntry, rejectEntry) => {
-      const callback = (error?: Error | null) =>
-        error ? rejectEntry(error) : resolveEntry();
+      const callback = (error?: Error | null) => (error ? rejectEntry(error) : resolveEntry());
       archive.entry(headers, callback).end();
     });
   }
@@ -87,9 +93,7 @@ function toWebStream(stream: Readable): ReadableStream<Uint8Array> {
             return;
           }
           controller.enqueue(
-            next.value instanceof Uint8Array
-              ? next.value
-              : Buffer.from(next.value),
+            next.value instanceof Uint8Array ? next.value : Buffer.from(next.value),
           );
         } catch (error) {
           controller.error(error);

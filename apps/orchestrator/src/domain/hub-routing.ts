@@ -29,8 +29,7 @@ export function allocateHubPlayers(
       .filter((candidate) => candidate.effectiveLoad < candidate.maximumPlayers)
       .sort(
         (left, right) =>
-          left.effectiveLoad - right.effectiveLoad ||
-          left.id.localeCompare(right.id),
+          left.effectiveLoad - right.effectiveLoad || left.id.localeCompare(right.id),
       )[0];
     if (!target) {
       rejectedPlayers.push(playerId);

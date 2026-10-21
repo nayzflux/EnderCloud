@@ -17,4 +17,3 @@ these MDX files directly; edit the source once.
 - [Original reliability audit](AUDIT_FIABILITE_2026-10-21.md)
 
 The orchestrator's generated OpenAPI schema is at `/openapi` and requires an administrator session.
-

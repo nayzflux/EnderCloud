@@ -18,18 +18,19 @@ describe("environment configuration", () => {
   });
 
   test("rejects removed names and invalid log levels", () => {
-    expect(() => loadConfig({ ...database, ORCHESTRATOR_PORT: "8080" }))
-      .toThrow("use ORCHESTRATOR_LISTEN_PORT");
-    expect(() => loadConfig({ ...database, ORCHESTRATOR_LOG_LEVEL: "verbose" }))
-      .toThrow("debug, info, warn or error");
-    expect(() => loadConfig({ ...database, INSTANCE_START_CONCURRENCY: "65" }))
-      .toThrow("between 1 and 64");
-    expect(() => loadConfig({ DATABASE_URL: "https://database.invalid" }))
-      .toThrow("postgres:");
-    expect(() => loadConfig({ DATABASE_URL: "postgres://endercloud@database:5432/endercloud" }))
-      .toThrow("explicit PostgreSQL password");
+    expect(() => loadConfig({ ...database, ORCHESTRATOR_PORT: "8080" })).toThrow(
+      "use ORCHESTRATOR_LISTEN_PORT",
+    );
+    expect(() => loadConfig({ ...database, ORCHESTRATOR_LOG_LEVEL: "verbose" })).toThrow(
+      "debug, info, warn or error",
+    );
+    expect(() => loadConfig({ ...database, INSTANCE_START_CONCURRENCY: "65" })).toThrow(
+      "between 1 and 64",
+    );
+    expect(() => loadConfig({ DATABASE_URL: "https://database.invalid" })).toThrow("postgres:");
+    expect(() =>
+      loadConfig({ DATABASE_URL: "postgres://endercloud@database:5432/endercloud" }),
+    ).toThrow("explicit PostgreSQL password");
     expect(() => loadConfig({})).toThrow("DATABASE_URL is required");
   });
-
-
 });

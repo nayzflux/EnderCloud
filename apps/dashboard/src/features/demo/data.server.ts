@@ -33,8 +33,7 @@ import type {
  * ticking like a live cluster.
  */
 
-const ID_ALPHABET =
-  "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const HEX = "0123456789abcdef";
 const WORLD_SEED = 0x5eed_c10d;
 
@@ -118,10 +117,7 @@ interface SessionBlueprint {
   readonly players: number;
   readonly connected: number;
   readonly detached?: boolean;
-  readonly deadlineKind?: Extract<
-    ActiveDeadlineKind,
-    "PLAYER_TRANSFER" | "LOBBY_STALE"
-  >;
+  readonly deadlineKind?: Extract<ActiveDeadlineKind, "PLAYER_TRANSFER" | "LOBBY_STALE">;
 }
 
 interface GroupBlueprint {
@@ -261,10 +257,22 @@ const blueprints: readonly GroupBlueprint[] = [
         },
       },
       { lifecycleState: "RUNNING", availabilityState: "OPEN", load: 0, ageSeconds: 1_240 },
-      { lifecycleState: "RUNNING", availabilityState: "OPEN", variantIndex: 1, load: 0, ageSeconds: 900 },
+      {
+        lifecycleState: "RUNNING",
+        availabilityState: "OPEN",
+        variantIndex: 1,
+        load: 0,
+        ageSeconds: 900,
+      },
       { lifecycleState: "CREATING", availabilityState: "OPEN", load: 0, ageSeconds: 12 },
       { lifecycleState: "DRAINING", availabilityState: "RESERVED", load: 0.08, ageSeconds: 2_600 },
-      { lifecycleState: "FAILED", availabilityState: "OPEN", variantIndex: 1, load: 0, ageSeconds: 310 },
+      {
+        lifecycleState: "FAILED",
+        availabilityState: "OPEN",
+        variantIndex: 1,
+        load: 0,
+        ageSeconds: 310,
+      },
     ],
     queueParties: 11,
     detachedSessions: [
@@ -344,7 +352,13 @@ const blueprints: readonly GroupBlueprint[] = [
         },
       },
       { lifecycleState: "RUNNING", availabilityState: "OPEN", load: 0, ageSeconds: 2_100 },
-      { lifecycleState: "RUNNING", availabilityState: "OPEN", variantIndex: 1, load: 0, ageSeconds: 1_700 },
+      {
+        lifecycleState: "RUNNING",
+        availabilityState: "OPEN",
+        variantIndex: 1,
+        load: 0,
+        ageSeconds: 1_700,
+      },
       { lifecycleState: "STARTING", availabilityState: "OPEN", load: 0, ageSeconds: 31 },
       { lifecycleState: "STOPPING", availabilityState: "OPEN", load: 0, ageSeconds: 4_820 },
       {
@@ -504,20 +518,26 @@ function buildWorld(now: number): MockWorld {
           memoryBytes: variant.memoryGiB * 1024 ** 3,
           cpu: variant.cpu,
           environment: {
-            ...(blueprint.type === "proxy" ? {
-              TYPE: "CUSTOM", CUSTOM_FAMILY: "velocity", BUNGEE_JAR_FILE: "/server/velocity.jar",
-            } : { EULA: "TRUE", TYPE: "PAPER" }),
+            ...(blueprint.type === "proxy"
+              ? {
+                  TYPE: "CUSTOM",
+                  CUSTOM_FAMILY: "velocity",
+                  BUNGEE_JAR_FILE: "/server/velocity.jar",
+                }
+              : { EULA: "TRUE", TYPE: "PAPER" }),
             MEMORY: `${variant.memoryGiB}G`,
             EC_GROUP: blueprint.id,
             EC_VARIANT: variant.id,
           },
         },
-        startup: variant.startup ? {
-          ...variant.startup,
-          nextRetryAt: null,
-          lastFailureAt: ago(now, 45),
-          lastFailedInstanceId: null,
-        } : null,
+        startup: variant.startup
+          ? {
+              ...variant.startup,
+              nextRetryAt: null,
+              lastFailureAt: ago(now, 45),
+              lastFailedInstanceId: null,
+            }
+          : null,
       };
     });
 
@@ -534,8 +554,7 @@ function buildWorld(now: number): MockWorld {
         spec.lifecycleState === "RUNNING" ||
         spec.lifecycleState === "DRAINING" ||
         spec.lifecycleState === "STOPPING";
-      const draining =
-        spec.lifecycleState === "DRAINING" || spec.lifecycleState === "STOPPING";
+      const draining = spec.lifecycleState === "DRAINING" || spec.lifecycleState === "STOPPING";
       const playerCount = Math.round((spec.load ?? 0) * blueprint.maximumPlayers);
 
       let session: (DashboardSession & { readonly groupId: string }) | null = null;
@@ -559,16 +578,11 @@ function buildWorld(now: number): MockWorld {
           teamCount: blueprint.matchmaking?.teamCount ?? 0,
           createdAt: ago(now, spec.session.ageSeconds),
           startedAt:
-            spec.session.state === "RUNNING"
-              ? ago(now, spec.session.ageSeconds - 12)
-              : null,
+            spec.session.state === "RUNNING" ? ago(now, spec.session.ageSeconds - 12) : null,
           finishedAt: null,
           updatedAt: ago(now, between(random, 1, 9)),
         };
-        sessions.set(
-          sessionId,
-          buildSessionRecord(random, now, blueprint, session, spec.session),
-        );
+        sessions.set(sessionId, buildSessionRecord(random, now, blueprint, session, spec.session));
         groupSessions.push(session);
       }
 
@@ -586,27 +600,27 @@ function buildWorld(now: number): MockWorld {
         maximumPlayers: blueprint.maximumPlayers,
         createdAt,
         startingAt: started ? ago(now, spec.ageSeconds - 6) : null,
-        startupDeadline:
-          spec.lifecycleState === "STARTING" ? ago(now, -2) : null,
+        startupDeadline: spec.lifecycleState === "STARTING" ? ago(now, -2) : null,
         runningAt: running ? ago(now, spec.ageSeconds - 24) : null,
         renewalDeadline:
-          running && blueprint.type === "hub"
-            ? ago(now, spec.ageSeconds - 24 - 4 * 60 * 60)
-            : null,
+          running && blueprint.type === "hub" ? ago(now, spec.ageSeconds - 24 - 4 * 60 * 60) : null,
         replacesInstanceId: null,
         drainingAt: draining ? ago(now, Math.min(spec.ageSeconds, 180)) : null,
         drainDeadline: draining ? ago(now, -420) : null,
         drainReason: draining ? (spec.drainReason ?? "NORMAL") : null,
         stoppingAt:
-          spec.lifecycleState === "STOPPING"
-            ? ago(now, Math.min(spec.ageSeconds, 12))
-            : null,
-        shutdownDeadline:
-          spec.lifecycleState === "STOPPING" ? ago(now, -8) : null,
+          spec.lifecycleState === "STOPPING" ? ago(now, Math.min(spec.ageSeconds, 12)) : null,
+        shutdownDeadline: spec.lifecycleState === "STOPPING" ? ago(now, -8) : null,
         updatedAt: ago(now, between(random, 1, 12)),
-        ...(blueprint.type === "proxy" ? {
-          proxy: { lastHeartbeatAt: ago(now, 4), ready: running, acceptingConnections: spec.lifecycleState === "RUNNING" },
-        } : {}),
+        ...(blueprint.type === "proxy"
+          ? {
+              proxy: {
+                lastHeartbeatAt: ago(now, 4),
+                ready: running,
+                acceptingConnections: spec.lifecycleState === "RUNNING",
+              },
+            }
+          : {}),
       };
 
       groupInstances.push(instance);
@@ -636,10 +650,7 @@ function buildWorld(now: number): MockWorld {
         finishedAt: null,
         updatedAt: ago(now, between(random, 1, 5)),
       };
-      sessions.set(
-        sessionId,
-        buildSessionRecord(random, now, blueprint, session, spec),
-      );
+      sessions.set(sessionId, buildSessionRecord(random, now, blueprint, session, spec));
       groupSessions.push(session);
     }
 
@@ -647,19 +658,14 @@ function buildWorld(now: number): MockWorld {
     queues.set(blueprint.id, queueEntries);
 
     const activeInstances = groupInstances.filter(
-      (instance) =>
-        instance.lifecycleState !== "STOPPED" &&
-        instance.lifecycleState !== "FAILED",
+      (instance) => instance.lifecycleState !== "STOPPED" && instance.lifecycleState !== "FAILED",
     ).length;
     const warmInstances = groupInstances.filter(
-      (instance) =>
-        instance.lifecycleState === "RUNNING" &&
-        instance.availabilityState === "OPEN",
+      (instance) => instance.lifecycleState === "RUNNING" && instance.availabilityState === "OPEN",
     ).length;
     const pendingWarmInstances = groupInstances.filter(
       (instance) =>
-        instance.lifecycleState === "CREATING" ||
-        instance.lifecycleState === "STARTING",
+        instance.lifecycleState === "CREATING" || instance.lifecycleState === "STARTING",
     ).length;
     const reservedInstances = groupInstances.filter(
       (instance) => instance.availabilityState === "RESERVED",
@@ -691,10 +697,7 @@ function buildWorld(now: number): MockWorld {
       routing: blueprint.routing,
       queue: {
         partyCount: queueEntries.length,
-        playerCount: queueEntries.reduce(
-          (total, entry) => total + entry.players.length,
-          0,
-        ),
+        playerCount: queueEntries.reduce((total, entry) => total + entry.players.length, 0),
         oldestJoinedAt: queueEntries.at(0)?.joinedAt ?? null,
       },
       variants,
@@ -705,38 +708,26 @@ function buildWorld(now: number): MockWorld {
 
   const summary = {
     enabledGroups: groups.filter((group) => group.enabled).length,
-    activeInstances: groups.reduce(
-      (total, group) => total + group.capacity.activeInstances,
-      0,
-    ),
+    activeInstances: groups.reduce((total, group) => total + group.capacity.activeInstances, 0),
     runningInstances: groups.reduce(
       (total, group) =>
-        total +
-        group.instances.filter((instance) => instance.lifecycleState === "RUNNING")
-          .length,
+        total + group.instances.filter((instance) => instance.lifecycleState === "RUNNING").length,
       0,
     ),
-    warmInstances: groups.reduce(
-      (total, group) => total + group.capacity.warmInstances,
-      0,
-    ),
+    warmInstances: groups.reduce((total, group) => total + group.capacity.warmInstances, 0),
     pendingWarmInstances: groups.reduce(
       (total, group) => total + group.capacity.pendingWarmInstances,
       0,
     ),
-    reservedInstances: groups.reduce(
-      (total, group) => total + group.capacity.reservedInstances,
-      0,
-    ),
-    playersOnline: groups.filter((group) => group.type !== "proxy").reduce(
-      (total, group) =>
-        total +
-        group.instances.reduce(
-          (groupTotal, instance) => groupTotal + instance.playerCount,
-          0,
-        ),
-      0,
-    ),
+    reservedInstances: groups.reduce((total, group) => total + group.capacity.reservedInstances, 0),
+    playersOnline: groups
+      .filter((group) => group.type !== "proxy")
+      .reduce(
+        (total, group) =>
+          total +
+          group.instances.reduce((groupTotal, instance) => groupTotal + instance.playerCount, 0),
+        0,
+      ),
     activeSessions: groups.reduce(
       (total, group) =>
         total +
@@ -748,21 +739,15 @@ function buildWorld(now: number): MockWorld {
         ).length,
       0,
     ),
-    queuedParties: groups.reduce(
-      (total, group) => total + group.queue.partyCount,
-      0,
-    ),
-    queuedPlayers: groups.reduce(
-      (total, group) => total + group.queue.playerCount,
-      0,
-    ),
+    queuedParties: groups.reduce((total, group) => total + group.queue.partyCount, 0),
+    queuedPlayers: groups.reduce((total, group) => total + group.queue.playerCount, 0),
     activeIncidentCount: 2,
     criticalIncidentCount: 1,
   } satisfies DashboardClusterSnapshot["summary"];
 
   const hosts: DashboardHost[] = MOCK_HOST_IDS.map((hostId, index) => {
-    const assigned = [...instances.values()].filter((record) =>
-      record.instance.hostId === hostId && record.instance.lifecycleState !== "STOPPED"
+    const assigned = [...instances.values()].filter(
+      (record) => record.instance.hostId === hostId && record.instance.lifecycleState !== "STOPPED",
     );
     return {
       id: hostId,
@@ -807,10 +792,7 @@ function buildQueue(
   // order the matchmaker consumes it in.
   let waitSeconds = 0;
   for (let index = 0; index < blueprint.queueParties; index += 1) {
-    const partySize = Math.max(
-      1,
-      between(random, 1, Math.max(1, maximumPartySize + 1)),
-    );
+    const partySize = Math.max(1, between(random, 1, Math.max(1, maximumPartySize + 1)));
     const players = Array.from({ length: partySize }, () => uuid(random));
     entries.push({
       id: internalId(random),
@@ -917,11 +899,7 @@ function buildSessionRecord(
   for (let ticketIndex = 0; ticketIndex < ticketCount; ticketIndex += 1) {
     const players: (typeof tickets)[number]["players"] = [];
     const partyId = uuid(random);
-    for (
-      let slot = 0;
-      slot < teamSize && assigned < spec.players;
-      slot += 1, assigned += 1
-    ) {
+    for (let slot = 0; slot < teamSize && assigned < spec.players; slot += 1, assigned += 1) {
       const connected = connectedBudget > 0;
       if (connected) connectedBudget -= 1;
       const state: SessionPlayerState = connected
@@ -953,9 +931,7 @@ function buildSessionRecord(
   const transfers = session.instanceId
     ? Array.from({ length: between(random, 1, 3) }, () => {
         const createdSeconds = between(random, 5, spec.ageSeconds + 5);
-        const completed =
-          spec.state === "RUNNING" ||
-          spec.deadlineKind === "LOBBY_STALE";
+        const completed = spec.state === "RUNNING" || spec.deadlineKind === "LOBBY_STALE";
         return {
           id: internalId(random),
           instanceId: session.instanceId as string,
@@ -970,11 +946,14 @@ function buildSessionRecord(
     : [];
 
   const configuredTeams = blueprint.matchmaking?.teamCount ?? 1;
-  const expectedProfile = Array.from({ length: configuredTeams }, (_, index) =>
-    tickets[index]?.players.length ?? 0
+  const expectedProfile = Array.from(
+    { length: configuredTeams },
+    (_, index) => tickets[index]?.players.length ?? 0,
   ).sort((left, right) => left - right);
-  const connectedProfile = Array.from({ length: configuredTeams }, (_, index) =>
-    tickets[index]?.players.filter((player) => player.state === "CONNECTED").length ?? 0
+  const connectedProfile = Array.from(
+    { length: configuredTeams },
+    (_, index) =>
+      tickets[index]?.players.filter((player) => player.state === "CONNECTED").length ?? 0,
   ).sort((left, right) => left - right);
   return {
     session,
@@ -1103,9 +1082,7 @@ export function mockGroupMonitoring(
   const group = mockCluster(now).groups.find((candidate) => candidate.id === groupId);
   if (!group) return null;
   const configuration = monitoringRangeConfig[range];
-  const pointCount = Math.floor(
-    configuration.durationMs / configuration.resolutionMs,
-  ) + 1;
+  const pointCount = Math.floor(configuration.durationMs / configuration.resolutionMs) + 1;
 
   return {
     schemaVersion: 1,
@@ -1147,29 +1124,28 @@ export function mockGroupMonitoring(
   };
 }
 
-export function mockVariantGraph(
-  groupId: string,
-  now = Date.now(),
-): DashboardVariantGraph | null {
+export function mockVariantGraph(groupId: string, now = Date.now()): DashboardVariantGraph | null {
   const world = buildWorld(now);
   const group = world.groups.find((candidate) => candidate.id === groupId);
   if (!group) return null;
 
-  const shared = group.type === "minigame" ? ["minecraft-paper", group.id.split("-")[0]!, group.id] : [];
+  const shared =
+    group.type === "minigame" ? ["minecraft-paper", group.id.split("-")[0]!, group.id] : [];
   const layerIds = [...new Set([...shared, ...group.variants.map((variant) => variant.id)])];
   return {
     schemaVersion: 1,
     generatedAt: world.generatedAt,
     groupId,
     layers: layerIds.map((id, index) => {
-      const runtime: VariantRuntimePatch = index === 0 || shared.length === 0
-        ? {
-            image: group.variants[0]!.runtime.image,
-            memoryBytes: group.variants[0]!.runtime.memoryBytes,
-            cpu: group.variants[0]!.runtime.cpu,
-            environment: { TYPE: "CUSTOM" },
-          }
-        : { environment: id === group.id ? { MODE_ID: groupId } : {} };
+      const runtime: VariantRuntimePatch =
+        index === 0 || shared.length === 0
+          ? {
+              image: group.variants[0]!.runtime.image,
+              memoryBytes: group.variants[0]!.runtime.memoryBytes,
+              cpu: group.variants[0]!.runtime.cpu,
+              environment: { TYPE: "CUSTOM" },
+            }
+          : { environment: id === group.id ? { MODE_ID: groupId } : {} };
       return {
         id,
         checksum: `${(index + 1).toString(16)}`.repeat(64).slice(0, 64),
@@ -1189,10 +1165,7 @@ export function mockVariantGraph(
   };
 }
 
-export function mockInstance(
-  instanceId: string,
-  now = Date.now(),
-): DashboardInstanceDetail | null {
+export function mockInstance(instanceId: string, now = Date.now()): DashboardInstanceDetail | null {
   const world = buildWorld(now);
   const record = world.instances.get(instanceId);
   if (!record) return null;
@@ -1202,21 +1175,19 @@ export function mockInstance(
     activeDeadline:
       record.instance.lifecycleState === "STARTING" && record.instance.startupDeadline
         ? { kind: "INSTANCE_STARTUP", at: record.instance.startupDeadline }
-        : record.instance.lifecycleState === "RUNNING" &&
-            record.instance.renewalDeadline
+        : record.instance.lifecycleState === "RUNNING" && record.instance.renewalDeadline
           ? { kind: "INSTANCE_RENEWAL", at: record.instance.renewalDeadline }
-        : record.instance.lifecycleState === "DRAINING" && record.instance.drainDeadline
-          ? {
-              kind:
-                record.instance.drainReason === "SESSION_CANCELLED"
-                  ? "CANCELLED_INSTANCE_DRAIN"
-                  : "INSTANCE_DRAIN",
-              at: record.instance.drainDeadline,
-            }
-          : record.instance.lifecycleState === "STOPPING" &&
-              record.instance.shutdownDeadline
-            ? { kind: "INSTANCE_SHUTDOWN", at: record.instance.shutdownDeadline }
-            : null,
+          : record.instance.lifecycleState === "DRAINING" && record.instance.drainDeadline
+            ? {
+                kind:
+                  record.instance.drainReason === "SESSION_CANCELLED"
+                    ? "CANCELLED_INSTANCE_DRAIN"
+                    : "INSTANCE_DRAIN",
+                at: record.instance.drainDeadline,
+              }
+            : record.instance.lifecycleState === "STOPPING" && record.instance.shutdownDeadline
+              ? { kind: "INSTANCE_SHUTDOWN", at: record.instance.shutdownDeadline }
+              : null,
     instance: {
       ...record.instance,
       groupId: record.groupId,
@@ -1233,10 +1204,7 @@ export function mockInstance(
   };
 }
 
-export function mockSession(
-  sessionId: string,
-  now = Date.now(),
-): DashboardSessionDetail | null {
+export function mockSession(sessionId: string, now = Date.now()): DashboardSessionDetail | null {
   const world = buildWorld(now);
   const record = world.sessions.get(sessionId);
   if (!record) return null;
@@ -1244,8 +1212,7 @@ export function mockSession(
     schemaVersion: 2,
     generatedAt: world.generatedAt,
     activeDeadline:
-      record.session.state === "WAITING_FOR_INSTANCE" &&
-      record.session.instanceAcquisitionDeadline
+      record.session.state === "WAITING_FOR_INSTANCE" && record.session.instanceAcquisitionDeadline
         ? {
             kind: "INSTANCE_ACQUISITION",
             at: record.session.instanceAcquisitionDeadline,
@@ -1253,8 +1220,7 @@ export function mockSession(
         : record.transfers.find((transfer) => transfer.state === "PENDING")
           ? {
               kind: "PLAYER_TRANSFER",
-              at: record.transfers.find((transfer) => transfer.state === "PENDING")!
-                .expiresAt,
+              at: record.transfers.find((transfer) => transfer.state === "PENDING")!.expiresAt,
             }
           : record.session.lobbyStaleDeadline
             ? {

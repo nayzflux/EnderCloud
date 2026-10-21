@@ -98,20 +98,20 @@ describe("structured placement diagnostics", () => {
 
   test("distinguishes missing hosts and each exhausted resource", () => {
     expect(classifyPlacementBlock([], requested)).toBe("NO_ONLINE_HOST");
-    expect(classifyPlacementBlock([
-      { freeCpu: 1, freeMemoryBytes: 8 * gibibyte },
-    ], requested)).toBe("INSUFFICIENT_CPU");
-    expect(classifyPlacementBlock([
-      { freeCpu: 4, freeMemoryBytes: 2 * gibibyte },
-    ], requested)).toBe("INSUFFICIENT_MEMORY");
-    expect(classifyPlacementBlock([
-      { freeCpu: 1, freeMemoryBytes: 2 * gibibyte },
-    ], requested)).toBe("INSUFFICIENT_RESOURCES");
+    expect(classifyPlacementBlock([{ freeCpu: 1, freeMemoryBytes: 8 * gibibyte }], requested)).toBe(
+      "INSUFFICIENT_CPU",
+    );
+    expect(classifyPlacementBlock([{ freeCpu: 4, freeMemoryBytes: 2 * gibibyte }], requested)).toBe(
+      "INSUFFICIENT_MEMORY",
+    );
+    expect(classifyPlacementBlock([{ freeCpu: 1, freeMemoryBytes: 2 * gibibyte }], requested)).toBe(
+      "INSUFFICIENT_RESOURCES",
+    );
   });
 
   test("reports a placement conflict when advertised capacity should fit", () => {
-    expect(classifyPlacementBlock([
-      { freeCpu: 4, freeMemoryBytes: 8 * gibibyte },
-    ], requested)).toBe("PLACEMENT_CONFLICT");
+    expect(classifyPlacementBlock([{ freeCpu: 4, freeMemoryBytes: 8 * gibibyte }], requested)).toBe(
+      "PLACEMENT_CONFLICT",
+    );
   });
 });

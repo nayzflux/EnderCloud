@@ -1,6 +1,9 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { AgentExecutor } from "../../src/executor/agent-executor.ts";
-import { ExecutionHostUnavailableError, ExecutionCommandSupersededError } from "@endercloud/contracts/executor";
+import {
+  ExecutionHostUnavailableError,
+  ExecutionCommandSupersededError,
+} from "@endercloud/contracts/executor";
 import { Logger } from "@endercloud/runtime/logger";
 import type { HostService } from "../../src/modules/hosts/service.ts";
 
@@ -9,14 +12,25 @@ afterEach(() => {
 });
 
 test("agent authentication and infrastructure failures do not become variant failures", async () => {
-  const hosts = {getTarget: async () => ({controlUrl: "http://agent"}), recordControlSuccess: async () => {}, recordControlFailure: async () => {}} as unknown as HostService;
-  const executor = new AgentExecutor(hosts, {probeTimeoutMs: 1000, operationTimeoutMs: 1000});
+  const hosts = {
+    getTarget: async () => ({ controlUrl: "http://agent" }),
+    recordControlSuccess: async () => {},
+    recordControlFailure: async () => {},
+  } as unknown as HostService;
+  const executor = new AgentExecutor(hosts, { probeTimeoutMs: 1000, operationTimeoutMs: 1000 });
   for (const status of [401, 403, 503]) {
-    spyOn(globalThis, "fetch").mockImplementation((async () => new Response(null, {status})) as unknown as typeof fetch);
-    await expect(executor.listManagedInstances("host-one")).rejects.toBeInstanceOf(ExecutionHostUnavailableError);
+    spyOn(globalThis, "fetch").mockImplementation(
+      (async () => new Response(null, { status })) as unknown as typeof fetch,
+    );
+    await expect(executor.listManagedInstances("host-one")).rejects.toBeInstanceOf(
+      ExecutionHostUnavailableError,
+    );
   }
-  spyOn(globalThis, "fetch").mockImplementation((async () => Response.json({error: "STALE_OPERATION"}, {status: 409})) as unknown as typeof fetch);
-  await expect(executor.listManagedInstances("host-one")).rejects.toBeInstanceOf(ExecutionCommandSupersededError);
+  spyOn(globalThis, "fetch").mockImplementation((async () =>
+    Response.json({ error: "STALE_OPERATION" }, { status: 409 })) as unknown as typeof fetch);
+  await expect(executor.listManagedInstances("host-one")).rejects.toBeInstanceOf(
+    ExecutionCommandSupersededError,
+  );
 });
 
 test("agent executor propagates request and command context headers", async () => {
@@ -32,13 +46,17 @@ test("agent executor propagates request and command context headers", async () =
     recordControlFailure: async () => {},
   } as unknown as HostService;
   const logger = new Logger("debug", { sink: () => {} });
-  const executor = new AgentExecutor(hosts, {
-    probeTimeoutMs: 1_000,
-    operationTimeoutMs: 10_000,
-  }, logger);
+  const executor = new AgentExecutor(
+    hosts,
+    {
+      probeTimeoutMs: 1_000,
+      operationTimeoutMs: 10_000,
+    },
+    logger,
+  );
 
   await logger.runWithContext({ requestId: "request-123", commandId: "command-123" }, () =>
-    executor.listManagedInstances("host-1")
+    executor.listManagedInstances("host-1"),
   );
 
   expect(receivedHeaders.get("x-request-id")).toBe("request-123");
@@ -56,13 +74,21 @@ test("agent executor distinguishes transport outages from agent failures", async
   let controlFailures = 0;
   const hosts = {
     getTarget: async () => ({ controlUrl: "http://agent:8090" }),
-    recordControlSuccess: async () => { controlSuccesses += 1; },
-    recordControlFailure: async () => { controlFailures += 1; },
+    recordControlSuccess: async () => {
+      controlSuccesses += 1;
+    },
+    recordControlFailure: async () => {
+      controlFailures += 1;
+    },
   } as unknown as HostService;
-  const executor = new AgentExecutor(hosts, {
-    probeTimeoutMs: 1_000,
-    operationTimeoutMs: 10_000,
-  }, new Logger("error", { sink: () => {} }));
+  const executor = new AgentExecutor(
+    hosts,
+    {
+      probeTimeoutMs: 1_000,
+      operationTimeoutMs: 10_000,
+    },
+    new Logger("error", { sink: () => {} }),
+  );
 
   const outage = await executor.listManagedInstances("host-1").catch((error) => error);
   expect(outage).toBeInstanceOf(ExecutionHostUnavailableError);

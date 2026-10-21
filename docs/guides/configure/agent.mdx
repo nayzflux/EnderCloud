@@ -73,16 +73,16 @@ The agent API is private. Control routes require this host's `AGENT_CONTROL_TOKE
 remain public on that private interface. Heartbeats and template downloads use its distinct
 `AGENT_ORCHESTRATOR_TOKEN`.
 
-| Method and path | Purpose |
-| --- | --- |
-| `GET /health/live` | Process liveness and host ID |
-| `GET /health/ready` | Docker inventory probe. Returns 503 when Docker is unavailable |
-| `GET /api/v1/instances` | List managed containers owned by this agent ID |
-| `GET /api/v1/instances/{id}` | Inspect runtime existence and state |
-| `GET /api/v1/instances/{id}/logs` | Read a bounded Docker log tail |
-| `PUT /api/v1/instances/{id}` | Materialize templates and create or reuse an instance |
-| `POST /api/v1/instances/{id}/stop` | Stop a managed container with a bounded grace period |
-| `DELETE /api/v1/instances/{id}` | Delete an instance or one exactly matched orphan |
+| Method and path                    | Purpose                                                        |
+| ---------------------------------- | -------------------------------------------------------------- |
+| `GET /health/live`                 | Process liveness and host ID                                   |
+| `GET /health/ready`                | Docker inventory probe. Returns 503 when Docker is unavailable |
+| `GET /api/v1/instances`            | List managed containers owned by this agent ID                 |
+| `GET /api/v1/instances/{id}`       | Inspect runtime existence and state                            |
+| `GET /api/v1/instances/{id}/logs`  | Read a bounded Docker log tail                                 |
+| `PUT /api/v1/instances/{id}`       | Materialize templates and create or reuse an instance          |
+| `POST /api/v1/instances/{id}/stop` | Stop a managed container with a bounded grace period           |
+| `DELETE /api/v1/instances/{id}`    | Delete an instance or one exactly matched orphan               |
 
 The orchestrator passes `x-request-id` and, for durable work, `x-command-id`. The agent returns the
 request identifier and includes both values in structured logs.
@@ -152,35 +152,35 @@ This table lists every variable read by the agent process. Defaults come from
 
 Durations require an integer and one of `ms`, `s`, `m`, `h`, or `d`.
 
-| Variable | Required | Default | Validation and purpose |
-| --- | :---: | --- | --- |
-| `ORCHESTRATOR_URL` | Yes | None | `http:` or `https:` base URL used for heartbeats and template downloads. Also injected into managed containers |
-| `AGENT_ID` | Yes | None | 2 to 63 lowercase letters, digits, or dashes. Stable host identity |
-| `AGENT_ORCHESTRATOR_TOKEN` | Yes | None | Provisioned outgoing API key, scoped to this host |
-| `AGENT_CONTROL_TOKEN` | Yes | None | Separate inbound control secret, at least 32 characters |
-| `AGENT_VERSION` | No | `0.1.0` | Version reported in heartbeats and logs |
-| `AGENT_LISTEN_PORT` | No | `8090` | Integer from 1 to 65535. Internal HTTP listen port |
-| `AGENT_ADVERTISED_CONTROL_URL` | Yes | None | `http:` or `https:` URL that the orchestrator can reach |
-| `AGENT_ADVERTISED_GAME_ADDRESS` | Yes | None | Hostname or address that Velocity can reach for published game ports |
-| `AGENT_ALLOCATABLE_CPU` | Yes | None | Positive number of vCPU available for reservations |
-| `AGENT_ALLOCATABLE_MEMORY_BYTES` | Yes | None | Positive integer number of bytes available for reservations |
-| `AGENT_HEARTBEAT_INTERVAL` | No | `5s` | Duration of at least 1 second |
-| `AGENT_DOCKER_SOCKET` | No | Platform default | Docker socket. Defaults to `/var/run/docker.sock` on Linux and `//./pipe/docker_engine` on Windows |
-| `AGENT_DOCKER_NETWORK` | No | `endercloud` | Local Docker network attached to managed Minecraft containers |
-| `AGENT_RUNTIME_DIRECTORY` | No | `/data/runtime` | Runtime directory visible to the agent process |
-| `AGENT_RUNTIME_HOST_DIRECTORY` | Yes | None | Matching absolute runtime directory as seen by the Docker daemon |
-| `AGENT_TEMPLATE_CACHE_DIRECTORY` | No | `/data/template-cache` | Persistent checksum-keyed layer cache |
-| `AGENT_TEMPLATE_DOWNLOAD_TIMEOUT` | No | `5m` | Total template acquisition deadline |
-| `AGENT_TEMPLATE_IDLE_TIMEOUT` | No | `30s` | Maximum time without download progress |
-| `AGENT_TEMPLATE_MAX_EXPANDED_BYTES` | No | `8589934592` | Maximum expanded bytes per layer |
-| `AGENT_TEMPLATE_MAX_ENTRIES` | No | `100000` | Maximum archive and cache entries |
-| `AGENT_TEMPLATE_DOWNLOAD_CONCURRENCY` | No | `4` | Concurrent layer preparations, from 1 to 32 |
-| `AGENT_ADVERTISED_PROXY_ADDRESS` | With proxy ports | None | Proxy endpoint reachable by players or a load balancer |
-| `AGENT_PROXY_PORT_START` | With proxy address | None | First dedicated proxy port |
-| `AGENT_PROXY_PORT_END` | With proxy address | None | Last dedicated proxy port, disjoint from Paper ports |
-| `AGENT_GAME_PORT_START` | No | `25565` | First port in the inclusive allocation range, from 1 to 65535 |
-| `AGENT_GAME_PORT_END` | No | `25664` | Last port in the inclusive range. Must be at least the start and at most 65535 |
-| `AGENT_LOG_LEVEL` | No | `info` | One of `debug`, `info`, `warn`, or `error` |
+| Variable                              |      Required      | Default                | Validation and purpose                                                                                         |
+| ------------------------------------- | :----------------: | ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `ORCHESTRATOR_URL`                    |        Yes         | None                   | `http:` or `https:` base URL used for heartbeats and template downloads. Also injected into managed containers |
+| `AGENT_ID`                            |        Yes         | None                   | 2 to 63 lowercase letters, digits, or dashes. Stable host identity                                             |
+| `AGENT_ORCHESTRATOR_TOKEN`            |        Yes         | None                   | Provisioned outgoing API key, scoped to this host                                                              |
+| `AGENT_CONTROL_TOKEN`                 |        Yes         | None                   | Separate inbound control secret, at least 32 characters                                                        |
+| `AGENT_VERSION`                       |         No         | `0.1.0`                | Version reported in heartbeats and logs                                                                        |
+| `AGENT_LISTEN_PORT`                   |         No         | `8090`                 | Integer from 1 to 65535. Internal HTTP listen port                                                             |
+| `AGENT_ADVERTISED_CONTROL_URL`        |        Yes         | None                   | `http:` or `https:` URL that the orchestrator can reach                                                        |
+| `AGENT_ADVERTISED_GAME_ADDRESS`       |        Yes         | None                   | Hostname or address that Velocity can reach for published game ports                                           |
+| `AGENT_ALLOCATABLE_CPU`               |        Yes         | None                   | Positive number of vCPU available for reservations                                                             |
+| `AGENT_ALLOCATABLE_MEMORY_BYTES`      |        Yes         | None                   | Positive integer number of bytes available for reservations                                                    |
+| `AGENT_HEARTBEAT_INTERVAL`            |         No         | `5s`                   | Duration of at least 1 second                                                                                  |
+| `AGENT_DOCKER_SOCKET`                 |         No         | Platform default       | Docker socket. Defaults to `/var/run/docker.sock` on Linux and `//./pipe/docker_engine` on Windows             |
+| `AGENT_DOCKER_NETWORK`                |         No         | `endercloud`           | Local Docker network attached to managed Minecraft containers                                                  |
+| `AGENT_RUNTIME_DIRECTORY`             |         No         | `/data/runtime`        | Runtime directory visible to the agent process                                                                 |
+| `AGENT_RUNTIME_HOST_DIRECTORY`        |        Yes         | None                   | Matching absolute runtime directory as seen by the Docker daemon                                               |
+| `AGENT_TEMPLATE_CACHE_DIRECTORY`      |         No         | `/data/template-cache` | Persistent checksum-keyed layer cache                                                                          |
+| `AGENT_TEMPLATE_DOWNLOAD_TIMEOUT`     |         No         | `5m`                   | Total template acquisition deadline                                                                            |
+| `AGENT_TEMPLATE_IDLE_TIMEOUT`         |         No         | `30s`                  | Maximum time without download progress                                                                         |
+| `AGENT_TEMPLATE_MAX_EXPANDED_BYTES`   |         No         | `8589934592`           | Maximum expanded bytes per layer                                                                               |
+| `AGENT_TEMPLATE_MAX_ENTRIES`          |         No         | `100000`               | Maximum archive and cache entries                                                                              |
+| `AGENT_TEMPLATE_DOWNLOAD_CONCURRENCY` |         No         | `4`                    | Concurrent layer preparations, from 1 to 32                                                                    |
+| `AGENT_ADVERTISED_PROXY_ADDRESS`      |  With proxy ports  | None                   | Proxy endpoint reachable by players or a load balancer                                                         |
+| `AGENT_PROXY_PORT_START`              | With proxy address | None                   | First dedicated proxy port                                                                                     |
+| `AGENT_PROXY_PORT_END`                | With proxy address | None                   | Last dedicated proxy port, disjoint from Paper ports                                                           |
+| `AGENT_GAME_PORT_START`               |         No         | `25565`                | First port in the inclusive allocation range, from 1 to 65535                                                  |
+| `AGENT_GAME_PORT_END`                 |         No         | `25664`                | Last port in the inclusive range. Must be at least the start and at most 65535                                 |
+| `AGENT_LOG_LEVEL`                     |         No         | `info`                 | One of `debug`, `info`, `warn`, or `error`                                                                     |
 
 The Docker socket default depends on the operating system of the agent process. The supplied
 Compose files run the agent in a Linux container and mount `/var/run/docker.sock` explicitly.
@@ -189,29 +189,29 @@ Compose files run the agent in a Linux container and mount `/var/run/docker.sock
 
 These variables configure host mounts and published ports. The agent process does not read them.
 
-| Variable | Compose file | Default | Purpose |
-| --- | --- | --- | --- |
-| `AGENT_RUNTIME_LOCAL_DIRECTORY` | Root and standalone | Required in root, `./runtime` standalone | Host directory mounted at `/data/runtime` |
-| `AGENT_PUBLISH_ADDRESS` | Standalone | Required | Private host interface for the agent control API |
-| `AGENT_PUBLISH_PORT` | Standalone | `8090` | Host port mapped to internal port 8090 |
+| Variable                        | Compose file        | Default                                  | Purpose                                          |
+| ------------------------------- | ------------------- | ---------------------------------------- | ------------------------------------------------ |
+| `AGENT_RUNTIME_LOCAL_DIRECTORY` | Root and standalone | Required in root, `./runtime` standalone | Host directory mounted at `/data/runtime`        |
+| `AGENT_PUBLISH_ADDRESS`         | Standalone          | Required                                 | Private host interface for the agent control API |
+| `AGENT_PUBLISH_PORT`            | Standalone          | `8090`                                   | Host port mapped to internal port 8090           |
 
 The local two-agent smoke test also consumes these scenario-only values:
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `SECONDARY_AGENT_GAME_ADDRESS` | Required | Address advertised by the second local agent |
-| `SECONDARY_AGENT_CPU` | `4` | Allocatable vCPU for the second agent |
-| `SECONDARY_AGENT_MEMORY_BYTES` | `8589934592` | Allocatable bytes for the second agent |
-| `SECONDARY_RUNTIME_HOST_ROOT` | Required | Second runtime path as seen by the Docker daemon |
+| Variable                       | Default      | Purpose                                          |
+| ------------------------------ | ------------ | ------------------------------------------------ |
+| `SECONDARY_AGENT_GAME_ADDRESS` | Required     | Address advertised by the second local agent     |
+| `SECONDARY_AGENT_CPU`          | `4`          | Allocatable vCPU for the second agent            |
+| `SECONDARY_AGENT_MEMORY_BYTES` | `8589934592` | Allocatable bytes for the second agent           |
+| `SECONDARY_RUNTIME_HOST_ROOT`  | Required     | Second runtime path as seen by the Docker daemon |
 
 ## Managed-container variables
 
 The agent injects these values into every managed Minecraft container after applying the variant
 environment:
 
-| Variable | Source | Consumer |
-| --- | --- | --- |
-| `ENDERCLOUD_INSTANCE_ID` | Durable instance ID | Paper bridge |
+| Variable                      | Source                   | Consumer                              |
+| ----------------------------- | ------------------------ | ------------------------------------- |
+| `ENDERCLOUD_INSTANCE_ID`      | Durable instance ID      | Paper bridge                          |
 | `ENDERCLOUD_ORCHESTRATOR_URL` | Agent `ORCHESTRATOR_URL` | Paper bridge and other server plugins |
 
 A template may set `ENDERCLOUD_REPORTED_ENDPOINT` to make the Paper bridge report a different
@@ -233,4 +233,3 @@ enough for the host's maximum simultaneous instances and ensure it does not over
 sharing the same Docker daemon.
 
 See [Multi-host execution](/docs/configure/multi-host) for routing, maintenance, and recovery procedures.
-

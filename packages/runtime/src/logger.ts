@@ -19,9 +19,16 @@ const priorities: Record<LogLevel, number> = {
 };
 
 const reservedFields = new Set([
-  "timestamp", "level", "service", "version", "event", "message", "component",
+  "timestamp",
+  "level",
+  "service",
+  "version",
+  "event",
+  "message",
+  "component",
 ]);
-const secretPattern = /(authorization|cookie|password|passwd|secret|token|api[-_]?key|environment)/i;
+const secretPattern =
+  /(authorization|cookie|password|passwd|secret|token|api[-_]?key|environment)/i;
 const urlPattern = /\b(?:postgres(?:ql)?|redis|https?):\/\/[^\s]+/gi;
 const contextStorage = new AsyncLocalStorage<LogFields>();
 const maximumDepth = 5;
@@ -32,7 +39,12 @@ const sensitiveEnvironmentValues = Object.entries(process.env)
   .map(([, value]) => value!);
 
 function eventName(message: string): string {
-  return message.toLowerCase().replace(/[^a-z0-9]+/g, ".").replace(/^\.|\.$/g, "") || "log";
+  return (
+    message
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ".")
+      .replace(/^\.|\.$/g, "") || "log"
+  );
 }
 
 function sanitizeUrl(value: string): string {
@@ -69,7 +81,13 @@ function sanitizeError(error: Error, depth: number): LogFields {
 
 function sanitize(value: unknown, depth = 0, key = ""): unknown {
   if (secretPattern.test(key)) return "[redacted]";
-  if (value === null || value === undefined || typeof value === "boolean" || typeof value === "number") return value;
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "boolean" ||
+    typeof value === "number"
+  )
+    return value;
   if (typeof value === "bigint") return value.toString();
   if (typeof value === "string") return sanitizeUrl(value).slice(0, maximumStringLength);
   if (value instanceof Date) return value.toISOString();
@@ -144,39 +162,63 @@ export class Logger {
     return { ...this.context, ...(contextStorage.getStore() ?? {}) };
   }
 
-  public debug(event: string, messageOrFields: string | LogFields = {}, fields: LogFields = {}): void {
+  public debug(
+    event: string,
+    messageOrFields: string | LogFields = {},
+    fields: LogFields = {},
+  ): void {
     this.write("debug", event, messageOrFields, fields);
   }
 
-  public info(event: string, messageOrFields: string | LogFields = {}, fields: LogFields = {}): void {
+  public info(
+    event: string,
+    messageOrFields: string | LogFields = {},
+    fields: LogFields = {},
+  ): void {
     this.write("info", event, messageOrFields, fields);
   }
 
-  public warn(event: string, messageOrFields: string | LogFields = {}, fields: LogFields = {}): void {
+  public warn(
+    event: string,
+    messageOrFields: string | LogFields = {},
+    fields: LogFields = {},
+  ): void {
     this.write("warn", event, messageOrFields, fields);
   }
 
-  public error(event: string, messageOrFields: string | LogFields = {}, fields: LogFields = {}): void {
+  public error(
+    event: string,
+    messageOrFields: string | LogFields = {},
+    fields: LogFields = {},
+  ): void {
     this.write("error", event, messageOrFields, fields);
   }
 
-  private write(level: LogLevel, eventOrMessage: string, messageOrFields: string | LogFields, fields: LogFields): void {
+  private write(
+    level: LogLevel,
+    eventOrMessage: string,
+    messageOrFields: string | LogFields,
+    fields: LogFields,
+  ): void {
     if (priorities[level] < priorities[this.minimum]) return;
     const explicitMessage = typeof messageOrFields === "string";
     const message = explicitMessage ? messageOrFields : eventOrMessage;
     const event = explicitMessage ? eventOrMessage : eventName(eventOrMessage);
     const supplied = explicitMessage ? fields : messageOrFields;
-    this.sink(level, JSON.stringify({
-      timestamp: new Date().toISOString(),
+    this.sink(
       level,
-      service: this.service,
-      version: this.version,
-      event,
-      message,
-      ...(this.component ? { component: this.component } : {}),
-      ...cleanFields(this.context),
-      ...cleanFields(contextStorage.getStore() ?? {}),
-      ...cleanFields(supplied),
-    }));
+      JSON.stringify({
+        timestamp: new Date().toISOString(),
+        level,
+        service: this.service,
+        version: this.version,
+        event,
+        message,
+        ...(this.component ? { component: this.component } : {}),
+        ...cleanFields(this.context),
+        ...cleanFields(contextStorage.getStore() ?? {}),
+        ...cleanFields(supplied),
+      }),
+    );
   }
 }

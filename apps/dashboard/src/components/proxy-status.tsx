@@ -13,8 +13,12 @@ export function ProxyStatus({ instance }: { readonly instance: DashboardInstance
       </Badge>
       <span className="text-xs text-muted-foreground">
         {instance.proxy.lastHeartbeatAt ? (
-          <>Heartbeat <Elapsed value={instance.proxy.lastHeartbeatAt} /> ago</>
-        ) : "Awaiting heartbeat"}
+          <>
+            Heartbeat <Elapsed value={instance.proxy.lastHeartbeatAt} /> ago
+          </>
+        ) : (
+          "Awaiting heartbeat"
+        )}
       </span>
     </div>
   );

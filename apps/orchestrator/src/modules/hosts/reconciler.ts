@@ -1,10 +1,10 @@
 import type { LifecycleState } from "@endercloud/contracts/domain";
-import type { Executor,RuntimeInstance } from "@endercloud/contracts/executor";
+import type { Executor, RuntimeInstance } from "@endercloud/contracts/executor";
 import { nanoid } from "@endercloud/runtime/id";
 import type { Logger } from "@endercloud/runtime/logger";
-import { eq,ne,sql } from "drizzle-orm";
+import { eq, ne, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.ts";
-import { events,executionHosts,serverGroups,serverInstances } from "../../db/schema.ts";
+import { events, executionHosts, serverGroups, serverInstances } from "../../db/schema.ts";
 import type { InstanceController } from "../instances/lifecycle.ts";
 import type { HostService } from "./service.ts";
 
@@ -46,32 +46,38 @@ export class Reconciler {
     this.running = true;
     try {
       const [databaseInstances, hostRows] = await Promise.all([
-        this.db.select({
-          id: serverInstances.id,
-          host_id: serverInstances.hostId,
-          lifecycle_state: serverInstances.lifecycleState,
-          runtime_retained: serverInstances.runtimeRetained,
-          shutdown_timeout_ms: serverGroups.shutdownTimeoutMs,
-          health_expired: sql<boolean>`server_groups.type <> 'proxy' AND ${serverInstances.paperHealthDeadline} <= now()`,
-          health_failed: sql<boolean>`server_groups.type <> 'proxy' AND ${serverInstances.paperHealthDeadline} + ${this.paperHealthConfirmationMs} * interval '1 millisecond' <= now()`,
-          startup_expired: sql<boolean>`(
+        this.db
+          .select({
+            id: serverInstances.id,
+            host_id: serverInstances.hostId,
+            lifecycle_state: serverInstances.lifecycleState,
+            runtime_retained: serverInstances.runtimeRetained,
+            shutdown_timeout_ms: serverGroups.shutdownTimeoutMs,
+            health_expired: sql<boolean>`server_groups.type <> 'proxy' AND ${serverInstances.paperHealthDeadline} <= now()`,
+            health_failed: sql<boolean>`server_groups.type <> 'proxy' AND ${serverInstances.paperHealthDeadline} + ${this.paperHealthConfirmationMs} * interval '1 millisecond' <= now()`,
+            startup_expired: sql<boolean>`(
             ${serverInstances.lifecycleState} = 'STARTING'
             AND ${serverInstances.startupDeadline} <= now()
           )`.as("startup_expired"),
-        }).from(serverInstances)
+          })
+          .from(serverInstances)
           .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
           .where(ne(serverInstances.lifecycleState, "STOPPED")),
-        this.db.select({
-          id: executionHosts.id,
-          last_heartbeat_at: executionHosts.lastHeartbeatAt,
-          last_control_contact_at: executionHosts.lastControlContactAt,
-          created_at: executionHosts.createdAt,
-        }).from(executionHosts),
+        this.db
+          .select({
+            id: executionHosts.id,
+            last_heartbeat_at: executionHosts.lastHeartbeatAt,
+            last_control_contact_at: executionHosts.lastControlContactAt,
+            created_at: executionHosts.createdAt,
+          })
+          .from(executionHosts),
       ]);
       const byHost = new Map<string, InstanceRow[]>();
       for (const instance of databaseInstances) {
         if (!instance.host_id) {
-          this.logger.error("instance.host.missing", "Active instance has no execution host", { instanceId: instance.id });
+          this.logger.error("instance.host.missing", "Active instance has no execution host", {
+            instanceId: instance.id,
+          });
           continue;
         }
         const current = byHost.get(instance.host_id) ?? [];
@@ -83,8 +89,10 @@ export class Reconciler {
       const recoveringFromRestart = now - this.startedAt < this.startupGraceMs;
       const probeable = hostRows.filter((host) => {
         const contact = host.last_control_contact_at ?? host.created_at;
-        return recoveringFromRestart ||
-          now - Math.max(host.last_heartbeat_at.getTime(), contact.getTime()) < this.offlineAfterMs;
+        return (
+          recoveringFromRestart ||
+          now - Math.max(host.last_heartbeat_at.getTime(), contact.getTime()) < this.offlineAfterMs
+        );
       });
       const probes = await Promise.allSettled(
         probeable.map(async (host) => ({
@@ -138,11 +146,15 @@ export class Reconciler {
       try {
         await this.instances.failInstance(instance.id, "HOST_OFFLINE", { hostId, reason });
       } catch (error) {
-        this.logger.error("instance.host_offline.failed", "Failed to transition offline host instance", {
-          hostId,
-          instanceId: instance.id,
-          error,
-        });
+        this.logger.error(
+          "instance.host_offline.failed",
+          "Failed to transition offline host instance",
+          {
+            hostId,
+            instanceId: instance.id,
+            error,
+          },
+        );
       }
     }
   }
@@ -154,7 +166,9 @@ export class Reconciler {
   ): Promise<boolean> {
     let converged = true;
     const databaseById = new Map(databaseInstances.map((instance) => [instance.id, instance]));
-    const runtimeById = new Map(runtimeInstances.map((instance) => [instance.instanceId, instance]));
+    const runtimeById = new Map(
+      runtimeInstances.map((instance) => [instance.instanceId, instance]),
+    );
     for (const database of databaseInstances) {
       try {
         const runtime = runtimeById.get(database.id);
@@ -166,14 +180,16 @@ export class Reconciler {
         ) {
           await this.instances.failInstance(database.id, "RUNTIME_MISSING", { hostId });
         } else if (database.lifecycle_state === "RUNNING" && database.health_expired) {
-          if (database.health_failed) await this.instances.failInstance(database.id, "PAPER_HEALTH_TIMEOUT", { hostId });
+          if (database.health_failed)
+            await this.instances.failInstance(database.id, "PAPER_HEALTH_TIMEOUT", { hostId });
           else await this.instances.suspectHealth(database.id);
         } else if (database.lifecycle_state === "DRAINING") {
           if (!runtime || !runtime.running) {
             await this.instances.stopAndDelete(database.id);
           } else {
-            const rows = await this.db.select({
-              due: sql<boolean>`(
+            const rows = await this.db
+              .select({
+                due: sql<boolean>`(
                 (${serverInstances.playerCount} = 0 AND (
                   NOT EXISTS (SELECT 1 FROM server_groups g WHERE g.id = "server_instances".group_id AND g.type = 'proxy')
                   OR EXISTS (
@@ -185,14 +201,18 @@ export class Reconciler {
                 ))
                 OR ${serverInstances.drainDeadline} <= now()
               )`.as("due"),
-            }).from(serverInstances).where(eq(serverInstances.id, database.id));
+              })
+              .from(serverInstances)
+              .where(eq(serverInstances.id, database.id));
             if (rows[0]?.due) await this.instances.stopAndDelete(database.id);
           }
         } else if (database.lifecycle_state === "FAILED" && database.runtime_retained) {
           // Diagnostic files are retained, but a failed game must not keep running.
-          if (runtime?.running) await this.executor.stopInstance(
-            { hostId, instanceId: database.id }, Math.ceil(database.shutdown_timeout_ms / 1_000),
-          );
+          if (runtime?.running)
+            await this.executor.stopInstance(
+              { hostId, instanceId: database.id },
+              Math.ceil(database.shutdown_timeout_ms / 1_000),
+            );
         } else if (
           database.lifecycle_state === "STOPPING" ||
           (database.lifecycle_state === "FAILED" && !database.runtime_retained) ||
@@ -213,10 +233,14 @@ export class Reconciler {
     for (const runtime of runtimeInstances) {
       if (databaseById.has(runtime.instanceId)) continue;
       try {
-        const current = await this.db.select({
-          host_id: serverInstances.hostId,
-          lifecycle_state: serverInstances.lifecycleState,
-        }).from(serverInstances).where(eq(serverInstances.id, runtime.instanceId)).limit(1);
+        const current = await this.db
+          .select({
+            host_id: serverInstances.hostId,
+            lifecycle_state: serverInstances.lifecycleState,
+          })
+          .from(serverInstances)
+          .where(eq(serverInstances.id, runtime.instanceId))
+          .limit(1);
         if (current[0]?.host_id === hostId && current[0].lifecycle_state !== "STOPPED") continue;
 
         const cleanup = await this.executor.deleteOrphanInstance(runtime);

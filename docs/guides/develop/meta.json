@@ -1,9 +1,4 @@
 {
   "title": "Integrate and develop",
-  "pages": [
-    "minigame-integration",
-    "development",
-    "testing",
-    "proxy-smoke"
-  ]
+  "pages": ["minigame-integration", "development", "testing", "proxy-smoke"]
 }

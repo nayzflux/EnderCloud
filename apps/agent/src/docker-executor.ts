@@ -15,7 +15,11 @@ import type {
 
 export interface LocalDockerConfig {
   readonly journalPath?: string;
-  readonly proxy?: { readonly address: string; readonly portStart: number; readonly portEnd: number };
+  readonly proxy?: {
+    readonly address: string;
+    readonly portStart: number;
+    readonly portEnd: number;
+  };
   readonly dockerSocket: string;
   readonly dockerNetwork: string;
   readonly runtimeRoot: string;
@@ -28,10 +32,9 @@ export interface LocalDockerConfig {
 }
 
 function isDockerNotFound(error: unknown): boolean {
-  return typeof error === "object" &&
-    error !== null &&
-    "statusCode" in error &&
-    error.statusCode === 404;
+  return (
+    typeof error === "object" && error !== null && "statusCode" in error && error.statusCode === 404
+  );
 }
 
 export function instanceName(variantId: string, instanceId: string): string {
@@ -54,8 +57,12 @@ export function decodeDockerLogBuffer(buffer: Buffer): Buffer {
   let offset = 0;
   while (offset + 8 <= buffer.length) {
     const stream = buffer[offset];
-    if ((stream !== 0 && stream !== 1 && stream !== 2) ||
-      buffer[offset + 1] !== 0 || buffer[offset + 2] !== 0 || buffer[offset + 3] !== 0) {
+    if (
+      (stream !== 0 && stream !== 1 && stream !== 2) ||
+      buffer[offset + 1] !== 0 ||
+      buffer[offset + 2] !== 0 ||
+      buffer[offset + 3] !== 0
+    ) {
       return buffer;
     }
     const length = buffer.readUInt32BE(offset + 4);
@@ -75,16 +82,12 @@ export async function materializeLayers(
     if (!layer.templatePath) throw new Error(`Layer ${layer.id} has no local template path`);
     for (const entry of await readdir(layer.templatePath, { withFileTypes: true })) {
       if (entry.name === "variant.yml") continue;
-      await cp(
-        join(layer.templatePath, entry.name),
-        join(destination, entry.name),
-        {
-          recursive: true,
-          force: true,
-          errorOnExist: false,
-          verbatimSymlinks: true,
-        },
-      );
+      await cp(join(layer.templatePath, entry.name), join(destination, entry.name), {
+        recursive: true,
+        force: true,
+        errorOnExist: false,
+        verbatimSymlinks: true,
+      });
     }
   }
 }
@@ -105,11 +108,19 @@ export class LocalDockerExecutor implements Omit<Executor, "createInstance"> {
   // Materialize a template, create its container, and return the proxy endpoint.
   public async createInstance(spec: ResolvedInstanceSpec): Promise<CreatedInstance> {
     this.assertHost(spec.hostId);
-    const fingerprint = { ...spec, templateLayers: spec.templateLayers.map(({ id, checksum }) => ({ id, checksum })) };
-    return this.operations.run(spec.instanceId, 1, fingerprint, assertCurrent => this.create(spec, assertCurrent));
+    const fingerprint = {
+      ...spec,
+      templateLayers: spec.templateLayers.map(({ id, checksum }) => ({ id, checksum })),
+    };
+    return this.operations.run(spec.instanceId, 1, fingerprint, (assertCurrent) =>
+      this.create(spec, assertCurrent),
+    );
   }
 
-  private async create(spec: ResolvedInstanceSpec, assertCurrent: () => void): Promise<CreatedInstance> {
+  private async create(
+    spec: ResolvedInstanceSpec,
+    assertCurrent: () => void,
+  ): Promise<CreatedInstance> {
     const startedAt = performance.now();
     const isProxy = spec.instanceType === "proxy";
     if (isProxy && !this.config.proxy) throw new Error("Agent does not support proxy instances");
@@ -233,15 +244,21 @@ export class LocalDockerExecutor implements Omit<Executor, "createInstance"> {
 
   private async withCreationLock<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.creationQueue.then(operation);
-    this.creationQueue = result.then(() => undefined, () => undefined);
+    this.creationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   }
 
   // Gracefully stop a managed container when it is still running.
   public async stopInstance(target: InstanceTarget, timeoutSeconds: number): Promise<void> {
     this.assertHost(target.hostId);
-    return this.operations.run(target.instanceId, 2, { desired: "STOPPED" }, () => this.stop(target, timeoutSeconds))
-      .catch(error => { if (!(error instanceof StaleOperationError)) throw error; });
+    return this.operations
+      .run(target.instanceId, 2, { desired: "STOPPED" }, () => this.stop(target, timeoutSeconds))
+      .catch((error) => {
+        if (!(error instanceof StaleOperationError)) throw error;
+      });
   }
 
   private async stop(target: InstanceTarget, timeoutSeconds: number): Promise<void> {
@@ -253,7 +270,9 @@ export class LocalDockerExecutor implements Omit<Executor, "createInstance"> {
   // Remove both the managed container and its generated runtime directory.
   public async deleteInstance(target: InstanceTarget): Promise<void> {
     this.assertHost(target.hostId);
-    return this.operations.run(target.instanceId, 3, { desired: "ABSENT" }, () => this.remove(target));
+    return this.operations.run(target.instanceId, 3, { desired: "ABSENT" }, () =>
+      this.remove(target),
+    );
   }
 
   private async remove(target: InstanceTarget): Promise<void> {
@@ -284,22 +303,24 @@ export class LocalDockerExecutor implements Omit<Executor, "createInstance"> {
     });
     const raw = Buffer.isBuffer(output) ? output : Buffer.from(String(output));
     const buffer = decodeDockerLogBuffer(raw);
-    return buffer.subarray(Math.max(0, buffer.length - Math.max(1, maxBytes)))
+    return buffer
+      .subarray(Math.max(0, buffer.length - Math.max(1, maxBytes)))
       .toString("utf8")
       .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "");
   }
 
   // Delete the exact Docker object observed by reconciliation, then clean its safe runtime path.
-  public async deleteOrphanInstance(
-    instance: RuntimeInstance,
-  ): Promise<OrphanCleanupResult> {
+  public async deleteOrphanInstance(instance: RuntimeInstance): Promise<OrphanCleanupResult> {
     this.assertHost(instance.hostId);
-    const key = /^[A-Za-z0-9_-]+$/.test(instance.instanceId) ? instance.instanceId
+    const key = /^[A-Za-z0-9_-]+$/.test(instance.instanceId)
+      ? instance.instanceId
       : `orphan-${Buffer.from(instance.containerId).toString("base64url")}`;
     return this.operations.run(key, 3, { desired: "ABSENT" }, () => this.removeOrphan(instance));
   }
 
-  public async close(): Promise<void> { await this.operations.close(); }
+  public async close(): Promise<void> {
+    await this.operations.close();
+  }
 
   private async removeOrphan(instance: RuntimeInstance): Promise<OrphanCleanupResult> {
     this.assertHost(instance.hostId);
@@ -327,10 +348,14 @@ export class LocalDockerExecutor implements Omit<Executor, "createInstance"> {
 
     const runtimePath = this.safeOrphanRuntimePath(instance.instanceId);
     if (!runtimePath) {
-      this.logger.warn("docker.runtime.cleanup_refused", "Skipped unsafe orphan runtime directory cleanup", {
-        instanceId: instance.instanceId,
-        containerId: instance.containerId,
-      });
+      this.logger.warn(
+        "docker.runtime.cleanup_refused",
+        "Skipped unsafe orphan runtime directory cleanup",
+        {
+          instanceId: instance.instanceId,
+          containerId: instance.containerId,
+        },
+      );
       return { containerRemoved, runtimeDirectoryRemoved: false };
     }
     await rm(runtimePath, { recursive: true, force: true });
@@ -357,10 +382,7 @@ export class LocalDockerExecutor implements Omit<Executor, "createInstance"> {
     const containers = await this.docker.listContainers({
       all: true,
       filters: {
-        label: [
-          "orchestrator.managed=true",
-          `orchestrator.host-id=${this.config.hostId}`,
-        ],
+        label: ["orchestrator.managed=true", `orchestrator.host-id=${this.config.hostId}`],
       },
     });
     // Normalize Docker's shape into the executor contract consumed by reconciliation.
@@ -452,9 +474,7 @@ export class LocalDockerExecutor implements Omit<Executor, "createInstance"> {
     }
     const stream = await this.docker.pull(image);
     await new Promise<void>((resolve, reject) => {
-      this.docker.modem.followProgress(stream, (error) =>
-        error ? reject(error) : resolve(),
-      );
+      this.docker.modem.followProgress(stream, (error) => (error ? reject(error) : resolve()));
     });
     this.logger.info("docker.image.pull_completed", "Docker image pull completed", { image });
   }

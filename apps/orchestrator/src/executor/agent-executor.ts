@@ -1,13 +1,16 @@
 import type {
-CreatedInstance,
-Executor,
-InstanceSpec,
-InstanceTarget,
-OrphanCleanupResult,
-RuntimeInstance,
-RuntimeState,
+  CreatedInstance,
+  Executor,
+  InstanceSpec,
+  InstanceTarget,
+  OrphanCleanupResult,
+  RuntimeInstance,
+  RuntimeState,
 } from "@endercloud/contracts/executor";
-import { ExecutionHostUnavailableError, ExecutionCommandSupersededError } from "@endercloud/contracts/executor";
+import {
+  ExecutionHostUnavailableError,
+  ExecutionCommandSupersededError,
+} from "@endercloud/contracts/executor";
 import { nanoid } from "@endercloud/runtime/id";
 import type { Logger } from "@endercloud/runtime/logger";
 import type { HostService } from "../modules/hosts/service.ts";
@@ -19,7 +22,10 @@ export interface AgentExecutorConfig {
 }
 
 class AgentResponseError extends Error {
-  public constructor(readonly status: number, message: string) {
+  public constructor(
+    readonly status: number,
+    message: string,
+  ) {
     super(message);
     this.name = "AgentResponseError";
   }
@@ -125,7 +131,9 @@ export class AgentExecutor implements Executor {
     init?: RequestInit,
     timeoutMs = this.config.probeTimeoutMs,
   ): Promise<T> {
-    const host = await this.hosts.getTarget(hostId).catch(error => { throw new ExecutionHostUnavailableError(hostId, "Host lookup failed", error); });
+    const host = await this.hosts.getTarget(hostId).catch((error) => {
+      throw new ExecutionHostUnavailableError(hostId, "Host lookup failed", error);
+    });
     const url = new URL(path, host.controlUrl);
     const startedAt = performance.now();
     const context = this.logger?.currentContext() ?? {};
@@ -134,7 +142,8 @@ export class AgentExecutor implements Executor {
     headers.set("x-request-id", requestId);
     if (typeof context.commandId === "string") headers.set("x-command-id", context.commandId);
     try {
-      if (this.config.getControlToken) headers.set("authorization", `Bearer ${await this.config.getControlToken(hostId)}`);
+      if (this.config.getControlToken)
+        headers.set("authorization", `Bearer ${await this.config.getControlToken(hostId)}`);
       const response = await fetch(url, {
         ...init,
         headers,
@@ -142,20 +151,37 @@ export class AgentExecutor implements Executor {
       });
       if (!response.ok) {
         const message = await response.text();
-        if ([401, 403, 503].includes(response.status)) throw new ExecutionHostUnavailableError(hostId, `Agent control unavailable (${response.status})`);
-        await this.hosts.recordControlSuccess(hostId);
-        const payload = (() => { try { return JSON.parse(message) as {error?: string}; } catch { return null; } })();
-        if (response.status === 409 && payload?.error === "STALE_OPERATION") throw new ExecutionCommandSupersededError("Agent rejected a superseded instance specification");
-        if (response.status >= 500) {
-          this.logger?.error("executor.request.server_error", "Execution agent returned a server error", {
-            requestId,
+        if ([401, 403, 503].includes(response.status))
+          throw new ExecutionHostUnavailableError(
             hostId,
-            method: init?.method ?? "GET",
-            path: url.pathname,
-            status: response.status,
-            durationMs: Math.round(performance.now() - startedAt),
-            outcome: "failure",
-          });
+            `Agent control unavailable (${response.status})`,
+          );
+        await this.hosts.recordControlSuccess(hostId);
+        const payload = (() => {
+          try {
+            return JSON.parse(message) as { error?: string };
+          } catch {
+            return null;
+          }
+        })();
+        if (response.status === 409 && payload?.error === "STALE_OPERATION")
+          throw new ExecutionCommandSupersededError(
+            "Agent rejected a superseded instance specification",
+          );
+        if (response.status >= 500) {
+          this.logger?.error(
+            "executor.request.server_error",
+            "Execution agent returned a server error",
+            {
+              requestId,
+              hostId,
+              method: init?.method ?? "GET",
+              path: url.pathname,
+              status: response.status,
+              durationMs: Math.round(performance.now() - startedAt),
+              outcome: "failure",
+            },
+          );
         }
         throw new AgentResponseError(
           response.status,
@@ -173,7 +199,7 @@ export class AgentExecutor implements Executor {
         outcome: "success",
       });
       if (response.status === 204) return undefined as T;
-      return await response.json() as T;
+      return (await response.json()) as T;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (error instanceof ExecutionCommandSupersededError) throw error;

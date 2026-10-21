@@ -116,8 +116,7 @@ function instance(
     maximum_players: 12,
     created_at: now.toISOString(),
     starting_at: lifecycle === "STARTING" ? now.toISOString() : null,
-    startup_deadline:
-      lifecycle === "STARTING" ? "2026-07-27T12:01:30.000Z" : null,
+    startup_deadline: lifecycle === "STARTING" ? "2026-07-27T12:01:30.000Z" : null,
     running_at: lifecycle === "RUNNING" ? now.toISOString() : null,
     renewal_deadline: null,
     replaces_instance_id: null,
@@ -130,11 +129,7 @@ function instance(
   } as const;
 }
 
-function session(
-  id: string,
-  instanceId: string | null,
-  state: "RUNNING" | "WAITING_FOR_INSTANCE",
-) {
+function session(id: string, instanceId: string | null, state: "RUNNING" | "WAITING_FOR_INSTANCE") {
   return {
     id,
     group_id: "skywars-solo",
@@ -170,12 +165,18 @@ describe("dashboard snapshot", () => {
       proxy_ready: true,
       proxy_accepting_connections: true,
     };
-    const snapshot = assembleClusterSnapshot({
-      ...data, groups: [...data.groups, proxyGroup], instances: [...data.instances, proxy],
-    }, now);
+    const snapshot = assembleClusterSnapshot(
+      {
+        ...data,
+        groups: [...data.groups, proxyGroup],
+        instances: [...data.instances, proxy],
+      },
+      now,
+    );
     expect(snapshot.summary.playersOnline).toBe(4);
-    expect(snapshot.groups.find((candidate) => candidate.id === proxyGroup.id)?.instances[0])
-      .toMatchObject({ playerCount: 4, proxy: { ready: true, acceptingConnections: true } });
+    expect(
+      snapshot.groups.find((candidate) => candidate.id === proxyGroup.id)?.instances[0],
+    ).toMatchObject({ playerCount: 4, proxy: { ready: true, acceptingConnections: true } });
   });
 
   test("groups instances, both pool states and attached sessions", () => {
@@ -192,16 +193,18 @@ describe("dashboard snapshot", () => {
       reservedInstances: 1,
     });
     expect(group?.queue.playerCount).toBe(5);
-    expect(group?.sessions.find((candidate) => candidate.id === "active-session01"))
-      .toMatchObject({
-        instanceId: "reserved-game-01",
-        state: "RUNNING",
-        maximumPlayerCount: 12,
-      });
-    expect(group?.sessions.find((candidate) => candidate.id === "waiting-session1"))
-      .toMatchObject({ instanceId: null, state: "WAITING_FOR_INSTANCE" });
-    expect(snapshot.groups.find((candidate) => candidate.id === "disabled-hub"))
-      .toMatchObject({ enabled: false });
+    expect(group?.sessions.find((candidate) => candidate.id === "active-session01")).toMatchObject({
+      instanceId: "reserved-game-01",
+      state: "RUNNING",
+      maximumPlayerCount: 12,
+    });
+    expect(group?.sessions.find((candidate) => candidate.id === "waiting-session1")).toMatchObject({
+      instanceId: null,
+      state: "WAITING_FOR_INSTANCE",
+    });
+    expect(snapshot.groups.find((candidate) => candidate.id === "disabled-hub")).toMatchObject({
+      enabled: false,
+    });
     expect(snapshot.summary.enabledGroups).toBe(1);
     expect(snapshot.summary.activeSessions).toBe(2);
     expect(snapshot.schemaVersion).toBe(4);
@@ -222,22 +225,26 @@ describe("dashboard snapshot", () => {
       at: "2026-07-27T12:01:30.000Z",
     });
     expect(activeInstanceDeadline(instance("ready", "RUNNING", "OPEN", null))).toBeNull();
-    expect(activeInstanceDeadline({
-      ...instance("renewing", "RUNNING", "OPEN", null),
-      renewal_deadline: "2026-07-27T16:00:00.000Z",
-    })).toEqual({
+    expect(
+      activeInstanceDeadline({
+        ...instance("renewing", "RUNNING", "OPEN", null),
+        renewal_deadline: "2026-07-27T16:00:00.000Z",
+      }),
+    ).toEqual({
       kind: "INSTANCE_RENEWAL",
       at: "2026-07-27T16:00:00.000Z",
     });
 
-    expect(activeInstanceDeadline({
-      ...starting,
-      lifecycle_state: "DRAINING",
-      startup_deadline: null,
-      draining_at: now.toISOString(),
-      drain_deadline: "2026-07-27T12:00:10.000Z",
-      drain_reason: "SESSION_CANCELLED",
-    })).toEqual({
+    expect(
+      activeInstanceDeadline({
+        ...starting,
+        lifecycle_state: "DRAINING",
+        startup_deadline: null,
+        draining_at: now.toISOString(),
+        drain_deadline: "2026-07-27T12:00:10.000Z",
+        drain_reason: "SESSION_CANCELLED",
+      }),
+    ).toEqual({
       kind: "CANCELLED_INSTANCE_DRAIN",
       at: "2026-07-27T12:00:10.000Z",
     });
@@ -245,22 +252,30 @@ describe("dashboard snapshot", () => {
 
   test("prioritizes session acquisition, transfers and lobby stale", () => {
     const waitingForInstance = session("waiting-session1", null, "WAITING_FOR_INSTANCE");
-    expect(activeSessionDeadline(waitingForInstance, [])?.kind)
-      .toBe("INSTANCE_ACQUISITION");
+    expect(activeSessionDeadline(waitingForInstance, [])?.kind).toBe("INSTANCE_ACQUISITION");
 
     const waiting = {
       ...session("waiting-session2", "instance-1", "RUNNING"),
       state: "WAITING" as const,
       lobby_stale_deadline: "2026-07-27T12:02:15.000Z",
     };
-    expect(activeSessionDeadline(waiting, [{
-      state: "PENDING",
-      expires_at: "2026-07-27T12:00:20.000Z",
-    }])?.kind).toBe("PLAYER_TRANSFER");
+    expect(
+      activeSessionDeadline(waiting, [
+        {
+          state: "PENDING",
+          expires_at: "2026-07-27T12:00:20.000Z",
+        },
+      ])?.kind,
+    ).toBe("PLAYER_TRANSFER");
     expect(activeSessionDeadline(waiting, [])?.kind).toBe("LOBBY_STALE");
-    expect(activeSessionDeadline({
-      ...waiting,
-      state: "FINISHED",
-    }, [])).toBeNull();
+    expect(
+      activeSessionDeadline(
+        {
+          ...waiting,
+          state: "FINISHED",
+        },
+        [],
+      ),
+    ).toBeNull();
   });
 });

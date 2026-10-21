@@ -62,9 +62,7 @@ export function DataTable<T>({
   caption,
 }: DataTableProps<T>) {
   const [sort, setSort] = useState<SortState>(
-    initialSort
-      ? { columnId: initialSort.columnId, desc: initialSort.desc ?? false }
-      : null,
+    initialSort ? { columnId: initialSort.columnId, desc: initialSort.desc ?? false } : null,
   );
   const [page, setPage] = useState(0);
 
@@ -81,10 +79,7 @@ export function DataTable<T>({
 
   const pageCount = Math.max(1, Math.ceil(sortedRows.length / pageSize));
   const currentPage = Math.min(page, pageCount - 1);
-  const pageRows = sortedRows.slice(
-    currentPage * pageSize,
-    currentPage * pageSize + pageSize,
-  );
+  const pageRows = sortedRows.slice(currentPage * pageSize, currentPage * pageSize + pageSize);
 
   function toggleSort(columnId: string) {
     setPage(0);
@@ -116,9 +111,7 @@ export function DataTable<T>({
                     column.align === "right" && "text-right",
                     column.hideOnMobile && "hidden md:table-cell",
                   )}
-                  aria-sort={
-                    active ? (sort.desc ? "descending" : "ascending") : undefined
-                  }
+                  aria-sort={active ? (sort.desc ? "descending" : "ascending") : undefined}
                 >
                   {sortable ? (
                     <Button
@@ -139,10 +132,7 @@ export function DataTable<T>({
                           <ArrowUpIcon data-icon="inline-end" />
                         )
                       ) : (
-                        <ArrowUpDownIcon
-                          data-icon="inline-end"
-                          className="opacity-40"
-                        />
+                        <ArrowUpDownIcon data-icon="inline-end" className="opacity-40" />
                       )}
                     </Button>
                   ) : (
@@ -203,9 +193,8 @@ export function DataTable<T>({
       {sortedRows.length > pageSize ? (
         <div className="flex items-center justify-between gap-4 px-1">
           <p className="text-xs text-muted-foreground tabular">
-            {currentPage * pageSize + 1}–
-            {Math.min(sortedRows.length, (currentPage + 1) * pageSize)} of{" "}
-            {sortedRows.length}
+            {currentPage * pageSize + 1}–{Math.min(sortedRows.length, (currentPage + 1) * pageSize)}{" "}
+            of {sortedRows.length}
           </p>
           <div className="flex items-center gap-1">
             <Button
@@ -225,9 +214,7 @@ export function DataTable<T>({
               size="icon-sm"
               aria-label="Next page"
               disabled={currentPage >= pageCount - 1}
-              onClick={() =>
-                setPage((value) => Math.min(pageCount - 1, value + 1))
-              }
+              onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}
             >
               <ChevronRightIcon />
             </Button>

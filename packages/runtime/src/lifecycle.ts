@@ -7,7 +7,7 @@ export class ResourceScope {
     this.resources.push({ name, close });
   }
   public close(timeoutMs = 20_000): Promise<void> {
-    return this.closing ??= this.dispose(timeoutMs);
+    return (this.closing ??= this.dispose(timeoutMs));
   }
   private async dispose(timeoutMs: number): Promise<void> {
     const errors: unknown[] = [];
@@ -15,11 +15,20 @@ export class ResourceScope {
     for (const resource of this.resources.reverse()) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        await Promise.race([Promise.resolve().then(resource.close), new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error(`Timed out closing ${resource.name}`)), Math.max(1, deadline - Date.now()));
-        })]);
-      } catch (error) { errors.push(error); }
-      finally { if (timer) clearTimeout(timer); }
+        await Promise.race([
+          Promise.resolve().then(resource.close),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`Timed out closing ${resource.name}`)),
+              Math.max(1, deadline - Date.now()),
+            );
+          }),
+        ]);
+      } catch (error) {
+        errors.push(error);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     }
     this.resources.length = 0;
     if (errors.length) throw new AggregateError(errors, "Resource cleanup failed");

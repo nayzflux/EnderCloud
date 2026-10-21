@@ -21,10 +21,7 @@ import { cn } from "@/lib/utils";
 
 // React Flow measures the DOM, so it can only render on the client.
 const ClusterFlow = dynamic(
-  () =>
-    import("@/features/topology/cluster-flow").then(
-      (module) => module.ClusterFlow,
-    ),
+  () => import("@/features/topology/cluster-flow").then((module) => module.ClusterFlow),
   { ssr: false, loading: () => <Skeleton className="size-full" /> },
 );
 
@@ -61,9 +58,7 @@ function EdgeSample({ dashed }: { readonly dashed?: boolean }) {
 function Legend() {
   return (
     <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border px-3 py-2 text-xs text-muted-foreground">
-      <span className="font-medium text-foreground">
-        Queue → warm pool → instance → session
-      </span>
+      <span className="font-medium text-foreground">Queue → warm pool → instance → session</span>
       <span className="flex items-center gap-2">
         <EdgeSample />
         established link
@@ -75,10 +70,7 @@ function Legend() {
       <span className="ml-auto flex flex-wrap items-center gap-3">
         {stateLegend.map((item) => (
           <span key={item.label} className="flex items-center gap-1.5">
-            <span
-              aria-hidden
-              className={cn("size-1.5 rounded-full", item.className)}
-            />
+            <span aria-hidden className={cn("size-1.5 rounded-full", item.className)} />
             {item.label}
           </span>
         ))}
@@ -87,11 +79,7 @@ function Legend() {
   );
 }
 
-function TopologyView({
-  snapshot,
-}: {
-  readonly snapshot: DashboardClusterSnapshot;
-}) {
+function TopologyView({ snapshot }: { readonly snapshot: DashboardClusterSnapshot }) {
   const [search, setSearch] = useState("");
   const [groupId, setGroupId] = useState("all");
   const [state, setState] = useState<InstanceFilter>("all");
@@ -146,8 +134,7 @@ function TopologyView({
               </EmptyMedia>
               <EmptyTitle>Nothing to draw</EmptyTitle>
               <EmptyDescription>
-                No group matches the current filters. Clear the search or widen
-                the state filter.
+                No group matches the current filters. Clear the search or widen the state filter.
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
@@ -164,9 +151,7 @@ export default function TopologyPage() {
         title="Topology"
         description="How every group wires its queue and warm pool to the instances, and which session runs on each of them."
       />
-      <ClusterGate
-        skeleton={<Skeleton className="h-[70svh] w-full rounded-xl" />}
-      >
+      <ClusterGate skeleton={<Skeleton className="h-[70svh] w-full rounded-xl" />}>
         {(snapshot) => <TopologyView snapshot={snapshot} />}
       </ClusterGate>
     </>

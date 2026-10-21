@@ -11,29 +11,35 @@ const variants: DashboardMonitoringSeries["variants"] = [
   {
     variantId: "skywars-japan",
     enabled: true,
-    startup: [{
-      at: "2026-08-01T12:00:00.000Z",
-      totalAverageMs: 42_000,
-      bootAverageMs: 31_000,
-      sampleCount: 3,
-    }],
-    tps: [{
-      at: "2026-08-01T12:00:00.000Z",
-      oneMinute: 19.5,
-      fiveMinutes: 19.7,
-      fifteenMinutes: 19.9,
-      sampleCount: 6,
-    }],
+    startup: [
+      {
+        at: "2026-08-01T12:00:00.000Z",
+        totalAverageMs: 42_000,
+        bootAverageMs: 31_000,
+        sampleCount: 3,
+      },
+    ],
+    tps: [
+      {
+        at: "2026-08-01T12:00:00.000Z",
+        oneMinute: 19.5,
+        fiveMinutes: 19.7,
+        fifteenMinutes: 19.9,
+        sampleCount: 6,
+      },
+    ],
   },
   {
     variantId: "skywars-legacy",
     enabled: true,
-    startup: [{
-      at: "2026-08-01T12:00:00.000Z",
-      totalAverageMs: 66_000,
-      bootAverageMs: 57_000,
-      sampleCount: 2,
-    }],
+    startup: [
+      {
+        at: "2026-08-01T12:00:00.000Z",
+        totalAverageMs: 66_000,
+        bootAverageMs: 57_000,
+        sampleCount: 2,
+      },
+    ],
     tps: [],
   },
 ];
@@ -53,20 +59,24 @@ describe("monitoring chart models", () => {
   });
 
   test("merges startup variants and keeps tooltip sample counts", () => {
-    expect(buildStartupChartRows(variants, "bootAverageMs")).toEqual([{
-      at: "2026-08-01T12:00:00.000Z",
-      "skywars-japan": 31_000,
-      [sampleKey("skywars-japan")]: 3,
-      "skywars-legacy": 57_000,
-      [sampleKey("skywars-legacy")]: 2,
-    }]);
+    expect(buildStartupChartRows(variants, "bootAverageMs")).toEqual([
+      {
+        at: "2026-08-01T12:00:00.000Z",
+        "skywars-japan": 31_000,
+        [sampleKey("skywars-japan")]: 3,
+        "skywars-legacy": 57_000,
+        [sampleKey("skywars-legacy")]: 2,
+      },
+    ]);
   });
 
   test("selects the requested native Paper TPS window", () => {
-    expect(buildTpsChartRows(variants, "fiveMinutes")).toEqual([{
-      at: "2026-08-01T12:00:00.000Z",
-      "skywars-japan": 19.7,
-      [sampleKey("skywars-japan")]: 6,
-    }]);
+    expect(buildTpsChartRows(variants, "fiveMinutes")).toEqual([
+      {
+        at: "2026-08-01T12:00:00.000Z",
+        "skywars-japan": 19.7,
+        [sampleKey("skywars-japan")]: 6,
+      },
+    ]);
   });
 });

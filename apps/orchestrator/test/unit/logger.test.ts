@@ -30,13 +30,14 @@ describe("structured logger", () => {
 
   test("inherits context and protects reserved fields", async () => {
     const { logger, records } = capture();
-    await logger.child({ component: "worker", hostId: "host-1" }).runWithContext(
-      { requestId: "request-1", commandId: "command-1" },
-      async () => logger.info("test.context", "Context", {
-        event: "overwritten",
-        level: "error",
-      }),
-    );
+    await logger
+      .child({ component: "worker", hostId: "host-1" })
+      .runWithContext({ requestId: "request-1", commandId: "command-1" }, async () =>
+        logger.info("test.context", "Context", {
+          event: "overwritten",
+          level: "error",
+        }),
+      );
     expect(JSON.parse(records[0]!)).toMatchObject({
       event: "test.context",
       level: "info",

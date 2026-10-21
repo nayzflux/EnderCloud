@@ -1,11 +1,11 @@
-import { and,eq,gt,inArray,isNotNull,ne,sql } from "drizzle-orm";
-import type { Database,Transaction } from "../../db/client.ts";
+import { and, eq, gt, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import type { Database, Transaction } from "../../db/client.ts";
 import {
-executionHosts,
-instancePlayers,
-serverGroups,
-serverInstances,
-transferCommands,
+  executionHosts,
+  instancePlayers,
+  serverGroups,
+  serverInstances,
+  transferCommands,
 } from "../../db/schema.ts";
 import { allocateHubPlayers } from "../../domain/hub-routing.ts";
 import type { TransferService } from "../transfers/service.ts";
@@ -79,10 +79,7 @@ export class HubRouter {
       const alreadyOnHub = await tx
         .select({ playerId: instancePlayers.playerId })
         .from(instancePlayers)
-        .innerJoin(
-          serverInstances,
-          eq(serverInstances.id, instancePlayers.instanceId),
-        )
+        .innerJoin(serverInstances, eq(serverInstances.id, instancePlayers.instanceId))
         .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
         .innerJoin(executionHosts, eq(executionHosts.id, serverInstances.hostId))
         .where(
@@ -103,7 +100,7 @@ export class HubRouter {
 
       // A repeated request for a player who already has a durable hub transfer
       // is successful without creating a competing command.
-      const pendingHubTransfers = await tx
+      const pendingHubTransfers = (await tx
         .select({
           players: sql<string[]>`CASE
             WHEN EXISTS (
@@ -119,10 +116,7 @@ export class HubRouter {
           END`,
         })
         .from(transferCommands)
-        .innerJoin(
-          serverInstances,
-          eq(serverInstances.id, transferCommands.instanceId),
-        )
+        .innerJoin(serverInstances, eq(serverInstances.id, transferCommands.instanceId))
         .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
         .innerJoin(executionHosts, eq(executionHosts.id, serverInstances.hostId))
         .where(
@@ -137,7 +131,7 @@ export class HubRouter {
             eq(executionHosts.healthState, "ONLINE"),
             eq(executionHosts.adminState, "ACTIVE"),
           ),
-        ) as { players: string[] }[];
+        )) as { players: string[] }[];
       for (const pending of pendingHubTransfers) {
         for (const playerId of pending.players) {
           if (connectedIds.has(playerId)) acceptedIds.add(playerId);
@@ -183,12 +177,12 @@ export class HubRouter {
             isNotNull(serverInstances.endpoint),
           ),
         )) as {
-          id: string;
-          endpoint: string;
-          playerCount: number;
-          maximumPlayers: number;
-          pendingPlayers: number;
-        }[];
+        id: string;
+        endpoint: string;
+        playerCount: number;
+        maximumPlayers: number;
+        pendingPlayers: number;
+      }[];
 
       const candidates: HubTarget[] = targets.map((target) => ({
         id: target.id,
@@ -202,9 +196,7 @@ export class HubRouter {
       const decision = allocateHubPlayers(playersToRoute, candidates);
 
       for (const assignment of decision.assignments) {
-        const target = candidates.find(
-          (candidate) => candidate.id === assignment.targetId,
-        );
+        const target = candidates.find((candidate) => candidate.id === assignment.targetId);
         if (!target) continue;
         await this.transfers.enqueue(tx, {
           instanceId: target.id,

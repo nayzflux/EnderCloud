@@ -9,11 +9,17 @@ test("data routes reject anonymous requests even when demo data is enabled", asy
 test("proxy preserves no-content responses, cookies and request identifiers", async () => {
   const original = globalThis.fetch;
   try {
-    globalThis.fetch = (async () => new Response(null, { status: 204, headers: { "x-request-id": "trace-id", "set-cookie": "test=value; HttpOnly" } })) as unknown as typeof fetch;
+    globalThis.fetch = (async () =>
+      new Response(null, {
+        status: 204,
+        headers: { "x-request-id": "trace-id", "set-cookie": "test=value; HttpOnly" },
+      })) as unknown as typeof fetch;
     const response = await proxyOrchestrator("/api/auth/sign-out", { method: "POST" });
     expect(response.status).toBe(204);
     expect(await response.text()).toBe("");
     expect(response.headers.get("x-request-id")).toBe("trace-id");
     expect(response.headers.getSetCookie()).toEqual(["test=value; HttpOnly"]);
-  } finally { globalThis.fetch = original; }
+  } finally {
+    globalThis.fetch = original;
+  }
 });

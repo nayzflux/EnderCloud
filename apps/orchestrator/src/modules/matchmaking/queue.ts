@@ -1,13 +1,19 @@
-import type {SqlRow} from "../../db/client.ts";
+import type { SqlRow } from "../../db/client.ts";
 import { ApplicationError } from "@endercloud/contracts/errors";
 import { nanoid } from "@endercloud/runtime/id";
-import { and,desc,eq,inArray,isNull,notInArray,or,sql } from "drizzle-orm";
-import type { Database,Transaction } from "../../db/client.ts";
-import { gameSessions,queueEntries,queueEntryPlayers,serverGroups,sessionPlayers } from "../../db/schema.ts";
+import { and, desc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
+import type { Database, Transaction } from "../../db/client.ts";
 import {
-computeFeasibleProfiles,
-isProfileEligible,
-selectRecommendedProfile,
+  gameSessions,
+  queueEntries,
+  queueEntryPlayers,
+  serverGroups,
+  sessionPlayers,
+} from "../../db/schema.ts";
+import {
+  computeFeasibleProfiles,
+  isProfileEligible,
+  selectRecommendedProfile,
 } from "../../domain/matchmaking.ts";
 
 export interface EnqueueRequest {
@@ -37,7 +43,11 @@ export class QueueService {
         .for("share");
       const groupRecord = groups[0];
       if (!groupRecord || groupRecord.type !== "minigame" || !groupRecord.enabled) {
-        throw new ApplicationError("CONFLICT", 409, "The requested matchmaking group is unavailable");
+        throw new ApplicationError(
+          "CONFLICT",
+          409,
+          "The requested matchmaking group is unavailable",
+        );
       }
       if (!groupRecord.team_size || request.players.length > groupRecord.team_size) {
         throw new ApplicationError("CONFLICT", 409, "The party is larger than a team");
@@ -72,7 +82,7 @@ export class QueueService {
                 notInArray(gameSessions.state, ["FINISHED", "CANCELLED", "FAILED"]),
               ),
             ),
-          )
+          ),
         )
         .orderBy(
           sql`CASE WHEN ${queueEntries.state} = 'QUEUED' THEN 0 ELSE 1 END`,
@@ -82,7 +92,8 @@ export class QueueService {
       const existingEntry = existing[0];
       // Both queued and selected retries must refer to the same members.
       if (existingEntry?.state === "QUEUED") {
-        const members = await tx.select({ playerId: queueEntryPlayers.playerId })
+        const members = await tx
+          .select({ playerId: queueEntryPlayers.playerId })
           .from(queueEntryPlayers)
           .where(eq(queueEntryPlayers.queueEntryId, existingEntry.id));
         const existingPlayers = new Set(members.map((member) => member.playerId));
@@ -92,10 +103,15 @@ export class QueueService {
         ) {
           return { entryId: existingEntry.id, state: existingEntry.state };
         }
-        throw new ApplicationError("CONFLICT", 409, `Party ${request.partyId} is already queued with different members`);
+        throw new ApplicationError(
+          "CONFLICT",
+          409,
+          `Party ${request.partyId} is already queued with different members`,
+        );
       }
       if (existingEntry?.state === "SELECTED" && existingEntry.sessionId) {
-        const activeMembers = await tx.select({ playerId: sessionPlayers.playerId })
+        const activeMembers = await tx
+          .select({ playerId: sessionPlayers.playerId })
           .from(sessionPlayers)
           .where(
             and(
@@ -124,12 +140,7 @@ export class QueueService {
           .select({ dummy: sql`1` })
           .from(queueEntryPlayers)
           .innerJoin(queueEntries, eq(queueEntries.id, queueEntryPlayers.queueEntryId))
-          .where(
-            and(
-              eq(queueEntryPlayers.playerId, playerId),
-              eq(queueEntries.state, "QUEUED")
-            )
-          );
+          .where(and(eq(queueEntryPlayers.playerId, playerId), eq(queueEntries.state, "QUEUED")));
 
         const sessionConflicts = tx
           .select({ dummy: sql`1` })
@@ -139,12 +150,15 @@ export class QueueService {
             and(
               eq(sessionPlayers.playerId, playerId),
               sql`${sessionPlayers.state} <> 'LEFT'`,
-              notInArray(gameSessions.state, ["FINISHED", "CANCELLED", "FAILED"])
-            )
+              notInArray(gameSessions.state, ["FINISHED", "CANCELLED", "FAILED"]),
+            ),
           );
 
-        const conflicts = await tx.execute<SqlRow<{ exists: boolean }>>(sql`SELECT EXISTS (${queueConflicts}) OR EXISTS (${sessionConflicts}) AS exists`);
-        if (conflicts[0]?.exists) throw new ApplicationError("CONFLICT", 409, `Player ${playerId} is already matchmaking`);
+        const conflicts = await tx.execute<SqlRow<{ exists: boolean }>>(
+          sql`SELECT EXISTS (${queueConflicts}) OR EXISTS (${sessionConflicts}) AS exists`,
+        );
+        if (conflicts[0]?.exists)
+          throw new ApplicationError("CONFLICT", 409, `Player ${playerId} is already matchmaking`);
       }
       // Create the parent before membership rows; the transaction hides partial parties.
       const entryId = nanoid();
@@ -167,12 +181,13 @@ export class QueueService {
   // Leaving is idempotent until the first transfer command establishes the individual boundary.
   public async leaveParty(groupId: string, partyId: string): Promise<boolean> {
     return this.db.transaction(async (tx) => {
-      const entries = await tx.select({
-        id: queueEntries.id,
-        state: queueEntries.state,
-        sessionId: queueEntries.sessionId,
-        transferStartedAt: queueEntries.transferStartedAt,
-      })
+      const entries = await tx
+        .select({
+          id: queueEntries.id,
+          state: queueEntries.state,
+          sessionId: queueEntries.sessionId,
+          transferStartedAt: queueEntries.transferStartedAt,
+        })
         .from(queueEntries)
         .leftJoin(gameSessions, eq(gameSessions.id, queueEntries.sessionId))
         .where(
@@ -223,7 +238,7 @@ export class QueueService {
                 notInArray(gameSessions.state, ["FINISHED", "CANCELLED", "FAILED"]),
               ),
             ),
-          )
+          ),
         )
         .orderBy(sql`CASE WHEN ${queueEntries.state} = 'QUEUED' THEN 0 ELSE 1 END`)
         .limit(1)
@@ -247,15 +262,17 @@ export class QueueService {
             sql`${sessionPlayers.state} <> 'LEFT'`,
             inArray(
               sessionPlayers.sessionId,
-              tx.select({ id: gameSessions.id })
+              tx
+                .select({ id: gameSessions.id })
                 .from(gameSessions)
-                .where(notInArray(gameSessions.state, ["FINISHED", "CANCELLED", "FAILED"]))
-            )
-          )
+                .where(notInArray(gameSessions.state, ["FINISHED", "CANCELLED", "FAILED"])),
+            ),
+          ),
         )
         .returning({ sessionId: sessionPlayers.sessionId });
       if (changed[0]) {
-        await tx.update(gameSessions)
+        await tx
+          .update(gameSessions)
           .set({
             assignmentRevision: sql`${gameSessions.assignmentRevision} + 1`,
             assignmentAcknowledgedAt: null,
@@ -272,11 +289,13 @@ export class QueueService {
     sessionId: string | null,
     partyId: string,
   ): Promise<void> {
-    await tx.update(queueEntries)
+    await tx
+      .update(queueEntries)
       .set({ state: "LEFT", updatedAt: sql`now()` })
       .where(eq(queueEntries.id, entryId));
     if (!sessionId) return;
-    const changed = await tx.update(sessionPlayers)
+    const changed = await tx
+      .update(sessionPlayers)
       .set({ state: "LEFT", leftAt: sql`now()` })
       .where(
         and(
@@ -288,15 +307,16 @@ export class QueueService {
       .returning({ playerId: sessionPlayers.playerId });
     if (changed.length === 0) return;
 
-    const sessionRows = await tx.select({
-      state: gameSessions.state,
-      groupId: gameSessions.groupId,
-      minimumPlayers: serverGroups.minimumPlayers,
-      teamCount: serverGroups.teamCount,
-      teamSize: serverGroups.teamSize,
-      minimumPlayersPerTeam: serverGroups.minimumPlayersPerTeam,
-      maximumTeamSpread: serverGroups.maximumTeamSpread,
-    })
+    const sessionRows = await tx
+      .select({
+        state: gameSessions.state,
+        groupId: gameSessions.groupId,
+        minimumPlayers: serverGroups.minimumPlayers,
+        teamCount: serverGroups.teamCount,
+        teamSize: serverGroups.teamSize,
+        minimumPlayersPerTeam: serverGroups.minimumPlayersPerTeam,
+        maximumTeamSpread: serverGroups.maximumTeamSpread,
+      })
       .from(gameSessions)
       .innerJoin(serverGroups, eq(serverGroups.id, gameSessions.groupId))
       .where(eq(gameSessions.id, sessionId))
@@ -304,12 +324,12 @@ export class QueueService {
     const session = sessionRows[0];
     if (!session) return;
 
-    const sizes = (await tx.execute<SqlRow<{ size: number }>>(sql`
+    const sizes = await tx.execute<SqlRow<{ size: number }>>(sql`
       SELECT count(*)::integer AS size
       FROM session_players
       WHERE session_id = ${sessionId} AND state <> 'LEFT'
       GROUP BY queue_entry_id
-    `));
+    `);
     const ticketSizes = sizes.map((row) => Number(row.size));
     const playerCount = ticketSizes.reduce((sum, size) => sum + size, 0);
     const profiles = computeFeasibleProfiles(
@@ -324,7 +344,8 @@ export class QueueService {
         session.minimumPlayersPerTeam ?? 0,
         session.maximumTeamSpread ?? session.teamSize ?? 1,
       );
-    await tx.update(gameSessions)
+    await tx
+      .update(gameSessions)
       .set({
         state:
           playerCount === 0

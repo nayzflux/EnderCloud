@@ -15,12 +15,12 @@ export default async function GroupVariantsPage({
       <PageHeader
         title={`${groupId} variants`}
         description="How shared server layers resolve into the final variants selected by this group."
-        actions={(
+        actions={
           <Button variant="outline" size="sm" nativeButton={false} render={<Link href="/groups" />}>
             <ArrowLeftIcon data-icon="inline-start" />
             Back to groups
           </Button>
-        )}
+        }
       />
       <VariantExplorer groupId={groupId} />
     </>

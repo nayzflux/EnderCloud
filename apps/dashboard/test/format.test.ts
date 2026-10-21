@@ -44,9 +44,7 @@ describe("formatAge", () => {
 describe("formatCountdown", () => {
   test("counts down and then flags the overrun", () => {
     expect(formatCountdown("2026-07-27T12:00:30.000Z", now)).toBe("30s");
-    expect(formatCountdown("2026-07-27T11:59:30.000Z", now)).toBe(
-      "overdue by 30s",
-    );
+    expect(formatCountdown("2026-07-27T11:59:30.000Z", now)).toBe("overdue by 30s");
   });
 });
 

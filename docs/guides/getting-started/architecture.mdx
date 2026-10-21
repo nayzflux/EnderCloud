@@ -34,15 +34,15 @@ inbound control token. See [Authentication](/docs/configure/authentication).
 
 ## Components
 
-| Component | Responsibility | State it owns |
-| --- | --- | --- |
-| Orchestrator | Configuration sync, placement, capacity, matchmaking, sessions, transfers, deadlines, incidents, and reconciliation | Durable control state in PostgreSQL |
-| Host agent | Template cache, runtime materialization, port allocation, Docker lifecycle, inventory, inspection, and logs | SQLite operation journal, cache and generated runtime files |
-| PostgreSQL | Transactions, locks, reservations, state machines, commands, deadlines, metrics, and incidents | Authoritative state |
-| Redis | Proxy registry notifications and transfer notifications | Ephemeral events only |
-| Velocity plugin | Dynamic Minecraft server registry, transfer execution, initial hub selection, and kicked-server fallback | In-memory registry rebuilt from the orchestrator snapshot |
-| Paper plugin | Readiness, player presence, TPS heartbeat, assignment cache, and game lifecycle events | In-memory assignment cache |
-| Dashboard | Operational reads and confirmed maintenance or startup-retry actions | Browser state only |
+| Component       | Responsibility                                                                                                      | State it owns                                               |
+| --------------- | ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Orchestrator    | Configuration sync, placement, capacity, matchmaking, sessions, transfers, deadlines, incidents, and reconciliation | Durable control state in PostgreSQL                         |
+| Host agent      | Template cache, runtime materialization, port allocation, Docker lifecycle, inventory, inspection, and logs         | SQLite operation journal, cache and generated runtime files |
+| PostgreSQL      | Transactions, locks, reservations, state machines, commands, deadlines, metrics, and incidents                      | Authoritative state                                         |
+| Redis           | Proxy registry notifications and transfer notifications                                                             | Ephemeral events only                                       |
+| Velocity plugin | Dynamic Minecraft server registry, transfer execution, initial hub selection, and kicked-server fallback            | In-memory registry rebuilt from the orchestrator snapshot   |
+| Paper plugin    | Readiness, player presence, TPS heartbeat, assignment cache, and game lifecycle events                              | In-memory assignment cache                                  |
+| Dashboard       | Operational reads and confirmed maintenance or startup-retry actions                                                | Browser state only                                          |
 
 The Bun workspace contains four independent applications: orchestrator, agent, dashboard and web.
 They share browser-safe contracts and narrowly scoped server utilities through packages.
@@ -57,16 +57,16 @@ initial convergence pass, starts the HTTP API, then starts the periodic control 
 
 The source tree has these roles:
 
-| Path | Role |
-| --- | --- |
-| `src/domain/` | Pure state transitions and selection, capacity, matchmaking, routing, placement, and retry rules |
-| `src/db/` | Drizzle schema, PostgreSQL client, JSON helpers, and migration runner |
-| `src/modules/configuration/` | Descriptor parsing, validation, template resolution, streamed checksums and SQL synchronization |
-| `src/modules/` | Domain services for instances, hosts, queues, sessions, transfers, monitoring, and incidents |
-| `src/executor/` | Authenticated HTTP client for agents |
-| `src/events/` | Transactional registry outbox and Redis publisher |
-| `src/api/` | Elysia HTTP API, validation schemas, request identifiers, and OpenAPI generation |
-| `src/security/` | Administrator sessions, scoped identities, encryption and local management CLI |
+| Path                         | Role                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------ |
+| `src/domain/`                | Pure state transitions and selection, capacity, matchmaking, routing, placement, and retry rules |
+| `src/db/`                    | Drizzle schema, PostgreSQL client, JSON helpers, and migration runner                            |
+| `src/modules/configuration/` | Descriptor parsing, validation, template resolution, streamed checksums and SQL synchronization  |
+| `src/modules/`               | Domain services for instances, hosts, queues, sessions, transfers, monitoring, and incidents     |
+| `src/executor/`              | Authenticated HTTP client for agents                                                             |
+| `src/events/`                | Transactional registry outbox and Redis publisher                                                |
+| `src/api/`                   | Elysia HTTP API, validation schemas, request identifiers, and OpenAPI generation                 |
+| `src/security/`              | Administrator sessions, scoped identities, encryption and local management CLI                   |
 
 The project is a modular monolith, not a set of central microservices. Service classes may use
 Drizzle transactions directly. That keeps multi-row state changes in one process and one
@@ -206,4 +206,3 @@ overlay network:
 
 PostgreSQL, Redis, Docker sockets, and HTTP control ports must not be Internet-facing. See
 [Multi-host execution](/docs/configure/multi-host) for deployment details.
-

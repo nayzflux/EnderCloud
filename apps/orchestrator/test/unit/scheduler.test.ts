@@ -4,7 +4,9 @@ import { Scheduler } from "../../src/scheduler.ts";
 
 test("scheduler skips overlapping ticks and waits for active work on stop", async () => {
   let release!: () => void;
-  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const task = mock(async () => blocked);
   const logger = {
     debug: () => {},

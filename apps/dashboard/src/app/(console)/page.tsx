@@ -18,11 +18,7 @@ import { OverviewMonitoringAlerts } from "@/features/monitoring/alerts";
 import { OverviewIncidentAlerts } from "@/features/incidents/alerts";
 import { StatCard } from "@/components/stat-card";
 import { VariantStartupAction } from "@/features/variants/startup-action";
-import {
-  GroupTypeBadge,
-  LifecycleBadge,
-  SessionStateBadge,
-} from "@/components/status-badge";
+import { GroupTypeBadge, LifecycleBadge, SessionStateBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -82,9 +78,7 @@ const fleetChartConfig = {
 function activeSessionCount(group: DashboardGroup): number {
   return group.sessions.filter(
     (session) =>
-      session.state !== "FINISHED" &&
-      session.state !== "CANCELLED" &&
-      session.state !== "FAILED",
+      session.state !== "FINISHED" && session.state !== "CANCELLED" && session.state !== "FAILED",
   ).length;
 }
 
@@ -95,10 +89,7 @@ function FleetChart({ snapshot }: { readonly snapshot: DashboardClusterSnapshot 
     const counts = new Map<LifecycleState, number>();
     for (const group of snapshot.groups) {
       for (const instance of group.instances) {
-        counts.set(
-          instance.lifecycleState,
-          (counts.get(instance.lifecycleState) ?? 0) + 1,
-        );
+        counts.set(instance.lifecycleState, (counts.get(instance.lifecycleState) ?? 0) + 1);
       }
     }
     return lifecycleOrder
@@ -130,13 +121,7 @@ function FleetChart({ snapshot }: { readonly snapshot: DashboardClusterSnapshot 
           interval={0}
           fontSize={11}
         />
-        <YAxis
-          tickLine={false}
-          axisLine={false}
-          allowDecimals={false}
-          width={36}
-          fontSize={11}
-        />
+        <YAxis tickLine={false} axisLine={false} allowDecimals={false} width={36} fontSize={11} />
         <ChartTooltip content={<ChartTooltipContent hideLabel={false} />} />
         <Bar dataKey="count" radius={[6, 6, 0, 0]} maxBarSize={52}>
           {data.map((entry) => (
@@ -160,11 +145,7 @@ interface AttentionItem {
   readonly action?: React.ReactNode;
 }
 
-function AttentionCard({
-  snapshot,
-}: {
-  readonly snapshot: DashboardClusterSnapshot;
-}) {
+function AttentionCard({ snapshot }: { readonly snapshot: DashboardClusterSnapshot }) {
   const { openInstance, openSession } = useDetailPanel();
 
   const items: AttentionItem[] = [
@@ -186,29 +167,32 @@ function AttentionCard({
       group.variants.flatMap((variant) => {
         const startup = variant.startup;
         if (!startup) return [];
-        return [{
-          key: `startup:${group.id}:${variant.id}:${variant.revision}`,
-          id: `${variant.id}@${variant.revision}`,
-          groupId: group.id,
-          detail: (
-            <>
-              {humanizeState(startup.state)} · {startup.failureCount} failed start
-              {startup.failureCount === 1 ? "" : "s"}
-            </>
-          ),
-          badge: (
-            <Badge variant={startup.state === "BLOCKED" ? "destructive" : "secondary"}>
-              {humanizeState(startup.state)}
-            </Badge>
-          ),
-          action: startup.state === "BLOCKED" ? (
-            <VariantStartupAction
-              groupId={group.id}
-              variantId={variant.id}
-              revision={variant.revision}
-            />
-          ) : undefined,
-        }];
+        return [
+          {
+            key: `startup:${group.id}:${variant.id}:${variant.revision}`,
+            id: `${variant.id}@${variant.revision}`,
+            groupId: group.id,
+            detail: (
+              <>
+                {humanizeState(startup.state)} · {startup.failureCount} failed start
+                {startup.failureCount === 1 ? "" : "s"}
+              </>
+            ),
+            badge: (
+              <Badge variant={startup.state === "BLOCKED" ? "destructive" : "secondary"}>
+                {humanizeState(startup.state)}
+              </Badge>
+            ),
+            action:
+              startup.state === "BLOCKED" ? (
+                <VariantStartupAction
+                  groupId={group.id}
+                  variantId={variant.id}
+                  revision={variant.revision}
+                />
+              ) : undefined,
+          },
+        ];
       }),
     ),
     ...snapshot.groups.flatMap((group) =>
@@ -225,9 +209,9 @@ function AttentionCard({
           groupId: group.id,
           detail: (
             <>
-              {session.activePlayerCount}/{session.maximumPlayerCount} in session
-              · {session.connectedPlayerCount}/{session.activePlayerCount}{" "}
-              transferred · waiting <Elapsed value={session.createdAt} />
+              {session.activePlayerCount}/{session.maximumPlayerCount} in session ·{" "}
+              {session.connectedPlayerCount}/{session.activePlayerCount} transferred · waiting{" "}
+              <Elapsed value={session.createdAt} />
             </>
           ),
           badge: <SessionStateBadge state={session.state} />,
@@ -244,9 +228,7 @@ function AttentionCard({
           Degraded instances and sessions still waiting for capacity.
         </CardDescription>
         <CardAction>
-          <Badge variant={items.length > 0 ? "destructive" : "secondary"}>
-            {items.length}
-          </Badge>
+          <Badge variant={items.length > 0 ? "destructive" : "secondary"}>{items.length}</Badge>
         </CardAction>
       </CardHeader>
       <CardContent className="px-0">
@@ -283,15 +265,13 @@ function AttentionCard({
                     </button>
                   ) : (
                     <div className="flex min-w-0 flex-1 items-center gap-3">
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-mono text-xs">
-                        {item.id}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-mono text-xs">{item.id}</span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {item.groupId} · {item.detail}
+                        </span>
                       </span>
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {item.groupId} · {item.detail}
-                      </span>
-                    </span>
-                    {item.badge}
+                      {item.badge}
                     </div>
                   )}
                   {item.action}
@@ -307,11 +287,7 @@ function AttentionCard({
 
 /* --------------------------------------------------------------- groups --- */
 
-function GroupsTable({
-  snapshot,
-}: {
-  readonly snapshot: DashboardClusterSnapshot;
-}) {
+function GroupsTable({ snapshot }: { readonly snapshot: DashboardClusterSnapshot }) {
   return (
     <Card className="gap-0 py-0">
       <CardHeader className="border-b py-4">
@@ -320,12 +296,7 @@ function GroupsTable({
           Capacity, occupancy and queue pressure for each configured group.
         </CardDescription>
         <CardAction>
-          <Button
-            variant="ghost"
-            size="xs"
-            nativeButton={false}
-            render={<Link href="/groups" />}
-          >
+          <Button variant="ghost" size="xs" nativeButton={false} render={<Link href="/groups" />}>
             All groups
           </Button>
         </CardAction>
@@ -334,12 +305,8 @@ function GroupsTable({
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="pl-4 text-xs text-muted-foreground">
-                Group
-              </TableHead>
-              <TableHead className="w-48 text-xs text-muted-foreground">
-                Instances
-              </TableHead>
+              <TableHead className="pl-4 text-xs text-muted-foreground">Group</TableHead>
+              <TableHead className="w-48 text-xs text-muted-foreground">Instances</TableHead>
               <TableHead className="hidden text-right text-xs text-muted-foreground sm:table-cell">
                 Warm
               </TableHead>
@@ -349,12 +316,8 @@ function GroupsTable({
               <TableHead className="hidden text-right text-xs text-muted-foreground md:table-cell">
                 Sessions
               </TableHead>
-              <TableHead className="text-right text-xs text-muted-foreground">
-                Players
-              </TableHead>
-              <TableHead className="pr-4 text-right text-xs text-muted-foreground">
-                Queue
-              </TableHead>
+              <TableHead className="text-right text-xs text-muted-foreground">Players</TableHead>
+              <TableHead className="pr-4 text-right text-xs text-muted-foreground">Queue</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -414,19 +377,14 @@ function GroupsTable({
                   <TableCell className="hidden text-right font-mono text-xs tabular md:table-cell">
                     {group.type === "proxy" ? "—" : activeSessionCount(group)}
                   </TableCell>
-                  <TableCell className="text-right font-mono text-xs tabular">
-                    {players}
-                  </TableCell>
+                  <TableCell className="text-right font-mono text-xs tabular">{players}</TableCell>
                   <TableCell className="pr-4 text-right font-mono text-xs tabular">
                     {group.type !== "minigame" ? (
                       <span className="text-muted-foreground">—</span>
                     ) : (
                       <>
                         {group.queue.playerCount}
-                        <span className="text-muted-foreground">
-                          {" "}
-                          / {group.queue.partyCount}p
-                        </span>
+                        <span className="text-muted-foreground"> / {group.queue.partyCount}p</span>
                       </>
                     )}
                   </TableCell>
@@ -511,9 +469,7 @@ export default function OverviewPage() {
                 <Card className="gap-0">
                   <CardHeader className="border-b pb-4">
                     <CardTitle>Fleet health</CardTitle>
-                    <CardDescription>
-                      Managed containers by lifecycle state.
-                    </CardDescription>
+                    <CardDescription>Managed containers by lifecycle state.</CardDescription>
                   </CardHeader>
                   <CardContent className="pt-4">
                     <FleetChart snapshot={snapshot} />

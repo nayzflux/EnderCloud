@@ -1,23 +1,12 @@
 "use client";
 
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import {
-  BoxesIcon,
-  Gamepad2Icon,
-  HourglassIcon,
-  ListOrderedIcon,
-  ServerIcon,
-} from "lucide-react";
+import { BoxesIcon, Gamepad2Icon, HourglassIcon, ListOrderedIcon, ServerIcon } from "lucide-react";
 import { GroupTypeBadge, StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import type { ClusterFlowNode } from "@/features/topology/model";
 import { formatAge, humanizeState, ratio } from "@/lib/format";
-import {
-  lifecycleTone,
-  sessionTone,
-  toneBorderClass,
-  toneDotClass,
-} from "@/lib/status";
+import { lifecycleTone, sessionTone, toneBorderClass, toneDotClass } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
 /**
@@ -51,19 +40,11 @@ function NodeCard({
 }
 
 /** Inbound on top, outbound at the bottom: edges can only ever run downwards. */
-function Ports({
-  inbound,
-  outbound,
-}: {
-  readonly inbound?: boolean;
-  readonly outbound?: boolean;
-}) {
+function Ports({ inbound, outbound }: { readonly inbound?: boolean; readonly outbound?: boolean }) {
   return (
     <>
       {inbound ? <Handle id="in" type="target" position={Position.Top} /> : null}
-      {outbound ? (
-        <Handle id="out" type="source" position={Position.Bottom} />
-      ) : null}
+      {outbound ? <Handle id="out" type="source" position={Position.Bottom} /> : null}
     </>
   );
 }
@@ -118,13 +99,11 @@ export function GroupFrameNode({ data }: NodeProps<ClusterFlowNode>) {
             )}
           </span>
           <div className="min-w-0">
-            <h2 className="truncate font-heading text-base font-semibold">
-              {group.id}
-            </h2>
+            <h2 className="truncate font-heading text-base font-semibold">{group.id}</h2>
             <p className="text-xs text-muted-foreground">
               {group.variants.length} variant
-              {group.variants.length === 1 ? "" : "s"} · {group.instances.length}{" "}
-              instance{group.instances.length === 1 ? "" : "s"}
+              {group.variants.length === 1 ? "" : "s"} · {group.instances.length} instance
+              {group.instances.length === 1 ? "" : "s"}
             </p>
           </div>
         </div>
@@ -177,9 +156,7 @@ export function QueueNode({ data }: NodeProps<ClusterFlowNode>) {
         </div>
       ) : null}
       <p className="mt-2 text-[0.7rem] text-muted-foreground">
-        {queue.oldestJoinedAt
-          ? `oldest ${formatAge(queue.oldestJoinedAt)}`
-          : "no party waiting"}
+        {queue.oldestJoinedAt ? `oldest ${formatAge(queue.oldestJoinedAt)}` : "no party waiting"}
       </p>
     </NodeCard>
   );
@@ -188,15 +165,14 @@ export function QueueNode({ data }: NodeProps<ClusterFlowNode>) {
 export function PoolNode({ data }: NodeProps<ClusterFlowNode>) {
   const { capacity } = data.group;
   const target = Math.max(1, capacity.maximumWarmInstances);
-  const percent = ratio(
-    capacity.warmInstances + capacity.pendingWarmInstances,
-    target,
-  );
+  const percent = ratio(capacity.warmInstances + capacity.pendingWarmInstances, target);
 
   return (
     <NodeCard>
       <Ports inbound outbound />
-      <CardLabel icon={BoxesIcon}>{data.group.type === "proxy" ? "Proxy pool" : "Warm pool"}</CardLabel>
+      <CardLabel icon={BoxesIcon}>
+        {data.group.type === "proxy" ? "Proxy pool" : "Warm pool"}
+      </CardLabel>
       <div className="mt-2 flex items-baseline gap-2">
         <span className="font-heading text-2xl leading-none font-semibold tabular">
           {capacity.warmInstances}
@@ -208,9 +184,7 @@ export function PoolNode({ data }: NodeProps<ClusterFlowNode>) {
       <div className="mt-2.5 space-y-1">
         <MetricBar percent={percent} />
         <p className="text-[0.7rem] text-muted-foreground tabular">
-          {capacity.pendingWarmInstances > 0
-            ? `+${capacity.pendingWarmInstances} starting · `
-            : ""}
+          {capacity.pendingWarmInstances > 0 ? `+${capacity.pendingWarmInstances} starting · ` : ""}
           {data.group.type === "proxy"
             ? `${data.group.instances.filter((instance) => instance.proxy?.acceptingConnections).length} accepting connections`
             : `${capacity.reservedInstances} reserved`}
@@ -231,31 +205,34 @@ export function InstanceNode({ data }: NodeProps<ClusterFlowNode>) {
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate font-mono text-xs font-medium">{instance.id}</p>
-          <p className="truncate text-[0.7rem] text-muted-foreground">
-            {instance.variantId}
-          </p>
+          <p className="truncate text-[0.7rem] text-muted-foreground">{instance.variantId}</p>
         </div>
         <ServerIcon className="size-3.5 shrink-0 text-muted-foreground" />
       </div>
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <StatusBadge tone={tone} label={humanizeState(instance.lifecycleState)} />
-        {!instance.proxy ? <Badge variant="outline" className="text-[0.65rem]">
-          {instance.availabilityState === "RESERVED" ? "reserved" : "open"}
-        </Badge> : null}
+        {!instance.proxy ? (
+          <Badge variant="outline" className="text-[0.65rem]">
+            {instance.availabilityState === "RESERVED" ? "reserved" : "open"}
+          </Badge>
+        ) : null}
       </div>
 
       <div className="mt-2.5 space-y-1">
         <div className="flex items-center justify-between gap-2 text-[0.7rem] text-muted-foreground">
           <span className="tabular">
-            {instance.playerCount}{instance.proxy ? "" : `/${instance.maximumPlayers}`} players
+            {instance.playerCount}
+            {instance.proxy ? "" : `/${instance.maximumPlayers}`} players
           </span>
           <span className="tabular">{formatAge(instance.createdAt)}</span>
         </div>
         {instance.proxy ? (
           <p className="text-xs text-muted-foreground">
             {instance.proxy.acceptingConnections ? "Accepting connections" : "Admissions closed"}
-            {instance.proxy.lastHeartbeatAt ? ` · heartbeat ${formatAge(instance.proxy.lastHeartbeatAt)}` : " · awaiting heartbeat"}
+            {instance.proxy.lastHeartbeatAt
+              ? ` · heartbeat ${formatAge(instance.proxy.lastHeartbeatAt)}`
+              : " · awaiting heartbeat"}
           </p>
         ) : (
           <MetricBar percent={ratio(instance.playerCount, instance.maximumPlayers)} />
@@ -284,9 +261,7 @@ export function SessionNode({ data }: NodeProps<ClusterFlowNode>) {
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="text-xs font-medium">Session</p>
-          <p className="truncate font-mono text-[0.7rem] text-muted-foreground">
-            {session.id}
-          </p>
+          <p className="truncate font-mono text-[0.7rem] text-muted-foreground">{session.id}</p>
         </div>
         {waiting ? (
           <HourglassIcon className="size-3.5 shrink-0 text-muted-foreground" />
@@ -295,10 +270,7 @@ export function SessionNode({ data }: NodeProps<ClusterFlowNode>) {
         )}
       </div>
       <div className="mt-2 flex items-center gap-1.5 text-[0.7rem] text-muted-foreground">
-        <span
-          aria-hidden
-          className={cn("size-1.5 rounded-full", toneDotClass[tone])}
-        />
+        <span aria-hidden className={cn("size-1.5 rounded-full", toneDotClass[tone])} />
         {humanizeState(session.state)}
       </div>
       <div className="mt-2 space-y-0.5 text-[0.68rem]">

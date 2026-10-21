@@ -56,10 +56,7 @@ export function syncClock(generatedAt: string | null | undefined): void {
   if (Number.isNaN(serverMs)) return;
   // A payload may be newer than the previous payload yet arrive behind the
   // already-projected server time. Neither case may rewind a visible counter.
-  if (
-    anchorServerMs !== 0 &&
-    serverMs < Math.max(anchorServerMs, publishedMs, projected())
-  ) {
+  if (anchorServerMs !== 0 && serverMs < Math.max(anchorServerMs, publishedMs, projected())) {
     return;
   }
   anchorServerMs = serverMs;

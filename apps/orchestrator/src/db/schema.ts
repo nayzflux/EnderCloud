@@ -1,62 +1,69 @@
 import type {
-TemplateFileSummary,
-TransferIntent,
-VariantRuntimePatch,
-VariantRuntimeSpec,
+  TemplateFileSummary,
+  TransferIntent,
+  VariantRuntimePatch,
+  VariantRuntimeSpec,
 } from "@endercloud/contracts/domain";
 import {
-availabilityStates,
-executionHostAdminStates,
-executionHostHealthStates,
-incidentKinds,
-incidentScopeTypes,
-incidentSeverities,
-incidentStates,
-lifecycleStates,
-sessionPlayerStates,
-sessionStates,
+  availabilityStates,
+  executionHostAdminStates,
+  executionHostHealthStates,
+  incidentKinds,
+  incidentScopeTypes,
+  incidentSeverities,
+  incidentStates,
+  lifecycleStates,
+  sessionPlayerStates,
+  sessionStates,
 } from "@endercloud/contracts/domain";
 import { sql } from "drizzle-orm";
 export * from "../security/schema.ts";
 
-export const serviceCredentials = pgTable("service_credentials", {
-  id: text("id").primaryKey(),
-  kind: text("kind").notNull(),
-  principalId: text("principal_id").notNull(),
-  authKeyId: text("auth_key_id").notNull(),
-  encryptedSecret: text("encrypted_secret").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-}, table => [uniqueIndex("service_credentials_identity_unique").on(table.kind, table.principalId),
-  check("service_credentials_kind_check", sql`${table.kind} IN ('agent', 'paper', 'proxy')`)]);
+export const serviceCredentials = pgTable(
+  "service_credentials",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").notNull(),
+    principalId: text("principal_id").notNull(),
+    authKeyId: text("auth_key_id").notNull(),
+    encryptedSecret: text("encrypted_secret").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("service_credentials_identity_unique").on(table.kind, table.principalId),
+    check("service_credentials_kind_check", sql`${table.kind} IN ('agent', 'paper', 'proxy')`),
+  ],
+);
 
-export const releaseMetadata = pgTable("release_metadata", {
-  id: integer("id").primaryKey().default(1),
-  schemaVersion: integer("schema_version").notNull().default(1),
-}, table => [check("release_metadata_singleton", sql`${table.id} = 1`)]);
+export const releaseMetadata = pgTable(
+  "release_metadata",
+  {
+    id: integer("id").primaryKey().default(1),
+    schemaVersion: integer("schema_version").notNull().default(1),
+  },
+  (table) => [check("release_metadata_singleton", sql`${table.id} = 1`)],
+);
 import {
-bigint,
-boolean,
-check,
-doublePrecision,
-index,
-integer,
-jsonb,
-pgEnum,
-pgTable,
-primaryKey,
-text,
-timestamp,
-uniqueIndex,
-uuid
+  bigint,
+  boolean,
+  check,
+  doublePrecision,
+  index,
+  integer,
+  jsonb,
+  pgEnum,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
 } from "drizzle-orm/pg-core";
 
 export const groupTypeEnum = pgEnum("group_type", ["hub", "minigame", "proxy"]);
 export const lifecycleStateEnum = pgEnum("lifecycle_state", lifecycleStates);
 export const availabilityStateEnum = pgEnum("availability_state", availabilityStates);
-export const executionHostHealthEnum = pgEnum(
-  "execution_host_health",
-  executionHostHealthStates,
-);
+export const executionHostHealthEnum = pgEnum("execution_host_health", executionHostHealthStates);
 export const executionHostAdminStateEnum = pgEnum(
   "execution_host_admin_state",
   executionHostAdminStates,
@@ -67,11 +74,7 @@ export const incidentKindEnum = pgEnum("incident_kind", incidentKinds);
 export const incidentSeverityEnum = pgEnum("incident_severity", incidentSeverities);
 export const incidentStateEnum = pgEnum("incident_state", incidentStates);
 export const incidentScopeTypeEnum = pgEnum("incident_scope_type", incidentScopeTypes);
-export const queueEntryStateEnum = pgEnum("queue_entry_state", [
-  "QUEUED",
-  "SELECTED",
-  "LEFT",
-]);
+export const queueEntryStateEnum = pgEnum("queue_entry_state", ["QUEUED", "SELECTED", "LEFT"]);
 export const commandStateEnum = pgEnum("command_state", [
   "PENDING",
   "RUNNING",
@@ -122,7 +125,10 @@ export const serverGroups = pgTable(
     ...auditColumns,
   },
   (table) => [
-    check("server_groups_capacity_check", sql`${table.maximumInstances} >= ${table.minimumInstances}`),
+    check(
+      "server_groups_capacity_check",
+      sql`${table.maximumInstances} >= ${table.minimumInstances}`,
+    ),
     check(
       "server_groups_warm_capacity_check",
       sql`${table.maximumWarmInstances} >= ${table.minimumWarmInstances}`,
@@ -142,36 +148,36 @@ export const serverGroups = pgTable(
   ],
 );
 
-export const templateLayers = pgTable(
-  "template_layers",
-  {
-    id: text("id").primaryKey(),
-    templatePath: text("template_path").notNull(),
-    checksum: text("checksum").notNull(),
-    runtimePatch: jsonb("runtime_patch").$type<VariantRuntimePatch>().notNull(),
-    fileSummary: jsonb("file_summary").$type<TemplateFileSummary>().notNull(),
-    ...auditColumns,
-  },
-);
+export const templateLayers = pgTable("template_layers", {
+  id: text("id").primaryKey(),
+  templatePath: text("template_path").notNull(),
+  checksum: text("checksum").notNull(),
+  runtimePatch: jsonb("runtime_patch").$type<VariantRuntimePatch>().notNull(),
+  fileSummary: jsonb("file_summary").$type<TemplateFileSummary>().notNull(),
+  ...auditColumns,
+});
 
-export const serverVariants = pgTable(
-  "server_variants",
-  {
-    id: text("id").primaryKey().references(() => templateLayers.id),
-    revision: integer("revision").notNull(),
-    checksum: text("checksum").notNull(),
-    runtimeSpec: jsonb("runtime_spec").$type<VariantRuntimeSpec>().notNull(),
-    ...auditColumns,
-  },
-);
+export const serverVariants = pgTable("server_variants", {
+  id: text("id")
+    .primaryKey()
+    .references(() => templateLayers.id),
+  revision: integer("revision").notNull(),
+  checksum: text("checksum").notNull(),
+  runtimeSpec: jsonb("runtime_spec").$type<VariantRuntimeSpec>().notNull(),
+  ...auditColumns,
+});
 
 export const serverVariantLayers = pgTable(
   "server_variant_layers",
   {
-    variantId: text("variant_id").notNull().references(() => serverVariants.id, {
-      onDelete: "cascade",
-    }),
-    layerId: text("layer_id").notNull().references(() => templateLayers.id),
+    variantId: text("variant_id")
+      .notNull()
+      .references(() => serverVariants.id, {
+        onDelete: "cascade",
+      }),
+    layerId: text("layer_id")
+      .notNull()
+      .references(() => templateLayers.id),
     ordinal: integer("ordinal").notNull(),
   },
   (table) => [
@@ -184,10 +190,14 @@ export const serverVariantLayers = pgTable(
 export const serverGroupVariants = pgTable(
   "server_group_variants",
   {
-    groupId: text("group_id").notNull().references(() => serverGroups.id, {
-      onDelete: "cascade",
-    }),
-    variantId: text("variant_id").notNull().references(() => serverVariants.id),
+    groupId: text("group_id")
+      .notNull()
+      .references(() => serverGroups.id, {
+        onDelete: "cascade",
+      }),
+    variantId: text("variant_id")
+      .notNull()
+      .references(() => serverVariants.id),
     enabled: boolean("enabled").notNull().default(true),
     selectionWeight: integer("selection_weight").notNull(),
   },
@@ -221,12 +231,15 @@ export const executionHosts = pgTable(
     index("execution_hosts_health_admin_idx").on(table.healthState, table.adminState),
     check("execution_hosts_cpu_check", sql`${table.allocatableCpu} > 0`),
     check("execution_hosts_memory_check", sql`${table.allocatableMemoryBytes} > 0`),
-    check("execution_hosts_proxy_ports_check", sql`(
+    check(
+      "execution_hosts_proxy_ports_check",
+      sql`(
       ${table.proxyAddress} IS NULL AND ${table.proxyPortStart} IS NULL AND ${table.proxyPortEnd} IS NULL
     ) OR (
       ${table.proxyAddress} IS NOT NULL AND ${table.proxyPortStart} IS NOT NULL AND ${table.proxyPortEnd} IS NOT NULL
       AND ${table.proxyPortStart} BETWEEN 1 AND 65535 AND ${table.proxyPortEnd} BETWEEN ${table.proxyPortStart} AND 65535
-    )`),
+    )`,
+    ),
   ],
 );
 
@@ -276,7 +289,9 @@ export const serverInstances = pgTable(
     runtimePath: text("runtime_path"),
     endpoint: text("endpoint"),
     playerCount: integer("player_count").notNull().default(0),
-    paperHealthDeadline: timestamp("paper_health_deadline", { withTimezone: true }).default(sql`now() + interval '30 seconds'`),
+    paperHealthDeadline: timestamp("paper_health_deadline", { withTimezone: true }).default(
+      sql`now() + interval '30 seconds'`,
+    ),
     healthSuspectedAt: timestamp("health_suspected_at", { withTimezone: true }),
     startupDeadline: timestamp("startup_deadline", { withTimezone: true }),
     renewalDeadline: timestamp("renewal_deadline", { withTimezone: true }),
@@ -339,12 +354,16 @@ export const serverInstances = pgTable(
 export const variantStartStates = pgTable(
   "variant_start_states",
   {
-    groupId: text("group_id").notNull().references(() => serverGroups.id, {
-      onDelete: "cascade",
-    }),
-    variantId: text("variant_id").notNull().references(() => serverVariants.id, {
-      onDelete: "cascade",
-    }),
+    groupId: text("group_id")
+      .notNull()
+      .references(() => serverGroups.id, {
+        onDelete: "cascade",
+      }),
+    variantId: text("variant_id")
+      .notNull()
+      .references(() => serverVariants.id, {
+        onDelete: "cascade",
+      }),
     variantRevision: integer("variant_revision").notNull(),
     state: variantStartStateEnum("state").notNull(),
     failureCount: integer("failure_count").notNull().default(0),
@@ -413,9 +432,11 @@ export const sessionPlayers = pgTable(
       .references(() => gameSessions.id, { onDelete: "cascade" }),
     playerId: uuid("player_id").notNull(),
     partyId: text("party_id").notNull(),
-    queueEntryId: text("queue_entry_id").notNull().references(() => queueEntries.id, {
-      onDelete: "restrict",
-    }),
+    queueEntryId: text("queue_entry_id")
+      .notNull()
+      .references(() => queueEntries.id, {
+        onDelete: "restrict",
+      }),
     state: sessionPlayerStateEnum("state").notNull().default("SELECTED"),
     selectedAt: timestamp("selected_at", { withTimezone: true }).defaultNow().notNull(),
     transferringAt: timestamp("transferring_at", { withTimezone: true }),
@@ -517,22 +538,36 @@ export const commands = pgTable(
   (table) => [index("commands_pending_idx").on(table.state, table.createdAt)],
 );
 
-export const registryState = pgTable("registry_state", {
-  id: integer("id").primaryKey().default(1),
-  revision: bigint("revision", { mode: "number" }).notNull().default(0),
-}, table => [check("registry_state_singleton", sql`${table.id} = 1`), check("registry_revision_positive", sql`${table.revision} >= 0`)]);
+export const registryState = pgTable(
+  "registry_state",
+  {
+    id: integer("id").primaryKey().default(1),
+    revision: bigint("revision", { mode: "number" }).notNull().default(0),
+  },
+  (table) => [
+    check("registry_state_singleton", sql`${table.id} = 1`),
+    check("registry_revision_positive", sql`${table.revision} >= 0`),
+  ],
+);
 
-export const registryOutbox = pgTable("registry_outbox", {
-  id: text("id").primaryKey(),
-  type: text("type").notNull(),
-  revision: bigint("revision", { mode: "number" }).notNull().unique(),
-  payload: jsonb("payload").notNull(),
-  attempts: integer("attempts").notNull().default(0),
-  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow().notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  publishedAt: timestamp("published_at", { withTimezone: true }),
-}, table => [index("registry_outbox_pending_idx").on(table.nextAttemptAt).where(sql`${table.publishedAt} IS NULL`)]);
-
+export const registryOutbox = pgTable(
+  "registry_outbox",
+  {
+    id: text("id").primaryKey(),
+    type: text("type").notNull(),
+    revision: bigint("revision", { mode: "number" }).notNull().unique(),
+    payload: jsonb("payload").notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("registry_outbox_pending_idx")
+      .on(table.nextAttemptAt)
+      .where(sql`${table.publishedAt} IS NULL`),
+  ],
+);
 
 export const events = pgTable(
   "events",
@@ -575,8 +610,7 @@ export const operationalIncidents = pgTable(
     uniqueIndex("operational_incidents_unresolved_fingerprint_idx")
       .on(table.fingerprint)
       .where(sql`${table.state} <> 'RESOLVED'`),
-    index("operational_incidents_state_last_observed_idx")
-      .on(table.state, table.lastObservedAt),
+    index("operational_incidents_state_last_observed_idx").on(table.state, table.lastObservedAt),
     index("operational_incidents_group_state_idx").on(table.groupId, table.state),
     check("operational_incidents_occurrence_check", sql`${table.occurrenceCount} > 0`),
   ],

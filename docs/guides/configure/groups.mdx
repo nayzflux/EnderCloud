@@ -32,15 +32,15 @@ variants:
     weight: 40
 ```
 
-| Field | Required | Default | Rules |
-| --- | :---: | --- | --- |
-| `id` | Yes | None | Unique identifier with 2 to 63 lowercase letters, digits, or dashes |
-| `type` | Yes | None | `hub` or `minigame` |
-| `enabled` | No | `true` | Disabled groups receive no new traffic |
-| `variants` | Yes | None | Array of final variant references. IDs cannot repeat inside a group |
-| `variants[].id` | Yes | None | Existing final layer ID from `templates/` |
-| `variants[].enabled` | No | `true` | Disabled references remain synchronized but are not selected |
-| `variants[].weight` | Yes | None | Positive integer selection weight |
+| Field                | Required | Default | Rules                                                               |
+| -------------------- | :------: | ------- | ------------------------------------------------------------------- |
+| `id`                 |   Yes    | None    | Unique identifier with 2 to 63 lowercase letters, digits, or dashes |
+| `type`               |   Yes    | None    | `hub` or `minigame`                                                 |
+| `enabled`            |    No    | `true`  | Disabled groups receive no new traffic                              |
+| `variants`           |   Yes    | None    | Array of final variant references. IDs cannot repeat inside a group |
+| `variants[].id`      |   Yes    | None    | Existing final layer ID from `templates/`                           |
+| `variants[].enabled` |    No    | `true`  | Disabled references remain synchronized but are not selected        |
+| `variants[].weight`  |   Yes    | None    | Positive integer selection weight                                   |
 
 An enabled group needs at least one enabled variant. A disabled group may have no enabled
 variants. The same final variant may belong to several groups with different weights.
@@ -61,12 +61,12 @@ capacity:
   maximum_warm_instances: 4
 ```
 
-| Field | Minimum | Meaning |
-| --- | ---: | --- |
-| `minimum_instances` | 0 | Floor for active physical instances in the group |
-| `maximum_instances` | 1 | Strict ceiling for normal active physical instances |
-| `minimum_warm_instances` | 0 | Floor for open instances that are ready or starting |
-| `maximum_warm_instances` | 0 | Ceiling for open instances kept ahead of demand |
+| Field                    | Minimum | Meaning                                             |
+| ------------------------ | ------: | --------------------------------------------------- |
+| `minimum_instances`      |       0 | Floor for active physical instances in the group    |
+| `maximum_instances`      |       1 | Strict ceiling for normal active physical instances |
+| `minimum_warm_instances` |       0 | Floor for open instances that are ready or starting |
+| `maximum_warm_instances` |       0 | Ceiling for open instances kept ahead of demand     |
 
 The limits must satisfy:
 
@@ -100,14 +100,14 @@ timeouts:
 Group durations are positive integers followed by `ms`, `s`, `m`, or `h`. Values such as `500ms`,
 `45s`, and `4h` are valid. Bare numbers and day suffixes are not valid in group YAML.
 
-| Field | Starts when | Expiry behavior |
-| --- | --- | --- |
-| `startup` | Docker has started and the instance enters `STARTING` | Fail the instance if Paper has not sent `SERVER_READY` |
-| `drain` | Normal instance drain begins | Stop the instance even if players are still observed |
-| `cancelled_drain` | A minigame session is cancelled | Bound active hub evacuation before forced stop |
-| `shutdown` | The instance enters `STOPPING` | Bound graceful Minecraft shutdown before forceful Docker cleanup |
-| `transfer` | A transfer command is created | Expire the command and release session players that did not arrive |
-| `player_stale` | Paper last reports a player present | Remove the player from observed counts and mark session presence left |
+| Field             | Starts when                                           | Expiry behavior                                                       |
+| ----------------- | ----------------------------------------------------- | --------------------------------------------------------------------- |
+| `startup`         | Docker has started and the instance enters `STARTING` | Fail the instance if Paper has not sent `SERVER_READY`                |
+| `drain`           | Normal instance drain begins                          | Stop the instance even if players are still observed                  |
+| `cancelled_drain` | A minigame session is cancelled                       | Bound active hub evacuation before forced stop                        |
+| `shutdown`        | The instance enters `STOPPING`                        | Bound graceful Minecraft shutdown before forceful Docker cleanup      |
+| `transfer`        | A transfer command is created                         | Expire the command and release session players that did not arrive    |
+| `player_stale`    | Paper last reports a player present                   | Remove the player from observed counts and mark session presence left |
 
 The orchestrator persists an absolute deadline when an operation starts. Editing the timeout does
 not alter deadlines already stored in PostgreSQL. See [the timeout reference](/docs/configure/timeouts).
@@ -146,11 +146,11 @@ timeouts:
   player_stale: 30s
 ```
 
-| Field | Required | Default | Rules |
-| --- | :---: | --- | --- |
-| `routing.maximum_players_per_instance` | Yes | None | Positive integer and strict per-hub routing limit |
-| `routing.target_players_per_instance` | Yes | None | Positive integer no greater than the maximum |
-| `timeouts.instance_lifetime` | No | `4h` | Maximum age before replacement and drain |
+| Field                                  | Required | Default | Rules                                             |
+| -------------------------------------- | :------: | ------- | ------------------------------------------------- |
+| `routing.maximum_players_per_instance` |   Yes    | None    | Positive integer and strict per-hub routing limit |
+| `routing.target_players_per_instance`  |   Yes    | None    | Positive integer no greater than the maximum      |
+| `timeouts.instance_lifetime`           |    No    | `4h`    | Maximum age before replacement and drain          |
 
 The target is a soft aggregate scale-out threshold. When observed players reach the combined
 target capacity of running and starting hubs, the controller requests another hub up to
@@ -208,15 +208,15 @@ timeouts:
 
 ### Matchmaking fields
 
-| Field | Required | Default | Rules |
-| --- | :---: | --- | --- |
-| `minimum_players` | Yes | None | Positive integer no greater than `maximum_players` |
-| `maximum_players` | Yes | None | Positive integer no greater than `team_count * team_size` |
-| `team_count` | Yes | None | Positive integer number of teams |
-| `team_size` | Yes | None | Positive integer maximum players in one team and maximum party size |
-| `candidate_window` | No | `20` | Positive integer number of oldest FIFO entries considered per tick |
-| `team_balance.minimum_players_per_team` | No | `0` | Integer from 0 through `team_size` |
-| `team_balance.maximum_team_spread` | No | `team_size` | Integer from 0 through `team_size` |
+| Field                                   | Required | Default     | Rules                                                               |
+| --------------------------------------- | :------: | ----------- | ------------------------------------------------------------------- |
+| `minimum_players`                       |   Yes    | None        | Positive integer no greater than `maximum_players`                  |
+| `maximum_players`                       |   Yes    | None        | Positive integer no greater than `team_count * team_size`           |
+| `team_count`                            |   Yes    | None        | Positive integer number of teams                                    |
+| `team_size`                             |   Yes    | None        | Positive integer maximum players in one team and maximum party size |
+| `candidate_window`                      |    No    | `20`        | Positive integer number of oldest FIFO entries considered per tick  |
+| `team_balance.minimum_players_per_team` |    No    | `0`         | Integer from 0 through `team_size`                                  |
+| `team_balance.maximum_team_spread`      |    No    | `team_size` | Integer from 0 through `team_size`                                  |
 
 The matchmaker never splits a queue entry. A party larger than `team_size` is rejected before
 matchmaking. Feasible profiles must fit every atomic party, the player limits, and the balance
@@ -243,10 +243,10 @@ matchmaking:
 
 ### Minigame timeouts
 
-| Field | Required | Starts when | Expiry behavior |
-| --- | :---: | --- | --- |
-| `timeouts.instance_acquisition` | Yes | A feasible session needs an instance but none is available | Cancel the session if no instance can be reserved |
-| `timeouts.lobby_stale` | Yes | Transfers to the reserved instance begin | Cancel a lobby that never progresses to `GAME_STARTING` |
+| Field                           | Required | Starts when                                                | Expiry behavior                                         |
+| ------------------------------- | :------: | ---------------------------------------------------------- | ------------------------------------------------------- |
+| `timeouts.instance_acquisition` |   Yes    | A feasible session needs an instance but none is available | Cancel the session if no instance can be reserved       |
+| `timeouts.lobby_stale`          |   Yes    | Transfers to the reserved instance begin                   | Cancel a lobby that never progresses to `GAME_STARTING` |
 
 The minigame plugin has sole authority to publish `GAME_STARTING`. EnderCloud has no partial-start
 timer. `lobby_stale` is a watchdog for an abandoned lobby, not permission for the orchestrator to
@@ -288,4 +288,3 @@ operator searches and reviews less error-prone.
 The loader rejects the old `lifecycle` block, matchmaking timeout aliases, `partial_start`, and
 `timeouts.ineligible_lobby`. Use the canonical `timeouts` block and
 `matchmaking.team_balance`. Startup errors name the expected replacement.
-

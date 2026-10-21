@@ -24,10 +24,7 @@ function compactDuration(totalSeconds: number): string {
 }
 
 /** `il y a 3 min` equivalent: `3m 20s ago`, `in 45s`, or `just now`. */
-export function formatRelativeTime(
-  value: string | null | undefined,
-  now = Date.now(),
-): string {
+export function formatRelativeTime(value: string | null | undefined, now = Date.now()): string {
   if (!value) return "—";
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) return "—";
@@ -38,10 +35,7 @@ export function formatRelativeTime(
 }
 
 /** Elapsed time since `value`, without the `ago` suffix — for age columns. */
-export function formatAge(
-  value: string | null | undefined,
-  now = Date.now(),
-): string {
+export function formatAge(value: string | null | undefined, now = Date.now()): string {
   if (!value) return "—";
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) return "—";
@@ -49,10 +43,7 @@ export function formatAge(
 }
 
 /** Time left before `value`, or `overdue` once the deadline has passed. */
-export function formatCountdown(
-  value: string | null | undefined,
-  now = Date.now(),
-): string {
+export function formatCountdown(value: string | null | undefined, now = Date.now()): string {
   if (!value) return "—";
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) return "—";

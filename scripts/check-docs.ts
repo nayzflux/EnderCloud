@@ -18,12 +18,20 @@ for (const path of files) {
   for (const match of source.matchAll(/\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
     const link = match[1]!.split(/[?#]/)[0]!;
     if (!link || /^(https?:|mailto:|data:)/.test(link)) continue;
-    const target = link === "/docs" ? resolve(guides, "index.mdx")
-      : link.startsWith("/docs/") ? resolve(guides, link.slice(6) + ".mdx")
-      : resolve(dirname(path), decodeURIComponent(link));
-    try { await access(target); }
-    catch { failures.push(`${relative(root, path)} links to missing ${link}`); }
+    const target =
+      link === "/docs"
+        ? resolve(guides, "index.mdx")
+        : link.startsWith("/docs/")
+          ? resolve(guides, link.slice(6) + ".mdx")
+          : resolve(dirname(path), decodeURIComponent(link));
+    try {
+      await access(target);
+    } catch {
+      failures.push(`${relative(root, path)} links to missing ${link}`);
+    }
   }
 }
-if (failures.length) { console.error(failures.join("\n")); process.exitCode = 1; }
-else console.log(`Canonical documentation links passed (${files.length} files).`);
+if (failures.length) {
+  console.error(failures.join("\n"));
+  process.exitCode = 1;
+} else console.log(`Canonical documentation links passed (${files.length} files).`);

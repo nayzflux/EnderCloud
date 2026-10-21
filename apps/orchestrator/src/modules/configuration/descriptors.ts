@@ -1,4 +1,9 @@
-import type { GroupVariantReference,ServerGroupConfig,ServerVariantConfig,VariantRuntimePatch } from "@endercloud/contracts/domain";
+import type {
+  GroupVariantReference,
+  ServerGroupConfig,
+  ServerVariantConfig,
+  VariantRuntimePatch,
+} from "@endercloud/contracts/domain";
 import { z } from "zod";
 
 const idPattern = /^[a-z0-9][a-z0-9-]{1,62}$/;
@@ -48,7 +53,8 @@ export function parseDuration(value: unknown, context: string): number {
   if (amount <= 0) throw new Error(`${context} must be greater than zero`);
   const multipliers = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 } as const;
   const milliseconds = amount * multipliers[match[2] as keyof typeof multipliers];
-  if (!Number.isSafeInteger(milliseconds) || milliseconds > 2_147_483_647) throw new Error(`${context} exceeds the supported duration`);
+  if (!Number.isSafeInteger(milliseconds) || milliseconds > 2_147_483_647)
+    throw new Error(`${context} exceeds the supported duration`);
   return milliseconds;
 }
 
@@ -73,10 +79,7 @@ function validateId(value: unknown, context: string): string {
 }
 
 // Validate a group descriptor and enforce cross-field capacity constraints.
-export function parseGroup(
-  document: unknown,
-  source: string,
-): ServerGroupConfig {
+export function parseGroup(document: unknown, source: string): ServerGroupConfig {
   const root = object(document, source);
   if (root.lifecycle !== undefined) {
     throw new Error(`${source}.lifecycle was removed; use ${source}.timeouts`);
@@ -112,10 +115,7 @@ export function parseGroup(
     enabled: groupEnabled,
     variants,
     capacity: {
-      minimumInstances: integer(
-        capacity.minimum_instances,
-        `${source}.capacity.minimum_instances`,
-      ),
+      minimumInstances: integer(capacity.minimum_instances, `${source}.capacity.minimum_instances`),
       maximumInstances: integer(
         capacity.maximum_instances,
         `${source}.capacity.maximum_instances`,
@@ -131,24 +131,17 @@ export function parseGroup(
       ),
     },
     timeouts: {
-      startupMs: timeoutValue(
-        timeouts, "startup", source,
-      ),
-      drainMs: timeoutValue(
-        timeouts, "drain", source,
-      ),
+      startupMs: timeoutValue(timeouts, "startup", source),
+      drainMs: timeoutValue(timeouts, "drain", source),
       cancelledDrainMs: timeoutValue(
-        timeouts, "cancelled_drain", source, type === "proxy" ? 10_000 : undefined,
+        timeouts,
+        "cancelled_drain",
+        source,
+        type === "proxy" ? 10_000 : undefined,
       ),
-      shutdownMs: timeoutValue(
-        timeouts, "shutdown", source,
-      ),
-      transferMs: timeoutValue(
-        timeouts, "transfer", source, type === "proxy" ? 20_000 : undefined,
-      ),
-      playerStaleMs: timeoutValue(
-        timeouts, "player_stale", source,
-      ),
+      shutdownMs: timeoutValue(timeouts, "shutdown", source),
+      transferMs: timeoutValue(timeouts, "transfer", source, type === "proxy" ? 20_000 : undefined),
+      playerStaleMs: timeoutValue(timeouts, "player_stale", source),
     },
   };
   if (
@@ -163,8 +156,14 @@ export function parseGroup(
     if (parsed.capacity.minimumInstances !== parsed.capacity.maximumInstances) {
       throw new Error(`${source} proxy minimum_instances must equal maximum_instances`);
     }
-    if (root.routing !== undefined || root.matchmaking !== undefined || timeouts.instance_lifetime !== undefined) {
-      throw new Error(`${source} proxy groups cannot configure routing, matchmaking or instance_lifetime`);
+    if (
+      root.routing !== undefined ||
+      root.matchmaking !== undefined ||
+      timeouts.instance_lifetime !== undefined
+    ) {
+      throw new Error(
+        `${source} proxy groups cannot configure routing, matchmaking or instance_lifetime`,
+      );
     }
     return parsed;
   }
@@ -189,13 +188,11 @@ export function parseGroup(
       throw new Error(`${source}.timeouts.ineligible_lobby was removed; use timeouts.lobby_stale`);
     }
     if (timeouts.partial_start !== undefined) {
-      throw new Error(`${source}.timeouts.partial_start was removed; the minigame plugin controls game start`);
+      throw new Error(
+        `${source}.timeouts.partial_start was removed; the minigame plugin controls game start`,
+      );
     }
-    const teamSize = integer(
-      matchmaking.team_size,
-      `${source}.matchmaking.team_size`,
-      1,
-    );
+    const teamSize = integer(matchmaking.team_size, `${source}.matchmaking.team_size`, 1);
     const teamBalance = object(
       matchmaking.team_balance ?? {},
       `${source}.matchmaking.team_balance`,
@@ -235,16 +232,8 @@ export function parseGroup(
     ) {
       throw new Error(`${source} has inconsistent matchmaking limits`);
     }
-    const instanceAcquisitionMs = timeoutValue(
-      timeouts,
-      "instance_acquisition",
-      source,
-    );
-    const lobbyStaleMs = timeoutValue(
-      timeouts,
-      "lobby_stale",
-      source,
-    );
+    const instanceAcquisitionMs = timeoutValue(timeouts, "instance_acquisition", source);
+    const lobbyStaleMs = timeoutValue(timeouts, "lobby_stale", source);
     return {
       ...parsed,
       timeouts: {
@@ -270,9 +259,10 @@ export function parseGroup(
   if (targetPlayersPerInstance > maximumPlayersPerInstance) {
     throw new Error(`${source} target routing capacity exceeds its maximum`);
   }
-  const instanceLifetimeMs = timeouts.instance_lifetime === undefined
-    ? 4 * 60 * 60 * 1_000
-    : parseDuration(timeouts.instance_lifetime, `${source}.timeouts.instance_lifetime`);
+  const instanceLifetimeMs =
+    timeouts.instance_lifetime === undefined
+      ? 4 * 60 * 60 * 1_000
+      : parseDuration(timeouts.instance_lifetime, `${source}.timeouts.instance_lifetime`);
   return {
     ...parsed,
     timeouts: {
@@ -289,8 +279,10 @@ function parseMemory(value: unknown, context: string): number {
   const match = /^(\d+)([KMG])$/i.exec(value);
   if (!match) throw new Error(`${context} must look like 512M or 4G`);
   const factors = { K: 1024, M: 1024 ** 2, G: 1024 ** 3 } as const;
-  const bytes = Number.parseInt(match[1]!, 10) * factors[match[2]!.toUpperCase() as keyof typeof factors];
-  if (!Number.isSafeInteger(bytes) || bytes <= 0) throw new Error(`${context} exceeds the supported memory bound`);
+  const bytes =
+    Number.parseInt(match[1]!, 10) * factors[match[2]!.toUpperCase() as keyof typeof factors];
+  if (!Number.isSafeInteger(bytes) || bytes <= 0)
+    throw new Error(`${context} exceeds the supported memory bound`);
   return bytes;
 }
 
@@ -316,7 +308,14 @@ export function parseVariant(document: unknown, source: string): ServerVariantCo
     const digest = /^[^\s@]+@sha256:[a-f0-9]{64}$/.test(image);
     const colon = image.lastIndexOf(":");
     const tag = colon > image.lastIndexOf("/") ? image.slice(colon + 1) : undefined;
-    if (/\s|\\|:\/\//.test(image) || (!digest && (!tag || tag === "latest" || !/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(tag) || image.includes("@")))) {
+    if (
+      /\s|\\|:\/\//.test(image) ||
+      (!digest &&
+        (!tag ||
+          tag === "latest" ||
+          !/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(tag) ||
+          image.includes("@")))
+    ) {
       throw new Error(`${source}.docker.image must use an explicit tag or digest`);
     }
   }
@@ -342,7 +341,7 @@ export function parseVariant(document: unknown, source: string): ServerVariantCo
     throw new Error(`${source}.parents must be an array`);
   }
   const parents = (root.parents ?? []).map((value: unknown, index: number) =>
-    validateId(value, `${source}.parents[${index}]`)
+    validateId(value, `${source}.parents[${index}]`),
   );
   if (new Set(parents).size !== parents.length) {
     throw new Error(`${source}.parents contains duplicate ids`);
@@ -356,4 +355,3 @@ export function parseVariant(document: unknown, source: string): ServerVariantCo
     runtime,
   };
 }
-

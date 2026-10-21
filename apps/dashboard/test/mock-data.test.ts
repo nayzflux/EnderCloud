@@ -74,15 +74,11 @@ describe("mockCluster", () => {
   test("keeps identifiers stable as time advances", () => {
     const first = mockCluster(now);
     const later = mockCluster(now + 60_000);
-    expect(later.groups.map((group) => group.id)).toEqual(
-      first.groups.map((group) => group.id),
-    );
+    expect(later.groups.map((group) => group.id)).toEqual(first.groups.map((group) => group.id));
     expect(later.groups[1].instances.map((instance) => instance.id)).toEqual(
       first.groups[1].instances.map((instance) => instance.id),
     );
-    expect(Date.parse(later.generatedAt)).toBeGreaterThan(
-      Date.parse(first.generatedAt),
-    );
+    expect(Date.parse(later.generatedAt)).toBeGreaterThan(Date.parse(first.generatedAt));
   });
 
   test("emits identifiers the API routes accept", () => {
@@ -100,15 +96,14 @@ describe("mockCluster", () => {
 
   test("summary agrees with the groups it summarises", () => {
     const snapshot = mockCluster(now);
-    const players = snapshot.groups.filter((group) => group.type !== "proxy").reduce(
-      (total, group) =>
-        total +
-        group.instances.reduce(
-          (groupTotal, instance) => groupTotal + instance.playerCount,
-          0,
-        ),
-      0,
-    );
+    const players = snapshot.groups
+      .filter((group) => group.type !== "proxy")
+      .reduce(
+        (total, group) =>
+          total +
+          group.instances.reduce((groupTotal, instance) => groupTotal + instance.playerCount, 0),
+        0,
+      );
     const queuedPlayers = snapshot.groups.reduce(
       (total, group) => total + group.queue.playerCount,
       0,
@@ -131,12 +126,8 @@ describe("mockCluster", () => {
   test("keeps session and transfer player counts coherent", () => {
     for (const group of mockCluster(now).groups) {
       for (const session of group.sessions) {
-        expect(session.activePlayerCount).toBeLessThanOrEqual(
-          session.maximumPlayerCount,
-        );
-        expect(session.connectedPlayerCount).toBeLessThanOrEqual(
-          session.activePlayerCount,
-        );
+        expect(session.activePlayerCount).toBeLessThanOrEqual(session.maximumPlayerCount);
+        expect(session.connectedPlayerCount).toBeLessThanOrEqual(session.activePlayerCount);
       }
     }
   });
@@ -150,8 +141,11 @@ describe("mockCluster", () => {
     expect(states.has("RUNNING")).toBe(true);
     expect(states.has("FAILED")).toBe(true);
     expect(states.has("DRAINING")).toBe(true);
-    expect(mockCluster(now).groups.flatMap((group) => group.variants)
-      .some((variant) => variant.startup?.state === "BLOCKED")).toBe(true);
+    expect(
+      mockCluster(now)
+        .groups.flatMap((group) => group.variants)
+        .some((variant) => variant.startup?.state === "BLOCKED"),
+    ).toBe(true);
   });
 });
 
@@ -174,15 +168,11 @@ describe("mockQueue", () => {
   });
 
   test("agrees with the queue counters in the cluster snapshot", () => {
-    const group = mockCluster(now).groups.find(
-      (candidate) => candidate.id === "skywars-solo",
-    )!;
+    const group = mockCluster(now).groups.find((candidate) => candidate.id === "skywars-solo")!;
     const detail = mockQueue("skywars-solo", 200, now)!;
     expect(detail.totalParties).toBe(group.queue.partyCount);
     expect(detail.totalPlayers).toBe(group.queue.playerCount);
-    expect(detail.entries[0]?.joinedAt ?? null).toBe(
-      group.queue.oldestJoinedAt as string,
-    );
+    expect(detail.entries[0]?.joinedAt ?? null).toBe(group.queue.oldestJoinedAt as string);
   });
 
   test("is null for an unknown group", () => {
@@ -215,15 +205,11 @@ describe("mockInstance and mockSession", () => {
     for (const group of snapshot.groups) {
       for (const session of group.sessions) {
         const detail = mockSession(session.id, now)!;
-        const players = detail.tickets.reduce(
-          (total, ticket) => total + ticket.players.length,
-          0,
-        );
+        const players = detail.tickets.reduce((total, ticket) => total + ticket.players.length, 0);
         expect(players).toBe(session.activePlayerCount);
         const connected = detail.tickets.reduce(
           (total, ticket) =>
-            total +
-            ticket.players.filter((player) => player.state === "CONNECTED").length,
+            total + ticket.players.filter((player) => player.state === "CONNECTED").length,
           0,
         );
         expect(connected).toBe(session.connectedPlayerCount);
@@ -243,16 +229,18 @@ describe("mockInstance and mockSession", () => {
         if (deadline) kinds.add(deadline.kind);
       }
     }
-    expect(kinds).toEqual(new Set([
-      "INSTANCE_RENEWAL",
-      "INSTANCE_STARTUP",
-      "INSTANCE_DRAIN",
-      "CANCELLED_INSTANCE_DRAIN",
-      "INSTANCE_SHUTDOWN",
-      "INSTANCE_ACQUISITION",
-      "PLAYER_TRANSFER",
-      "LOBBY_STALE",
-    ]));
+    expect(kinds).toEqual(
+      new Set([
+        "INSTANCE_RENEWAL",
+        "INSTANCE_STARTUP",
+        "INSTANCE_DRAIN",
+        "CANCELLED_INSTANCE_DRAIN",
+        "INSTANCE_SHUTDOWN",
+        "INSTANCE_ACQUISITION",
+        "PLAYER_TRANSFER",
+        "LOBBY_STALE",
+      ]),
+    );
   });
 
   test("are null for unknown ids", () => {

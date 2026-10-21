@@ -1,7 +1,10 @@
 import { test, expect } from "@playwright/test";
 test.use({ storageState: { cookies: [], origins: [] } });
 
-test("anonymous demo requests require login, and sign out revokes access", async ({ page, request }) => {
+test("anonymous demo requests require login, and sign out revokes access", async ({
+  page,
+  request,
+}) => {
   expect((await request.get("/api/cluster")).status()).toBe(401);
   await page.goto("/groups");
   await expect(page).toHaveURL(/\/login$/);

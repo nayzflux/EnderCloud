@@ -15,9 +15,31 @@ test("agent control is denied by default and accepts only its own control token"
   const denied = createAgentApp(config, executor, {} as TemplateCache);
   expect((await denied.handle(new Request("http://agent/api/v1/instances"))).status).toBe(401);
   const token = "test-control-token-at-least-32-bytes";
-  const app = createAgentApp(config, executor, {} as TemplateCache, undefined, bearerAuthorizer(token));
-  expect((await app.handle(new Request("http://agent/api/v1/instances", { headers: { authorization: "Bearer wrong-host-token" } }))).status).toBe(401);
-  expect((await app.handle(new Request("http://agent/api/v1/instances", { headers: { authorization: `Bearer ${token}` } }))).status).toBe(200);
+  const app = createAgentApp(
+    config,
+    executor,
+    {} as TemplateCache,
+    undefined,
+    bearerAuthorizer(token),
+  );
+  expect(
+    (
+      await app.handle(
+        new Request("http://agent/api/v1/instances", {
+          headers: { authorization: "Bearer wrong-host-token" },
+        }),
+      )
+    ).status,
+  ).toBe(401);
+  expect(
+    (
+      await app.handle(
+        new Request("http://agent/api/v1/instances", {
+          headers: { authorization: `Bearer ${token}` },
+        }),
+      )
+    ).status,
+  ).toBe(200);
 });
 
 test("agent keeps request ids, errors and durations isolated across concurrent requests", async () => {
@@ -43,13 +65,17 @@ test("agent keeps request ids, errors and durations isolated across concurrent r
     () => {},
   );
 
-  const slowResponse = app.handle(new Request("http://agent/api/v1/instances", {
-    headers: { "x-request-id": "slow-agent", "x-command-id": "command-123" },
-  }));
+  const slowResponse = app.handle(
+    new Request("http://agent/api/v1/instances", {
+      headers: { "x-request-id": "slow-agent", "x-command-id": "command-123" },
+    }),
+  );
   await Bun.sleep(0);
-  const fast = await app.handle(new Request("http://agent/health/live", {
-    headers: { "x-request-id": "fast-agent" },
-  }));
+  const fast = await app.handle(
+    new Request("http://agent/health/live", {
+      headers: { "x-request-id": "fast-agent" },
+    }),
+  );
   await Bun.sleep(30);
   releaseSlow?.();
   const slow = await slowResponse;
@@ -57,17 +83,19 @@ test("agent keeps request ids, errors and durations isolated across concurrent r
 
   expect(fast.headers.get("x-request-id")).toBe("fast-agent");
   expect(slow.headers.get("x-request-id")).toBe("slow-agent");
-  expect((await slow.json() as { requestId: string }).requestId).toBe("slow-agent");
+  expect(((await slow.json()) as { requestId: string }).requestId).toBe("slow-agent");
   const completed = records.filter((record) => record.event === "agent.request.completed");
   const fastLog = completed.find((record) => record.requestId === "fast-agent");
   const slowLog = completed.find((record) => record.requestId === "slow-agent");
   expect(fastLog).toBeDefined();
   expect(slowLog).toBeDefined();
   expect(slowLog?.durationMs).toBeGreaterThan(fastLog?.durationMs as number);
-  expect(records.some((record) =>
-    record.event === "agent.request.server_error" &&
-    record.requestId === "slow-agent"
-  )).toBe(true);
+  expect(
+    records.some(
+      (record) =>
+        record.event === "agent.request.server_error" && record.requestId === "slow-agent",
+    ),
+  ).toBe(true);
 });
 
 test("agent API delegates idempotent instance operations to the local executor", async () => {
@@ -119,14 +147,13 @@ test("agent API delegates idempotent instance operations to the local executor",
     },
     environment: {},
   };
-  const createResponse = await app.handle(new Request(
-    `http://agent/api/v1/instances/${instanceId}`,
-    {
+  const createResponse = await app.handle(
+    new Request(`http://agent/api/v1/instances/${instanceId}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-    },
-  ));
+    }),
+  );
   expect(createResponse.status).toBe(200);
   expect(await createResponse.json()).toMatchObject({
     containerId: "container-01",
@@ -135,60 +162,55 @@ test("agent API delegates idempotent instance operations to the local executor",
   expect(resolveLayers).toHaveBeenCalledWith(body.templateLayers, expect.any(AbortSignal));
   expect(createInstance).toHaveBeenCalledTimes(1);
 
-  const inspectResponse = await app.handle(new Request(
-    `http://agent/api/v1/instances/${instanceId}`,
-  ));
+  const inspectResponse = await app.handle(
+    new Request(`http://agent/api/v1/instances/${instanceId}`),
+  );
   expect(inspectResponse.status).toBe(200);
   expect(inspectInstance).toHaveBeenCalledWith({
     hostId: "host-paris-01",
     instanceId,
   });
 
-  const stopResponse = await app.handle(new Request(
-    `http://agent/api/v1/instances/${instanceId}/stop`,
-    {
+  const stopResponse = await app.handle(
+    new Request(`http://agent/api/v1/instances/${instanceId}/stop`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ timeoutSeconds: 20 }),
-    },
-  ));
-  expect(stopResponse.status).toBe(204);
-  expect(stopInstance).toHaveBeenCalledWith(
-    { hostId: "host-paris-01", instanceId },
-    20,
+    }),
   );
+  expect(stopResponse.status).toBe(204);
+  expect(stopInstance).toHaveBeenCalledWith({ hostId: "host-paris-01", instanceId }, 20);
 
-  const deleteResponse = await app.handle(new Request(
-    `http://agent/api/v1/instances/${instanceId}`,
-    { method: "DELETE" },
-  ));
+  const deleteResponse = await app.handle(
+    new Request(`http://agent/api/v1/instances/${instanceId}`, { method: "DELETE" }),
+  );
   expect(deleteResponse.status).toBe(204);
   expect(deleteInstance).toHaveBeenCalledWith({
     hostId: "host-paris-01",
     instanceId,
   });
 
-  const logsResponse = await app.handle(new Request(
-    `http://agent/api/v1/instances/${instanceId}/logs?lines=200&maxBytes=65536`,
-    { headers: { "x-request-id": "request-123", "x-command-id": "command-123" } },
-  ));
+  const logsResponse = await app.handle(
+    new Request(`http://agent/api/v1/instances/${instanceId}/logs?lines=200&maxBytes=65536`, {
+      headers: { "x-request-id": "request-123", "x-command-id": "command-123" },
+    }),
+  );
   expect(logsResponse.status).toBe(200);
   expect(logsResponse.headers.get("x-request-id")).toBe("request-123");
   expect(await logsResponse.json()).toEqual({ logs: "last server line" });
-  expect(getInstanceLogs).toHaveBeenCalledWith(
-    { hostId: "host-paris-01", instanceId },
-    200,
-    65536,
-  );
+  expect(getInstanceLogs).toHaveBeenCalledWith({ hostId: "host-paris-01", instanceId }, 200, 65536);
   expect(records.find((record) => record.event === "docker.logs.collected")).toMatchObject({
     requestId: "request-123",
     commandId: "command-123",
   });
   await Bun.sleep(0);
-  expect(records.filter((record) =>
-    record.event === "agent.request.completed" &&
-    record.route === "/api/v1/instances/:instanceId/logs"
-  )).toHaveLength(1);
+  expect(
+    records.filter(
+      (record) =>
+        record.event === "agent.request.completed" &&
+        record.route === "/api/v1/instances/:instanceId/logs",
+    ),
+  ).toHaveLength(1);
 });
 
 test("agent refuses a create request addressed to another host", async () => {
@@ -201,11 +223,11 @@ test("agent refuses a create request addressed to another host", async () => {
     { hostId: "host-paris-01" } as AgentConfig,
     { createInstance } as unknown as LocalDockerExecutor,
     { resolveLayers: mock(async () => []) } as unknown as TemplateCache,
-    undefined, () => {},
+    undefined,
+    () => {},
   );
-  const response = await app.handle(new Request(
-    `http://agent/api/v1/instances/${instanceId}`,
-    {
+  const response = await app.handle(
+    new Request(`http://agent/api/v1/instances/${instanceId}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -223,8 +245,8 @@ test("agent refuses a create request addressed to another host", async () => {
         },
         environment: {},
       }),
-    },
-  ));
+    }),
+  );
 
   expect(response.status).toBe(403);
   expect(createInstance).not.toHaveBeenCalled();

@@ -40,11 +40,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -162,13 +158,7 @@ function WaitDistribution({ rows }: { readonly rows: readonly QueueRow[] }) {
           interval={0}
           fontSize={11}
         />
-        <YAxis
-          tickLine={false}
-          axisLine={false}
-          allowDecimals={false}
-          width={40}
-          fontSize={11}
-        />
+        <YAxis tickLine={false} axisLine={false} allowDecimals={false} width={40} fontSize={11} />
         <ChartTooltip content={<ChartTooltipContent hideLabel={false} />} />
         <Bar dataKey="parties" radius={[6, 6, 0, 0]} maxBarSize={48}>
           {data.map((entry) => (
@@ -183,7 +173,7 @@ function WaitDistribution({ rows }: { readonly rows: readonly QueueRow[] }) {
 function QueuePanel({ group }: { readonly group: DashboardGroup }) {
   const query = useQuery({
     queryKey: ["queue", group.id],
-    queryFn: ({signal}) => fetchQueue(group.id, QUEUE_LIMIT, signal),
+    queryFn: ({ signal }) => fetchQueue(group.id, QUEUE_LIMIT, signal),
     refetchInterval: 5_000,
     placeholderData: (previous) => previous,
   });
@@ -195,9 +185,7 @@ function QueuePanel({ group }: { readonly group: DashboardGroup }) {
         header: "#",
         align: "right",
         cell: (row) => (
-          <span className="font-mono text-xs text-muted-foreground tabular">
-            {row.position}
-          </span>
+          <span className="font-mono text-xs text-muted-foreground tabular">{row.position}</span>
         ),
         sortValue: (row) => row.position,
       },
@@ -210,9 +198,7 @@ function QueuePanel({ group }: { readonly group: DashboardGroup }) {
       {
         id: "size",
         header: "Size",
-        cell: (row) => (
-          <span className="font-mono text-xs tabular">{row.players.length}</span>
-        ),
+        cell: (row) => <span className="font-mono text-xs tabular">{row.players.length}</span>,
         sortValue: (row) => row.players.length,
       },
       {
@@ -266,8 +252,7 @@ function QueuePanel({ group }: { readonly group: DashboardGroup }) {
   const oldestJoinedAt = detail.entries.at(0)?.joinedAt ?? null;
   // Tones change rarely, so the snapshot instant is precise enough for them;
   // only the rendered durations need to tick.
-  const averageSize =
-    detail.totalParties > 0 ? detail.totalPlayers / detail.totalParties : 0;
+  const averageSize = detail.totalParties > 0 ? detail.totalPlayers / detail.totalParties : 0;
 
   return (
     <div className="flex flex-col gap-4">
@@ -276,11 +261,7 @@ function QueuePanel({ group }: { readonly group: DashboardGroup }) {
           label="Parties waiting"
           value={detail.totalParties}
           icon={ListOrderedIcon}
-          hint={
-            detail.totalParties > 0
-              ? `avg ${averageSize.toFixed(1)} players`
-              : undefined
-          }
+          hint={detail.totalParties > 0 ? `avg ${averageSize.toFixed(1)} players` : undefined}
         />
         <StatCard
           label="Players waiting"
@@ -307,9 +288,7 @@ function QueuePanel({ group }: { readonly group: DashboardGroup }) {
           value={group.capacity.warmInstances}
           icon={TimerIcon}
           tone={
-            group.capacity.warmInstances === 0 && detail.totalParties > 0
-              ? "danger"
-              : "success"
+            group.capacity.warmInstances === 0 && detail.totalParties > 0 ? "danger" : "success"
           }
           hint={
             group.capacity.pendingWarmInstances > 0
@@ -339,8 +318,8 @@ function QueuePanel({ group }: { readonly group: DashboardGroup }) {
                 </EmptyMedia>
                 <EmptyTitle>Queue is empty</EmptyTitle>
                 <EmptyDescription>
-                  No party is waiting for a{" "}
-                  <span className="font-mono">{group.id}</span> match right now.
+                  No party is waiting for a <span className="font-mono">{group.id}</span> match
+                  right now.
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
@@ -351,9 +330,7 @@ function QueuePanel({ group }: { readonly group: DashboardGroup }) {
           <Card className="gap-0 xl:col-span-1">
             <CardHeader className="border-b pb-4">
               <CardTitle>Wait distribution</CardTitle>
-              <CardDescription>
-                How long the queued parties have been waiting.
-              </CardDescription>
+              <CardDescription>How long the queued parties have been waiting.</CardDescription>
             </CardHeader>
             <CardContent className="flex min-h-0 flex-1 flex-col pt-4">
               <WaitDistribution rows={rows} />
@@ -367,9 +344,7 @@ function QueuePanel({ group }: { readonly group: DashboardGroup }) {
                 Ordered oldest first — the next parties the matchmaker will take.
               </CardDescription>
               <CardAction>
-                {detail.truncated ? (
-                  <Badge variant="outline">first {QUEUE_LIMIT}</Badge>
-                ) : null}
+                {detail.truncated ? <Badge variant="outline">first {QUEUE_LIMIT}</Badge> : null}
               </CardAction>
             </CardHeader>
             <CardContent className="px-0 py-2">
@@ -405,8 +380,8 @@ function QueuesView({ snapshot }: { readonly snapshot: DashboardClusterSnapshot 
                 </EmptyMedia>
                 <EmptyTitle>No matchmaking group</EmptyTitle>
                 <EmptyDescription>
-                  Only minigame groups run matchmaking. Hub groups route players
-                  directly, so they never queue.
+                  Only minigame groups run matchmaking. Hub groups route players directly, so they
+                  never queue.
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
@@ -416,38 +391,21 @@ function QueuesView({ snapshot }: { readonly snapshot: DashboardClusterSnapshot 
     );
   }
 
-  const activeGroup =
-    groups.find((group) => group.id === selected) ?? groups[0];
-  const totalParties = groups.reduce(
-    (total, group) => total + group.queue.partyCount,
-    0,
-  );
-  const totalPlayers = groups.reduce(
-    (total, group) => total + group.queue.playerCount,
-    0,
-  );
+  const activeGroup = groups.find((group) => group.id === selected) ?? groups[0];
+  const totalParties = groups.reduce((total, group) => total + group.queue.partyCount, 0);
+  const totalPlayers = groups.reduce((total, group) => total + group.queue.playerCount, 0);
   const oldestOverall = groups
     .map((group) => group.queue.oldestJoinedAt)
     .filter((value): value is string => value !== null)
     .sort()
     .at(0);
-  const groupsQueueing = groups.filter(
-    (group) => group.queue.partyCount > 0,
-  ).length;
+  const groupsQueueing = groups.filter((group) => group.queue.partyCount > 0).length;
 
   return (
     <>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          label="Parties queued"
-          value={totalParties}
-          icon={ListOrderedIcon}
-        />
-        <StatCard
-          label="Players queued"
-          value={totalPlayers}
-          icon={UsersIcon}
-        />
+        <StatCard label="Parties queued" value={totalParties} icon={ListOrderedIcon} />
+        <StatCard label="Players queued" value={totalPlayers} icon={UsersIcon} />
         <StatCard
           label="Longest wait"
           value={<Elapsed value={oldestOverall} />}
@@ -499,9 +457,7 @@ export default function QueuesPage() {
         title="Matchmaking queues"
         description="Parties waiting for a match, how long they have been waiting, and whether the warm pool can absorb them."
       />
-      <ClusterGate>
-        {(snapshot) => <QueuesView snapshot={snapshot} />}
-      </ClusterGate>
+      <ClusterGate>{(snapshot) => <QueuesView snapshot={snapshot} />}</ClusterGate>
     </>
   );
 }

@@ -22,11 +22,7 @@ export function rejectDeprecatedEnvironment(
   }
 }
 
-export function optionalString(
-  environment: Environment,
-  name: string,
-  fallback: string,
-): string {
+export function optionalString(environment: Environment, name: string, fallback: string): string {
   const value = environment[name]?.trim();
   return value ? value : fallback;
 }
@@ -74,8 +70,8 @@ export function duration(
   if (!match) throw new Error(`${name} must be a duration such as 500ms, 5s or 10m`);
   const amount = Number(match[1]);
   const value = amount * durationFactors[match[2] as keyof typeof durationFactors];
-    if (!Number.isSafeInteger(value) || value < minimumMs || value > maximumMs) {
-      throw new Error(`${name} must be between ${minimumMs}ms and ${maximumMs}ms`);
+  if (!Number.isSafeInteger(value) || value < minimumMs || value > maximumMs) {
+    throw new Error(`${name} must be between ${minimumMs}ms and ${maximumMs}ms`);
   }
   return value;
 }
@@ -86,9 +82,10 @@ export function url(
   fallback?: string,
   protocols?: readonly string[],
 ): string {
-  const value = fallback === undefined
-    ? requiredString(environment, name)
-    : optionalString(environment, name, fallback);
+  const value =
+    fallback === undefined
+      ? requiredString(environment, name)
+      : optionalString(environment, name, fallback);
   try {
     const parsed = new URL(value);
     if (protocols && !protocols.includes(parsed.protocol)) {

@@ -62,15 +62,17 @@ describe("capacity", () => {
       lifecycle: "RUNNING" as const,
       availability: "RESERVED" as const,
     }));
-    expect(decideCapacity(
-      {
-        minimumInstances: 0,
-        maximumInstances: 10,
-        minimumWarmInstances: 2,
-        maximumWarmInstances: 4,
-      },
-      instances,
-    ).create).toBe(0);
+    expect(
+      decideCapacity(
+        {
+          minimumInstances: 0,
+          maximumInstances: 10,
+          minimumWarmInstances: 2,
+          maximumWarmInstances: 4,
+        },
+        instances,
+      ).create,
+    ).toBe(0);
   });
 
   test("scales at the aggregate hub target and counts pending instances", () => {
@@ -83,12 +85,10 @@ describe("capacity", () => {
     const running = [{ lifecycle: "RUNNING" as const, availability: "OPEN" as const }];
     expect(decideCapacity(policy, running, true, 1).create).toBe(0);
     expect(decideCapacity(policy, running, true, 2).create).toBe(1);
-    expect(decideCapacity(
-      policy,
-      [...running, { lifecycle: "STARTING", availability: "OPEN" }],
-      true,
-      2,
-    ).create).toBe(0);
+    expect(
+      decideCapacity(policy, [...running, { lifecycle: "STARTING", availability: "OPEN" }], true, 2)
+        .create,
+    ).toBe(0);
   });
 });
 
@@ -108,13 +108,14 @@ describe("hub routing", () => {
   });
 
   test("never allocates beyond the strict maximum", () => {
-    const decision = allocateHubPlayers(["one", "two", "three"], [
-      { id: "almost-full", effectiveLoad: 99, maximumPlayers: 100 },
-      { id: "full", effectiveLoad: 100, maximumPlayers: 100 },
-    ]);
-    expect(decision.assignments).toEqual([
-      { targetId: "almost-full", playerIds: ["one"] },
-    ]);
+    const decision = allocateHubPlayers(
+      ["one", "two", "three"],
+      [
+        { id: "almost-full", effectiveLoad: 99, maximumPlayers: 100 },
+        { id: "full", effectiveLoad: 100, maximumPlayers: 100 },
+      ],
+    );
+    expect(decision.assignments).toEqual([{ targetId: "almost-full", playerIds: ["one"] }]);
     expect(decision.rejectedPlayers).toEqual(["two", "three"]);
   });
 });
@@ -176,9 +177,11 @@ describe("matchmaking profiles", () => {
 
 describe("variant selection", () => {
   test("prefers the least represented weighted variant", () => {
-    expect(selectVariant([
-      { id: "japan", weight: 100, warmCount: 2 },
-      { id: "mayas", weight: 100, warmCount: 0 },
-    ]).id).toBe("mayas");
+    expect(
+      selectVariant([
+        { id: "japan", weight: 100, warmCount: 2 },
+        { id: "mayas", weight: 100, warmCount: 0 },
+      ]).id,
+    ).toBe("mayas");
   });
 });

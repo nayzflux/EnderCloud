@@ -198,10 +198,9 @@ export default function MonitoringPage() {
 
   const query = useQuery({
     queryKey: ["monitoring", groupId, range],
-    queryFn: ({signal}) => fetchGroupMonitoring(groupId, range, signal),
+    queryFn: ({ signal }) => fetchGroupMonitoring(groupId, range, signal),
     enabled: groupId.length > 0,
-    refetchInterval:
-      refreshInterval === 0 ? false : Math.max(30_000, refreshInterval),
+    refetchInterval: refreshInterval === 0 ? false : Math.max(30_000, refreshInterval),
     refetchIntervalInBackground: false,
     placeholderData: (previous) => previous,
   });
@@ -333,76 +332,78 @@ export default function MonitoringPage() {
             )}
           </MetricCard>
 
-          {!isProxyGroup ? <MetricCard
-            title="Server TPS"
-            description="Paper rolling averages combined across active heartbeat samples."
-            action={
-              <SingleToggle
-                label="TPS rolling window"
-                value={tpsMetric}
-                onChange={setTpsMetric}
-                options={tpsOptions}
-              />
-            }
-          >
-            {tpsRows.length === 0 ? (
-              <ChartEmpty kind="TPS" />
-            ) : (
-              <ChartContainer config={chartConfig} className="h-80 w-full">
-                <LineChart data={tpsRows} accessibilityLayer margin={{ left: 4, right: 16 }}>
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                  <XAxis
-                    dataKey="at"
-                    tickLine={false}
-                    axisLine={false}
-                    minTickGap={42}
-                    tickFormatter={formatAxisTime}
-                  />
-                  <YAxis
-                    domain={["auto", 20]}
-                    tickLine={false}
-                    axisLine={false}
-                    width={36}
-                    tickFormatter={(value) => Number(value).toFixed(1)}
-                  />
-                  <ReferenceLine
-                    y={query.data.thresholds.tps}
-                    stroke="var(--warning)"
-                    strokeDasharray="5 4"
-                    ifOverflow="extendDomain"
-                    label={{ value: "19 TPS", position: "insideTopRight" }}
-                  />
-                  <ChartTooltip
-                    trigger="hover"
-                    cursor={{
-                      stroke: "var(--color-blue-500)",
-                      strokeDasharray: "4 4",
-                      strokeOpacity: 0.35,
-                    }}
-                    content={(props) => <MetricTooltip {...props} unit="TPS" />}
-                  />
-                  <ChartLegend content={<ChartLegendContent />} />
-                  {query.data.variants.map((variant) => (
-                    <Line
-                      key={variant.variantId}
-                      type="monotone"
-                      dataKey={variant.variantId}
-                      stroke={`var(--color-${variant.variantId})`}
-                      strokeWidth={2}
-                      dot={false}
-                      activeDot={{
-                        fill: "var(--color-blue-500)",
-                        r: 4,
-                        stroke: "var(--background)",
-                        strokeWidth: 2,
-                      }}
-                      connectNulls={false}
+          {!isProxyGroup ? (
+            <MetricCard
+              title="Server TPS"
+              description="Paper rolling averages combined across active heartbeat samples."
+              action={
+                <SingleToggle
+                  label="TPS rolling window"
+                  value={tpsMetric}
+                  onChange={setTpsMetric}
+                  options={tpsOptions}
+                />
+              }
+            >
+              {tpsRows.length === 0 ? (
+                <ChartEmpty kind="TPS" />
+              ) : (
+                <ChartContainer config={chartConfig} className="h-80 w-full">
+                  <LineChart data={tpsRows} accessibilityLayer margin={{ left: 4, right: 16 }}>
+                    <CartesianGrid vertical={false} strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="at"
+                      tickLine={false}
+                      axisLine={false}
+                      minTickGap={42}
+                      tickFormatter={formatAxisTime}
                     />
-                  ))}
-                </LineChart>
-              </ChartContainer>
-            )}
-          </MetricCard> : null}
+                    <YAxis
+                      domain={["auto", 20]}
+                      tickLine={false}
+                      axisLine={false}
+                      width={36}
+                      tickFormatter={(value) => Number(value).toFixed(1)}
+                    />
+                    <ReferenceLine
+                      y={query.data.thresholds.tps}
+                      stroke="var(--warning)"
+                      strokeDasharray="5 4"
+                      ifOverflow="extendDomain"
+                      label={{ value: "19 TPS", position: "insideTopRight" }}
+                    />
+                    <ChartTooltip
+                      trigger="hover"
+                      cursor={{
+                        stroke: "var(--color-blue-500)",
+                        strokeDasharray: "4 4",
+                        strokeOpacity: 0.35,
+                      }}
+                      content={(props) => <MetricTooltip {...props} unit="TPS" />}
+                    />
+                    <ChartLegend content={<ChartLegendContent />} />
+                    {query.data.variants.map((variant) => (
+                      <Line
+                        key={variant.variantId}
+                        type="monotone"
+                        dataKey={variant.variantId}
+                        stroke={`var(--color-${variant.variantId})`}
+                        strokeWidth={2}
+                        dot={false}
+                        activeDot={{
+                          fill: "var(--color-blue-500)",
+                          r: 4,
+                          stroke: "var(--background)",
+                          strokeWidth: 2,
+                        }}
+                        connectNulls={false}
+                      />
+                    ))}
+                  </LineChart>
+                </ChartContainer>
+              )}
+            </MetricCard>
+          ) : null}
         </div>
       ) : null}
 
@@ -420,7 +421,9 @@ export default function MonitoringPage() {
               <ActivityIcon />
             </EmptyMedia>
             <EmptyTitle>No groups configured</EmptyTitle>
-            <EmptyDescription>Add a server group before collecting performance metrics.</EmptyDescription>
+            <EmptyDescription>
+              Add a server group before collecting performance metrics.
+            </EmptyDescription>
           </EmptyHeader>
         </Empty>
       ) : null}

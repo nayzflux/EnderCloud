@@ -14,19 +14,10 @@ export const viewport: Viewport = {
   colorScheme: "light dark",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{ children: React.ReactNode }>) {
-
-
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html
-      lang="en"
-      suppressHydrationWarning
-    >
-      <body className="min-h-svh bg-background font-sans antialiased">
-        {children}
-      </body>
+    <html lang="en" suppressHydrationWarning>
+      <body className="min-h-svh bg-background font-sans antialiased">{children}</body>
     </html>
   );
 }

@@ -8,18 +8,18 @@ player transfers. PostgreSQL stores control state; Redis delivers proxy notifica
 
 ## Repository
 
-| Path | Responsibility |
-| --- | --- |
-| `apps/orchestrator/` | Central configuration, placement, sessions, transfers, authentication and reconciliation |
-| `apps/agent/` | Docker, ports, files, verified template cache and durable SQLite operation journal |
-| `apps/dashboard/` | Authenticated Next.js operations console |
-| `apps/web/` | Public website and Fumadocs publication |
-| `packages/contracts/` | Browser-safe DTOs, enums, Zod schemas and HTTP transport |
-| `packages/runtime/` | Shared server utilities |
-| `plugins/{core,paper,velocity}/` | Java client, APIs and runtime bridges |
-| `contracts/fixtures/` | Protocol fixtures shared with Java |
-| `groups/`, `templates/` | Group policy and ordered server layers |
-| `docs/guides/` | Canonical published documentation |
+| Path                             | Responsibility                                                                           |
+| -------------------------------- | ---------------------------------------------------------------------------------------- |
+| `apps/orchestrator/`             | Central configuration, placement, sessions, transfers, authentication and reconciliation |
+| `apps/agent/`                    | Docker, ports, files, verified template cache and durable SQLite operation journal       |
+| `apps/dashboard/`                | Authenticated Next.js operations console                                                 |
+| `apps/web/`                      | Public website and Fumadocs publication                                                  |
+| `packages/contracts/`            | Browser-safe DTOs, enums, Zod schemas and HTTP transport                                 |
+| `packages/runtime/`              | Shared server utilities                                                                  |
+| `plugins/{core,paper,velocity}/` | Java client, APIs and runtime bridges                                                    |
+| `contracts/fixtures/`            | Protocol fixtures shared with Java                                                       |
+| `groups/`, `templates/`          | Group policy and ordered server layers                                                   |
+| `docs/guides/`                   | Canonical published documentation                                                        |
 
 Applications have separate dependencies and images. The orchestrator owns all durable decisions;
 agents do not access PostgreSQL, Redis or central configuration. One orchestrator is active per
@@ -78,4 +78,3 @@ documentation snapshot.
 - [Dashboard](docs/guides/configure/dashboard.mdx), [agent](docs/guides/configure/agent.mdx) and [orchestrator](docs/guides/configure/orchestrator.mdx)
 - [Development](docs/guides/develop/development.mdx), [tests](docs/guides/develop/testing.mdx) and [minigame integration](docs/guides/develop/minigame-integration.mdx)
 - [Release work and validation evidence](docs/RELEASE_PROGRESS.md)
-

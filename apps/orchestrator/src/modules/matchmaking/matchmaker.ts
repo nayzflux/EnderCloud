@@ -1,22 +1,22 @@
-import type {SqlRow} from "../../db/client.ts";
-import type { QueueParty,SessionState } from "@endercloud/contracts/domain";
+import type { SqlRow } from "../../db/client.ts";
+import type { QueueParty, SessionState } from "@endercloud/contracts/domain";
 import { nanoid } from "@endercloud/runtime/id";
 import type { Logger } from "@endercloud/runtime/logger";
-import { and,asc,eq,inArray,isNotNull,ne,sql } from "drizzle-orm";
-import type { Database,Transaction } from "../../db/client.ts";
+import { and, asc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import type { Database, Transaction } from "../../db/client.ts";
 import {
-executionHosts,
-gameSessions,
-queueEntries,
-serverGroups,
-serverInstances,
-sessionPlayers
+  executionHosts,
+  gameSessions,
+  queueEntries,
+  serverGroups,
+  serverInstances,
+  sessionPlayers,
 } from "../../db/schema.ts";
 import {
-computeFeasibleProfiles,
-isProfileEligible,
-rankSessionCandidates,
-selectRecommendedProfile,
+  computeFeasibleProfiles,
+  isProfileEligible,
+  rankSessionCandidates,
+  selectRecommendedProfile,
 } from "../../domain/matchmaking.ts";
 import type { TransferService } from "../transfers/service.ts";
 
@@ -36,10 +36,7 @@ interface GroupRow {
 
 interface SessionCandidate {
   id: string;
-  state: Extract<
-    SessionState,
-    "FORMING" | "WAITING_FOR_INSTANCE" | "TRANSFERRING" | "WAITING"
-  >;
+  state: Extract<SessionState, "FORMING" | "WAITING_FOR_INSTANCE" | "TRANSFERRING" | "WAITING">;
   instanceId: string | null;
   endpoint: string | null;
   createdAt: Date;
@@ -119,13 +116,13 @@ export class Matchmaker {
   // One PostgreSQL advisory lock serializes every logical worker for this mode.
   private async processGroup(group: GroupRow): Promise<void> {
     await this.db.transaction(async (tx: Transaction) => {
-      const locks = (await tx.execute<SqlRow<{ locked: boolean }>>(sql`
+      const locks = await tx.execute<SqlRow<{ locked: boolean }>>(sql`
         SELECT pg_try_advisory_xact_lock(hashtextextended(${group.id}, 0)) AS locked
-      `));
+      `);
       if (!locks[0]?.locked) return;
 
       const sessions = (await this.loadSessions(tx, group.id)).filter((session) =>
-        this.acceptsTicketsBeforeStaleDeadline(session)
+        this.acceptsTicketsBeforeStaleDeadline(session),
       );
       // Capacity is assigned before queue placement so a waiting session resumes promptly.
       for (const session of sessions) {
@@ -135,7 +132,8 @@ export class Matchmaker {
           } else {
             session.state = "FORMING";
             session.instanceAcquisitionDeadline = null;
-            await tx.update(gameSessions)
+            await tx
+              .update(gameSessions)
               .set({
                 state: "FORMING",
                 instanceAcquisitionDeadline: null,
@@ -152,7 +150,7 @@ export class Matchmaker {
         }
       }
 
-      const queue = (await tx.execute<SqlRow<QueueRow>>(sql`
+      const queue = await tx.execute<SqlRow<QueueRow>>(sql`
         WITH locked_entries AS (
           SELECT q.id, q.party_id, q.joined_at
           FROM queue_entries q
@@ -167,7 +165,7 @@ export class Matchmaker {
         JOIN queue_entry_players qp ON qp.queue_entry_id = q.id
         GROUP BY q.id, q.party_id, q.joined_at
         ORDER BY q.joined_at, q.id
-      `));
+      `);
 
       for (const party of this.toParties(queue)) {
         let session = this.chooseSession(sessions, party, group);
@@ -197,10 +195,7 @@ export class Matchmaker {
 
         if (session.instanceId && session.endpoint) {
           await this.beginTicketTransfer(tx, session, party);
-        } else if (
-          session.state === "FORMING" &&
-          this.isExpectedStartEligible(session, group)
-        ) {
+        } else if (session.state === "FORMING" && this.isExpectedStartEligible(session, group)) {
           await this.dispatchSession(tx, group, session);
         }
       }
@@ -228,9 +223,13 @@ export class Matchmaker {
       raw.instanceAcquisitionTimeoutMs == null ||
       raw.lobbyStaleTimeoutMs == null
     ) {
-      this.logger.error("matchmaking.group.invalid", "Skipping minigame group with incomplete policy", {
-        groupId: raw.id,
-      });
+      this.logger.error(
+        "matchmaking.group.invalid",
+        "Skipping minigame group with incomplete policy",
+        {
+          groupId: raw.id,
+        },
+      );
       return null;
     }
     return {
@@ -249,7 +248,7 @@ export class Matchmaker {
   }
 
   private async loadSessions(tx: Transaction, groupId: string): Promise<SessionCandidate[]> {
-    const rows = (await tx
+    const rows = await tx
       .select({
         id: gameSessions.id,
         state: gameSessions.state,
@@ -273,46 +272,52 @@ export class Matchmaker {
         ),
       )
       .orderBy(asc(gameSessions.createdAt), asc(gameSessions.id))
-      .for("update", { of: gameSessions }));
-    const sizes = rows.length === 0
-      ? []
-      : (await tx
-          .select({
-            session_id: sessionPlayers.sessionId,
-            ticket_id: sql<string>`${sessionPlayers.queueEntryId}`,
-            player_count: sql<number>`count(*)::integer`,
-          })
-          .from(sessionPlayers)
-          .where(
-            and(
-              inArray(sessionPlayers.sessionId, rows.map((row) => row.id)),
-              ne(sessionPlayers.state, "LEFT"),
-            ),
-          )
-          .groupBy(
-            sessionPlayers.sessionId,
-            sql`${sessionPlayers.queueEntryId}`,
-          )
-          .orderBy(asc(sessionPlayers.sessionId)));
+      .for("update", { of: gameSessions });
+    const sizes =
+      rows.length === 0
+        ? []
+        : await tx
+            .select({
+              session_id: sessionPlayers.sessionId,
+              ticket_id: sql<string>`${sessionPlayers.queueEntryId}`,
+              player_count: sql<number>`count(*)::integer`,
+            })
+            .from(sessionPlayers)
+            .where(
+              and(
+                inArray(
+                  sessionPlayers.sessionId,
+                  rows.map((row) => row.id),
+                ),
+                ne(sessionPlayers.state, "LEFT"),
+              ),
+            )
+            .groupBy(sessionPlayers.sessionId, sql`${sessionPlayers.queueEntryId}`)
+            .orderBy(asc(sessionPlayers.sessionId));
     return rows.map((row) => {
       const state = row.state;
-      if (state !== "FORMING" && state !== "WAITING_FOR_INSTANCE" && state !== "TRANSFERRING" && state !== "WAITING") throw new Error("Unexpected session state in matchmaking candidate query");
+      if (
+        state !== "FORMING" &&
+        state !== "WAITING_FOR_INSTANCE" &&
+        state !== "TRANSFERRING" &&
+        state !== "WAITING"
+      )
+        throw new Error("Unexpected session state in matchmaking candidate query");
       return {
-      id: row.id,
-      state,
-      instanceId: row.instance_id,
-      endpoint: row.endpoint,
-      createdAt: new Date(row.created_at),
-      ticketSizes: sizes
-        .filter((size) => size.session_id === row.id)
-        .map((size) => Number(size.player_count)),
-      instanceAcquisitionDeadline: row.instance_acquisition_deadline
-        ? new Date(row.instance_acquisition_deadline)
-        : null,
-      lobbyStaleDeadline: row.lobby_stale_deadline
-        ? new Date(row.lobby_stale_deadline)
-        : null,
-    }; });
+        id: row.id,
+        state,
+        instanceId: row.instance_id,
+        endpoint: row.endpoint,
+        createdAt: new Date(row.created_at),
+        ticketSizes: sizes
+          .filter((size) => size.session_id === row.id)
+          .map((size) => Number(size.player_count)),
+        instanceAcquisitionDeadline: row.instance_acquisition_deadline
+          ? new Date(row.instance_acquisition_deadline)
+          : null,
+        lobbyStaleDeadline: row.lobby_stale_deadline ? new Date(row.lobby_stale_deadline) : null,
+      };
+    });
   }
 
   private acceptsTicketsBeforeStaleDeadline(session: SessionCandidate): boolean {
@@ -362,24 +367,27 @@ export class Matchmaker {
         sessionId: session.id,
         updatedAt: sql`now()`,
       })
-      .where(
-        and(eq(queueEntries.id, party.entryId), eq(queueEntries.state, "QUEUED")),
-      )
+      .where(and(eq(queueEntries.id, party.entryId), eq(queueEntries.state, "QUEUED")))
       .returning({ id: queueEntries.id });
     if (updated.length === 0) return;
 
     for (const playerId of party.playerIds) {
-      const inserted = await tx.insert(sessionPlayers).values({
-        sessionId: session.id,
-        playerId,
-        partyId: party.partyId,
-        queueEntryId: party.entryId,
-        state: "SELECTED",
-      }).onConflictDoNothing({
-        target: [sessionPlayers.sessionId, sessionPlayers.playerId],
-      }).returning({ playerId: sessionPlayers.playerId });
+      const inserted = await tx
+        .insert(sessionPlayers)
+        .values({
+          sessionId: session.id,
+          playerId,
+          partyId: party.partyId,
+          queueEntryId: party.entryId,
+          state: "SELECTED",
+        })
+        .onConflictDoNothing({
+          target: [sessionPlayers.sessionId, sessionPlayers.playerId],
+        })
+        .returning({ playerId: sessionPlayers.playerId });
       if (inserted.length === 0) {
-        const reactivated = await tx.update(sessionPlayers)
+        const reactivated = await tx
+          .update(sessionPlayers)
           .set({
             partyId: party.partyId,
             queueEntryId: party.entryId,
@@ -402,7 +410,8 @@ export class Matchmaker {
         }
       }
     }
-    await tx.update(gameSessions)
+    await tx
+      .update(gameSessions)
       .set({
         assignmentRevision: sql`${gameSessions.assignmentRevision} + 1`,
         assignmentAcknowledgedAt: null,
@@ -411,17 +420,10 @@ export class Matchmaker {
       .where(eq(gameSessions.id, session.id));
   }
 
-  private isExpectedStartEligible(
-    session: SessionCandidate,
-    group: GroupRow,
-  ): boolean {
+  private isExpectedStartEligible(session: SessionCandidate, group: GroupRow): boolean {
     const playerCount = session.ticketSizes.reduce((sum, size) => sum + size, 0);
     if (playerCount < group.minimumPlayers) return false;
-    const profiles = computeFeasibleProfiles(
-      session.ticketSizes,
-      group.teamCount,
-      group.teamSize,
-    );
+    const profiles = computeFeasibleProfiles(session.ticketSizes, group.teamCount, group.teamSize);
     return isProfileEligible(
       selectRecommendedProfile(profiles),
       group.minimumPlayersPerTeam,
@@ -437,11 +439,11 @@ export class Matchmaker {
     const reservation = await this.reserveInstance(tx, group.id, session.id);
     if (!reservation) {
       session.state = "WAITING_FOR_INSTANCE";
-      await tx.update(gameSessions)
+      await tx
+        .update(gameSessions)
         .set({
           state: "WAITING_FOR_INSTANCE",
-          instanceAcquisitionDeadline:
-            sql`now() + (${group.instanceAcquisitionTimeoutMs} * interval '1 millisecond')`,
+          instanceAcquisitionDeadline: sql`now() + (${group.instanceAcquisitionTimeoutMs} * interval '1 millisecond')`,
           lobbyStaleDeadline: null,
           updatedAt: sql`now()`,
         })
@@ -473,7 +475,7 @@ export class Matchmaker {
     groupId: string,
     sessionId: string,
   ): Promise<Reservation | null> {
-    const reservations = (await tx
+    const reservations = await tx
       .select({ id: serverInstances.id, endpoint: serverInstances.endpoint })
       .from(serverInstances)
       .innerJoin(executionHosts, eq(executionHosts.id, serverInstances.hostId))
@@ -481,7 +483,7 @@ export class Matchmaker {
         and(
           eq(serverInstances.groupId, groupId),
           eq(serverInstances.lifecycleState, "RUNNING"),
-            sql`(${serverInstances.paperHealthDeadline} IS NULL OR ${serverInstances.paperHealthDeadline} > now())`,
+          sql`(${serverInstances.paperHealthDeadline} IS NULL OR ${serverInstances.paperHealthDeadline} > now())`,
           eq(serverInstances.availabilityState, "OPEN"),
           eq(executionHosts.healthState, "ONLINE"),
           eq(executionHosts.adminState, "ACTIVE"),
@@ -490,10 +492,11 @@ export class Matchmaker {
       )
       .orderBy(asc(serverInstances.runningAt), asc(serverInstances.id))
       .limit(1)
-      .for("update", { skipLocked: true }));
+      .for("update", { skipLocked: true });
     const reservation = reservations[0];
     if (!reservation?.endpoint) return null;
-    const claimed = await tx.update(serverInstances)
+    const claimed = await tx
+      .update(serverInstances)
       .set({
         availabilityState: "RESERVED",
         sessionId,
@@ -504,11 +507,11 @@ export class Matchmaker {
           eq(serverInstances.id, reservation.id),
           eq(serverInstances.availabilityState, "OPEN"),
           eq(serverInstances.lifecycleState, "RUNNING"),
-            sql`(${serverInstances.paperHealthDeadline} IS NULL OR ${serverInstances.paperHealthDeadline} > now())`,
+          sql`(${serverInstances.paperHealthDeadline} IS NULL OR ${serverInstances.paperHealthDeadline} > now())`,
         ),
       )
       .returning({ id: serverInstances.id });
-    return claimed.length > 0 ? {id: reservation.id, endpoint: reservation.endpoint} : null;
+    return claimed.length > 0 ? { id: reservation.id, endpoint: reservation.endpoint } : null;
   }
 
   private async startSessionTransfers(
@@ -517,16 +520,15 @@ export class Matchmaker {
     session: SessionCandidate,
     reservation: Reservation,
   ): Promise<void> {
-    await tx.update(gameSessions)
+    await tx
+      .update(gameSessions)
       .set({
         instanceId: reservation.id,
         state: "TRANSFERRING",
         transferStartedAt: sql`now()`,
-        instanceAcquisitionDeadline:
-          sql`COALESCE(${gameSessions.instanceAcquisitionDeadline},
+        instanceAcquisitionDeadline: sql`COALESCE(${gameSessions.instanceAcquisitionDeadline},
             now() + (${group.instanceAcquisitionTimeoutMs} * interval '1 millisecond'))`,
-        lobbyStaleDeadline:
-          sql`now() + (${group.lobbyStaleTimeoutMs} * interval '1 millisecond')`,
+        lobbyStaleDeadline: sql`now() + (${group.lobbyStaleTimeoutMs} * interval '1 millisecond')`,
         updatedAt: sql`now()`,
       })
       .where(
@@ -535,7 +537,8 @@ export class Matchmaker {
           inArray(gameSessions.state, ["FORMING", "WAITING_FOR_INSTANCE"]),
         ),
       );
-    await tx.update(queueEntries)
+    await tx
+      .update(queueEntries)
       .set({ transferStartedAt: sql`now()`, updatedAt: sql`now()` })
       .where(
         and(
@@ -544,27 +547,18 @@ export class Matchmaker {
           sql`${queueEntries.transferStartedAt} IS NULL`,
         ),
       );
-    await tx.update(sessionPlayers)
+    await tx
+      .update(sessionPlayers)
       .set({
         state: "TRANSFERRING",
         transferringAt: sql`now()`,
-        transferDeadline:
-          sql`now() + (${group.transferTimeoutMs} * interval '1 millisecond')`,
+        transferDeadline: sql`now() + (${group.transferTimeoutMs} * interval '1 millisecond')`,
       })
-      .where(
-        and(
-          eq(sessionPlayers.sessionId, session.id),
-          eq(sessionPlayers.state, "SELECTED"),
-        ),
-      );
-    const players = await tx.select({ playerId: sessionPlayers.playerId })
+      .where(and(eq(sessionPlayers.sessionId, session.id), eq(sessionPlayers.state, "SELECTED")));
+    const players = await tx
+      .select({ playerId: sessionPlayers.playerId })
       .from(sessionPlayers)
-      .where(
-        and(
-          eq(sessionPlayers.sessionId, session.id),
-          ne(sessionPlayers.state, "LEFT"),
-        ),
-      );
+      .where(and(eq(sessionPlayers.sessionId, session.id), ne(sessionPlayers.state, "LEFT")));
     if (players.length > 0) {
       await this.transfers.enqueue(
         tx,
@@ -584,21 +578,23 @@ export class Matchmaker {
     party: QueueParty,
   ): Promise<void> {
     if (!session.instanceId || !session.endpoint) return;
-    await tx.update(queueEntries)
+    await tx
+      .update(queueEntries)
       .set({ transferStartedAt: sql`now()`, updatedAt: sql`now()` })
       .where(eq(queueEntries.id, party.entryId));
-    const timeout = await tx.select({ transferTimeoutMs: serverGroups.transferTimeoutMs })
+    const timeout = await tx
+      .select({ transferTimeoutMs: serverGroups.transferTimeoutMs })
       .from(serverGroups)
       .innerJoin(gameSessions, eq(gameSessions.groupId, serverGroups.id))
       .where(eq(gameSessions.id, session.id))
       .limit(1);
     if (!timeout[0]) throw new Error(`Session ${session.id} has no timeout policy`);
-    await tx.update(sessionPlayers)
+    await tx
+      .update(sessionPlayers)
       .set({
         state: "TRANSFERRING",
         transferringAt: sql`now()`,
-        transferDeadline:
-          sql`now() + (${timeout[0].transferTimeoutMs} * interval '1 millisecond')`,
+        transferDeadline: sql`now() + (${timeout[0].transferTimeoutMs} * interval '1 millisecond')`,
       })
       .where(
         and(

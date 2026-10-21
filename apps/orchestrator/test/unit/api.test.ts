@@ -16,7 +16,11 @@ function testApp(
   hubs: HubRouter = {} as HubRouter,
   instances: InstanceController = {} as InstanceController,
   monitoring: MonitoringService = {
-    getSummary: async () => ({ schemaVersion: 1, generatedAt: new Date().toISOString(), alerts: [] }),
+    getSummary: async () => ({
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      alerts: [],
+    }),
     getGroupSeries: async () => null,
   } as unknown as MonitoringService,
   hosts: HostService = {} as HostService,
@@ -79,9 +83,14 @@ function testApp(
 }
 
 test("control API denies anonymous access by default", async () => {
-  const app = createApp({ logger: new Logger("error", { sink: () => {} }), isReady: () => true } as unknown as import("../../src/api/app.ts").ApiDependencies);
+  const app = createApp({
+    logger: new Logger("error", { sink: () => {} }),
+    isReady: () => true,
+  } as unknown as import("../../src/api/app.ts").ApiDependencies);
   expect((await app.handle(new Request("http://endercloud/health/live"))).status).toBe(200);
-  expect((await app.handle(new Request("http://endercloud/api/v1/proxy/servers"))).status).toBe(401);
+  expect((await app.handle(new Request("http://endercloud/api/v1/proxy/servers"))).status).toBe(
+    401,
+  );
   expect((await app.handle(new Request("http://endercloud/openapi"))).status).toBe(401);
 });
 
@@ -100,10 +109,11 @@ test("queue cancellation returns a normal response when transfer already started
     undefined,
     queues,
   );
-  const response = await app.handle(new Request(
-    "http://orchestrator/api/v1/queue/groups/skywars-solo/parties/party-42",
-    { method: "DELETE" },
-  ));
+  const response = await app.handle(
+    new Request("http://orchestrator/api/v1/queue/groups/skywars-solo/parties/party-42", {
+      method: "DELETE",
+    }),
+  );
 
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ removed: false });
@@ -111,17 +121,40 @@ test("queue cancellation returns a normal response when transfer already started
 });
 
 test("managed proxy discovery and heartbeats validate the public contract", async () => {
-  const heartbeat = mock(async () => ({ lifecycleState: "DRAINING", acceptingConnections: false, controlLeaseMs: 30_000 }));
+  const heartbeat = mock(async () => ({
+    lifecycleState: "DRAINING",
+    acceptingConnections: false,
+    controlLeaseMs: 30_000,
+  }));
   const proxies = { list: async () => [], heartbeat } as unknown as ProxyService;
-  const app = testApp(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, proxies);
+  const app = testApp(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    proxies,
+  );
   expect((await app.handle(new Request("http://orchestrator/api/v1/proxies"))).status).toBe(200);
-  const request = (playerCount: number) => new Request("http://orchestrator/api/v1/proxies/proxyinstance001/heartbeat", {
-    method: "PUT", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ready: true, playerCount, acceptingConnections: false }),
-  });
+  const request = (playerCount: number) =>
+    new Request("http://orchestrator/api/v1/proxies/proxyinstance001/heartbeat", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ready: true, playerCount, acceptingConnections: false }),
+    });
   const response = await app.handle(request(4));
-  expect(await response.json()).toMatchObject({ lifecycleState: "DRAINING", acceptingConnections: false });
-  expect(heartbeat).toHaveBeenCalledWith("proxyinstance001", { ready: true, playerCount: 4, acceptingConnections: false });
+  expect(await response.json()).toMatchObject({
+    lifecycleState: "DRAINING",
+    acceptingConnections: false,
+  });
+  expect(heartbeat).toHaveBeenCalledWith("proxyinstance001", {
+    ready: true,
+    playerCount: 4,
+    acceptingConnections: false,
+  });
   expect((await app.handle(request(-1))).status).toBe(400);
   expect((await app.handle(request(1.5))).status).toBe(400);
   expect(heartbeat).toHaveBeenCalledTimes(1);
@@ -153,13 +186,17 @@ test("orchestrator keeps request ids, errors and durations isolated across concu
     logger,
   );
 
-  const slowResponse = app.handle(new Request("http://endercloud/api/v1/proxy/servers", {
-    headers: { "x-request-id": "slow-request" },
-  }));
+  const slowResponse = app.handle(
+    new Request("http://endercloud/api/v1/proxy/servers", {
+      headers: { "x-request-id": "slow-request" },
+    }),
+  );
   await Bun.sleep(0);
-  const fast = await app.handle(new Request("http://endercloud/health/live", {
-    headers: { "x-request-id": "fast-request" },
-  }));
+  const fast = await app.handle(
+    new Request("http://endercloud/health/live", {
+      headers: { "x-request-id": "fast-request" },
+    }),
+  );
   await Bun.sleep(30);
   releaseSlow?.();
   const slow = await slowResponse;
@@ -167,31 +204,33 @@ test("orchestrator keeps request ids, errors and durations isolated across concu
 
   expect(fast.headers.get("x-request-id")).toBe("fast-request");
   expect(slow.headers.get("x-request-id")).toBe("slow-request");
-  expect((await slow.json() as { requestId: string }).requestId).toBe("slow-request");
+  expect(((await slow.json()) as { requestId: string }).requestId).toBe("slow-request");
   const completed = records.filter((record) => record.event === "orchestrator.request.completed");
   const fastLog = completed.find((record) => record.requestId === "fast-request");
   const slowLog = completed.find((record) => record.requestId === "slow-request");
   expect(fastLog).toBeDefined();
   expect(slowLog).toBeDefined();
   expect(slowLog?.durationMs).toBeGreaterThan(fastLog?.durationMs as number);
-  expect(records.some((record) =>
-    record.event === "orchestrator.request.server_error" &&
-    record.requestId === "slow-request"
-  )).toBe(true);
+  expect(
+    records.some(
+      (record) =>
+        record.event === "orchestrator.request.server_error" && record.requestId === "slow-request",
+    ),
+  ).toBe(true);
 });
 
 test("blocked variant startup retry returns the durable resetting state", async () => {
   const resetting = {
-      groupId: "skywars-solo",
-      variantId: "skywars-map-a",
-      revision: 3,
-      state: "RESETTING" as const,
-      failureCount: 6,
-      retryLimit: 5,
-      nextRetryAt: null,
-      lastFailureAt: "2026-08-21T12:00:00.000Z",
-      lastFailedInstanceId: "abcdefghijklmnop",
-      lastFailureReason: "STARTUP_TIMEOUT",
+    groupId: "skywars-solo",
+    variantId: "skywars-map-a",
+    revision: 3,
+    state: "RESETTING" as const,
+    failureCount: 6,
+    retryLimit: 5,
+    nextRetryAt: null,
+    lastFailureAt: "2026-08-21T12:00:00.000Z",
+    lastFailedInstanceId: "abcdefghijklmnop",
+    lastFailureReason: "STARTUP_TIMEOUT",
   } as const;
   const requestReset = mock(async (_groupId: string, _variantId: string, revision: number) => {
     if (revision === 4) return { status: "CONFLICT" as const };
@@ -207,10 +246,12 @@ test("blocked variant startup retry returns the durable resetting state", async 
     {} as TemplateArchiveService,
     undefined,
     startup,
-  ).handle(new Request(
-    "http://endercloud/api/v1/groups/skywars-solo/variants/skywars-map-a/revisions/3/startup-retry",
-    { method: "POST" },
-  ));
+  ).handle(
+    new Request(
+      "http://endercloud/api/v1/groups/skywars-solo/variants/skywars-map-a/revisions/3/startup-retry",
+      { method: "POST" },
+    ),
+  );
   expect(response.status).toBe(202);
   expect(await response.json()).toMatchObject({ state: "RESETTING", failureCount: 6 });
   expect(requestReset).toHaveBeenCalledWith("skywars-solo", "skywars-map-a", 3);
@@ -223,13 +264,18 @@ test("blocked variant startup retry returns the durable resetting state", async 
     {} as TemplateArchiveService,
     undefined,
     startup,
-  ).handle(new Request(
-    "http://endercloud/api/v1/groups/skywars-solo/variants/skywars-map-a/revisions/3/startup-retry",
-    { method: "POST" },
-  ));
+  ).handle(
+    new Request(
+      "http://endercloud/api/v1/groups/skywars-solo/variants/skywars-map-a/revisions/3/startup-retry",
+      { method: "POST" },
+    ),
+  );
   expect(repeat.status).toBe(202);
 
-  for (const [revision, expectedStatus] of [[4, 409], [5, 404]] as const) {
+  for (const [revision, expectedStatus] of [
+    [4, 409],
+    [5, 404],
+  ] as const) {
     const rejected = await testApp(
       {} as HubRouter,
       {} as InstanceController,
@@ -238,10 +284,12 @@ test("blocked variant startup retry returns the durable resetting state", async 
       {} as TemplateArchiveService,
       undefined,
       startup,
-    ).handle(new Request(
-      `http://endercloud/api/v1/groups/skywars-solo/variants/skywars-map-a/revisions/${revision}/startup-retry`,
-      { method: "POST" },
-    ));
+    ).handle(
+      new Request(
+        `http://endercloud/api/v1/groups/skywars-solo/variants/skywars-map-a/revisions/${revision}/startup-retry`,
+        { method: "POST" },
+      ),
+    );
     expect(rejected.status).toBe(expectedStatus);
   }
 });
@@ -317,22 +365,21 @@ test("monitoring endpoints expose summaries and validate ranges", async () => {
     }),
   } as unknown as MonitoringService;
 
-  const summary = await testApp({} as HubRouter, {} as InstanceController, monitoring)
-    .handle(new Request("http://endercloud/api/v1/dashboard/monitoring/summary"));
+  const summary = await testApp({} as HubRouter, {} as InstanceController, monitoring).handle(
+    new Request("http://endercloud/api/v1/dashboard/monitoring/summary"),
+  );
   expect(summary.status).toBe(200);
   expect(await summary.json()).toMatchObject({ schemaVersion: 1, alerts: [] });
 
-  const series = await testApp({} as HubRouter, {} as InstanceController, monitoring)
-    .handle(new Request(
-      "http://endercloud/api/v1/dashboard/groups/skywars-solo/monitoring?range=24h",
-    ));
+  const series = await testApp({} as HubRouter, {} as InstanceController, monitoring).handle(
+    new Request("http://endercloud/api/v1/dashboard/groups/skywars-solo/monitoring?range=24h"),
+  );
   expect(series.status).toBe(200);
   expect(await series.json()).toMatchObject({ groupId: "skywars-solo", range: "24h" });
 
-  const invalid = await testApp({} as HubRouter, {} as InstanceController, monitoring)
-    .handle(new Request(
-      "http://endercloud/api/v1/dashboard/groups/skywars-solo/monitoring?range=30d",
-    ));
+  const invalid = await testApp({} as HubRouter, {} as InstanceController, monitoring).handle(
+    new Request("http://endercloud/api/v1/dashboard/groups/skywars-solo/monitoring?range=30d"),
+  );
   expect(invalid.status).toBe(400);
 });
 
@@ -346,14 +393,11 @@ test("Paper can schedule a balanced hub transfer", async () => {
     },
   } as unknown as HubRouter;
   const response = await testApp(hubs).handle(
-    new Request(
-      "http://endercloud/api/v1/instances/abcdefghijklmnop/hub-transfers",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ playerIds: [playerId] }),
-      },
-    ),
+    new Request("http://endercloud/api/v1/instances/abcdefghijklmnop/hub-transfers", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ playerIds: [playerId] }),
+    }),
   );
   expect(response.status).toBe(202);
   expect(await response.json()).toEqual({
@@ -364,10 +408,9 @@ test("Paper can schedule a balanced hub transfer", async () => {
 
 test("dashboard detail endpoints return a stable 404 response", async () => {
   const response = await testApp().handle(
-    new Request(
-      "http://endercloud/api/v1/dashboard/instances/abcdefghijklmnop",
-      { headers: { "x-request-id": "dashboard-test" } },
-    ),
+    new Request("http://endercloud/api/v1/dashboard/instances/abcdefghijklmnop", {
+      headers: { "x-request-id": "dashboard-test" },
+    }),
   );
   expect(response.status).toBe(404);
   expect(await response.json()).toEqual({
@@ -394,9 +437,11 @@ test("incident endpoint validates filters and forwards opaque pagination", async
     {} as HostService,
     {} as TemplateArchiveService,
     incidents,
-  ).handle(new Request(
-    "http://endercloud/api/v1/dashboard/incidents?status=active&severity=CRITICAL&kind=CAPACITY_BLOCKED&groupId=skywars-solo&scopeId=host-1&cursor=opaque&limit=50",
-  ));
+  ).handle(
+    new Request(
+      "http://endercloud/api/v1/dashboard/incidents?status=active&severity=CRITICAL&kind=CAPACITY_BLOCKED&groupId=skywars-solo&scopeId=host-1&cursor=opaque&limit=50",
+    ),
+  );
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({ schemaVersion: 1, nextCursor: "next-page" });
   expect(list).toHaveBeenCalledWith({
@@ -409,13 +454,15 @@ test("incident endpoint validates filters and forwards opaque pagination", async
     limit: 50,
   });
 
-  const invalid = await testApp().handle(new Request(
-    "http://endercloud/api/v1/dashboard/incidents?status=pending&limit=201",
-  ));
+  const invalid = await testApp().handle(
+    new Request("http://endercloud/api/v1/dashboard/incidents?status=pending&limit=201"),
+  );
   expect(invalid.status).toBe(400);
 
   const invalidCursorController = {
-    list: async () => { throw new Error("Invalid incident cursor"); },
+    list: async () => {
+      throw new Error("Invalid incident cursor");
+    },
   } as unknown as IncidentController;
   const invalidCursor = await testApp(
     {} as HubRouter,
@@ -438,12 +485,7 @@ test("host control routes validate heartbeats and preserve action conflicts", as
     requestDrain,
     activate,
   } as unknown as HostService;
-  const app = testApp(
-    {} as HubRouter,
-    {} as InstanceController,
-    undefined,
-    hosts,
-  );
+  const app = testApp({} as HubRouter, {} as InstanceController, undefined, hosts);
 
   const heartbeatBody = {
     controlUrl: "http://host-paris-01:8090",
@@ -452,37 +494,37 @@ test("host control routes validate heartbeats and preserve action conflicts", as
     allocatableMemoryBytes: 16 * 1024 ** 3,
     agentVersion: "0.1.0",
   };
-  const heartbeatResponse = await app.handle(new Request(
-    "http://endercloud/api/v1/hosts/host-paris-01/heartbeat",
-    {
+  const heartbeatResponse = await app.handle(
+    new Request("http://endercloud/api/v1/hosts/host-paris-01/heartbeat", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(heartbeatBody),
-    },
-  ));
+    }),
+  );
   expect(heartbeatResponse.status).toBe(204);
   expect(heartbeat).toHaveBeenCalledWith("host-paris-01", heartbeatBody);
 
-  const drainResponse = await app.handle(new Request(
-    "http://endercloud/api/v1/hosts/host-paris-01/drain",
-    { method: "POST" },
-  ));
+  const drainResponse = await app.handle(
+    new Request("http://endercloud/api/v1/hosts/host-paris-01/drain", { method: "POST" }),
+  );
   expect(drainResponse.status).toBe(200);
   expect(await drainResponse.json()).toEqual({ accepted: true });
 
-  const activateResponse = await app.handle(new Request(
-    "http://endercloud/api/v1/hosts/host-paris-01/activate",
-    { method: "POST" },
-  ));
+  const activateResponse = await app.handle(
+    new Request("http://endercloud/api/v1/hosts/host-paris-01/activate", { method: "POST" }),
+  );
   expect(activateResponse.status).toBe(409);
   expect(await activateResponse.json()).toEqual({ accepted: false });
 });
 
 test("template archive route streams the service response", async () => {
   const checksum = "a".repeat(64);
-  const open = mock(async () => new Response("archive", {
-    headers: { "content-type": "application/x-tar" },
-  }));
+  const open = mock(
+    async () =>
+      new Response("archive", {
+        headers: { "content-type": "application/x-tar" },
+      }),
+  );
   const templates = { open } as unknown as TemplateArchiveService;
   const response = await testApp(
     {} as HubRouter,
@@ -490,9 +532,9 @@ test("template archive route streams the service response", async () => {
     undefined,
     {} as HostService,
     templates,
-  ).handle(new Request(
-    `http://endercloud/api/v1/template-layers/base-layer/archive?checksum=${checksum}`,
-  ));
+  ).handle(
+    new Request(`http://endercloud/api/v1/template-layers/base-layer/archive?checksum=${checksum}`),
+  );
 
   expect(response.status).toBe(200);
   expect(response.headers.get("content-type")).toBe("application/x-tar");

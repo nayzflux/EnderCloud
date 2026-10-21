@@ -10,10 +10,19 @@ export function SiteFooter() {
           <BrandMark />
           <span className="font-mono text-xs text-muted-foreground">SELF-HOSTED / OPEN SOURCE</span>
         </div>
-        <nav aria-label="Footer navigation" className="flex items-center gap-5 text-sm text-muted-foreground">
-          <Link className="hover:text-foreground" href="/docs">Docs</Link>
-          <a className="hover:text-foreground" href={site.github} rel="noreferrer" target="_blank">GitHub</a>
-          <a className="hover:text-foreground" href="#top">Back to top</a>
+        <nav
+          aria-label="Footer navigation"
+          className="flex items-center gap-5 text-sm text-muted-foreground"
+        >
+          <Link className="hover:text-foreground" href="/docs">
+            Docs
+          </Link>
+          <a className="hover:text-foreground" href={site.github} rel="noreferrer" target="_blank">
+            GitHub
+          </a>
+          <a className="hover:text-foreground" href="#top">
+            Back to top
+          </a>
         </nav>
       </div>
     </footer>

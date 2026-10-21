@@ -46,11 +46,11 @@ stack visible in one descriptor.
 
 Three values distinguish variant content:
 
-| Value | Meaning |
-| --- | --- |
+| Value      | Meaning                                                          |
+| ---------- | ---------------------------------------------------------------- |
 | Variant ID | Stable name used by groups, instances, logs, and container names |
-| Revision | Positive operator-controlled version on a final variant |
-| Checksum | SHA-256 value computed from effective descriptors and files |
+| Revision   | Positive operator-controlled version on a final variant          |
+| Checksum   | SHA-256 value computed from effective descriptors and files      |
 
 The checksum detects the exact content. The revision says that an operator intends new instances
 to use a new release. Increment the revision after changing any effective parent or final layer.
@@ -69,19 +69,19 @@ two independent host states.
 
 Health state describes connectivity and reconciliation:
 
-| State | Meaning |
-| --- | --- |
+| State        | Meaning                                                                |
+| ------------ | ---------------------------------------------------------------------- |
 | `RECOVERING` | The agent is reachable, but inventory reconciliation has not completed |
-| `ONLINE` | The agent is reconciled and may be eligible for placement |
-| `OFFLINE` | Heartbeats and control contact have exceeded the host timeout |
+| `ONLINE`     | The agent is reconciled and may be eligible for placement              |
+| `OFFLINE`    | Heartbeats and control contact have exceeded the host timeout          |
 
 Administration state describes operator intent:
 
-| State | Meaning |
-| --- | --- |
-| `ACTIVE` | New placement is allowed when health is `ONLINE` |
-| `DRAINING` | New placement is blocked while managed instances leave the host |
-| `MAINTENANCE` | The host is empty and remains unavailable until reactivated |
+| State         | Meaning                                                         |
+| ------------- | --------------------------------------------------------------- |
+| `ACTIVE`      | New placement is allowed when health is `ONLINE`                |
+| `DRAINING`    | New placement is blocked while managed instances leave the host |
+| `MAINTENANCE` | The host is empty and remains unavailable until reactivated     |
 
 CPU and memory are reservations, not live usage samples. Placement subtracts every reservation
 that may still occupy the machine.
@@ -272,10 +272,9 @@ filters and automation.
 
 Runtime names follow these conventions:
 
-| Object | Format |
-| --- | --- |
-| Docker container | `endercloud-<variant-id>-<instance-id>` |
-| Velocity server | `ec-<variant-id>-<instance-id>` |
-| Agent template cache | `<layer-id>/<sha256-checksum>` |
-| Instance runtime | `<runtime-directory>/instances/<instance-id>` |
-
+| Object               | Format                                        |
+| -------------------- | --------------------------------------------- |
+| Docker container     | `endercloud-<variant-id>-<instance-id>`       |
+| Velocity server      | `ec-<variant-id>-<instance-id>`               |
+| Agent template cache | `<layer-id>/<sha256-checksum>`                |
+| Instance runtime     | `<runtime-directory>/instances/<instance-id>` |

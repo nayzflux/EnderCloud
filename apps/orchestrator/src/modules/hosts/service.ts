@@ -1,14 +1,18 @@
 import { ApplicationError } from "@endercloud/contracts/errors";
-import type { InstanceType,VariantRuntimeSpec } from "@endercloud/contracts/domain";
+import type { InstanceType, VariantRuntimeSpec } from "@endercloud/contracts/domain";
 import { nanoid } from "@endercloud/runtime/id";
 import type { Logger } from "@endercloud/runtime/logger";
-import { and,eq,inArray,isNotNull,ne,sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.ts";
-import { events,executionHosts,serverInstances } from "../../db/schema.ts";
+import { events, executionHosts, serverInstances } from "../../db/schema.ts";
 import { selectExecutionHost } from "../../domain/host-placement.ts";
 
 export interface HostHeartbeat {
-  readonly proxy?: { readonly address: string; readonly portStart: number; readonly portEnd: number };
+  readonly proxy?: {
+    readonly address: string;
+    readonly portStart: number;
+    readonly portEnd: number;
+  };
   readonly controlUrl: string;
   readonly gameAddress: string;
   readonly allocatableCpu: number;
@@ -31,8 +35,8 @@ export function classifyPlacementBlock(
   if (candidates.length === 0) return "NO_ONLINE_HOST";
   const cpuFits = candidates.some((host) => host.freeCpu >= requested.cpu);
   const memoryFits = candidates.some((host) => host.freeMemoryBytes >= requested.memoryBytes);
-  const jointFit = candidates.some((host) =>
-    host.freeCpu >= requested.cpu && host.freeMemoryBytes >= requested.memoryBytes
+  const jointFit = candidates.some(
+    (host) => host.freeCpu >= requested.cpu && host.freeMemoryBytes >= requested.memoryBytes,
   );
   if (jointFit) return "PLACEMENT_CONFLICT";
   if (!cpuFits && !memoryFits) return "INSUFFICIENT_RESOURCES";
@@ -73,39 +77,46 @@ export class HostService {
 
   public async heartbeat(hostId: string, heartbeat: HostHeartbeat): Promise<void> {
     if (heartbeat.proxy && heartbeat.proxy.portEnd < heartbeat.proxy.portStart) {
-      throw new ApplicationError("INVALID_REQUEST", 400, "Proxy port range is unavailable: portEnd must be >= portStart");
+      throw new ApplicationError(
+        "INVALID_REQUEST",
+        400,
+        "Proxy port range is unavailable: portEnd must be >= portStart",
+      );
     }
     const proxy = {
       proxyAddress: heartbeat.proxy?.address ?? null,
       proxyPortStart: heartbeat.proxy?.portStart ?? null,
       proxyPortEnd: heartbeat.proxy?.portEnd ?? null,
     };
-    await this.db.insert(executionHosts).values({
-      ...proxy,
-      id: hostId,
-      controlUrl: heartbeat.controlUrl,
-      gameAddress: heartbeat.gameAddress,
-      allocatableCpu: heartbeat.allocatableCpu,
-      allocatableMemoryBytes: heartbeat.allocatableMemoryBytes,
-      agentVersion: heartbeat.agentVersion,
-      lastHeartbeatAt: sql`now()`,
-    }).onConflictDoUpdate({
-      target: executionHosts.id,
-      set: {
+    await this.db
+      .insert(executionHosts)
+      .values({
         ...proxy,
+        id: hostId,
         controlUrl: heartbeat.controlUrl,
         gameAddress: heartbeat.gameAddress,
         allocatableCpu: heartbeat.allocatableCpu,
         allocatableMemoryBytes: heartbeat.allocatableMemoryBytes,
         agentVersion: heartbeat.agentVersion,
         lastHeartbeatAt: sql`now()`,
-        healthState: sql`CASE
+      })
+      .onConflictDoUpdate({
+        target: executionHosts.id,
+        set: {
+          ...proxy,
+          controlUrl: heartbeat.controlUrl,
+          gameAddress: heartbeat.gameAddress,
+          allocatableCpu: heartbeat.allocatableCpu,
+          allocatableMemoryBytes: heartbeat.allocatableMemoryBytes,
+          agentVersion: heartbeat.agentVersion,
+          lastHeartbeatAt: sql`now()`,
+          healthState: sql`CASE
           WHEN ${executionHosts.healthState} = 'OFFLINE' THEN 'RECOVERING'::execution_host_health
           ELSE ${executionHosts.healthState}
         END`,
-        updatedAt: sql`now()`,
-      },
-    });
+          updatedAt: sql`now()`,
+        },
+      });
     this.logger?.debug("host.heartbeat.received", "Execution host heartbeat received", {
       hostId,
       allocatableCpu: heartbeat.allocatableCpu,
@@ -115,48 +126,58 @@ export class HostService {
   }
 
   public async getTarget(hostId: string): Promise<ExecutionHostTarget> {
-    const rows = await this.db.select({
-      id: executionHosts.id,
-      controlUrl: executionHosts.controlUrl,
-      gameAddress: executionHosts.gameAddress,
-    }).from(executionHosts).where(eq(executionHosts.id, hostId)).limit(1);
+    const rows = await this.db
+      .select({
+        id: executionHosts.id,
+        controlUrl: executionHosts.controlUrl,
+        gameAddress: executionHosts.gameAddress,
+      })
+      .from(executionHosts)
+      .where(eq(executionHosts.id, hostId))
+      .limit(1);
     const host = rows[0];
-    if (!host) throw new ApplicationError("CONFLICT", 409, `Execution host ${hostId} is unavailable`);
+    if (!host)
+      throw new ApplicationError("CONFLICT", 409, `Execution host ${hostId} is unavailable`);
     return host;
   }
 
   public async recordControlSuccess(hostId: string): Promise<void> {
-    await this.db.update(executionHosts).set({
-      lastControlContactAt: sql`now()`,
-      lastError: null,
-      updatedAt: sql`now()`,
-    }).where(eq(executionHosts.id, hostId));
+    await this.db
+      .update(executionHosts)
+      .set({
+        lastControlContactAt: sql`now()`,
+        lastError: null,
+        updatedAt: sql`now()`,
+      })
+      .where(eq(executionHosts.id, hostId));
   }
 
   public async markOnline(hostId: string): Promise<void> {
-    const changed = await this.db.update(executionHosts).set({
-      healthState: "ONLINE",
-      lastControlContactAt: sql`now()`,
-      lastError: null,
-      updatedAt: sql`now()`,
-    }).where(and(
-      eq(executionHosts.id, hostId),
-      ne(executionHosts.healthState, "ONLINE"),
-    )).returning({ id: executionHosts.id });
+    const changed = await this.db
+      .update(executionHosts)
+      .set({
+        healthState: "ONLINE",
+        lastControlContactAt: sql`now()`,
+        lastError: null,
+        updatedAt: sql`now()`,
+      })
+      .where(and(eq(executionHosts.id, hostId), ne(executionHosts.healthState, "ONLINE")))
+      .returning({ id: executionHosts.id });
     if (changed.length > 0) {
       this.logger?.info("host.online", "Execution host is online", { hostId });
     }
   }
 
   public async markOffline(hostId: string, error: string): Promise<boolean> {
-    const changed = await this.db.update(executionHosts).set({
-      healthState: "OFFLINE",
-      lastError: error.slice(0, 2_000),
-      updatedAt: sql`now()`,
-    }).where(and(
-      eq(executionHosts.id, hostId),
-      ne(executionHosts.healthState, "OFFLINE"),
-    )).returning({ id: executionHosts.id });
+    const changed = await this.db
+      .update(executionHosts)
+      .set({
+        healthState: "OFFLINE",
+        lastError: error.slice(0, 2_000),
+        updatedAt: sql`now()`,
+      })
+      .where(and(eq(executionHosts.id, hostId), ne(executionHosts.healthState, "OFFLINE")))
+      .returning({ id: executionHosts.id });
     if (changed.length > 0) {
       this.logger?.warn("host.offline", "Execution host is offline", { hostId, reason: error });
     }
@@ -164,25 +185,29 @@ export class HostService {
   }
 
   public async recordControlFailure(hostId: string, error: string): Promise<void> {
-    await this.db.update(executionHosts).set({
-      healthState: sql`CASE
+    await this.db
+      .update(executionHosts)
+      .set({
+        healthState: sql`CASE
         WHEN ${executionHosts.healthState} = 'OFFLINE' THEN 'OFFLINE'::execution_host_health
         ELSE 'RECOVERING'::execution_host_health
       END`,
-      lastError: error.slice(0, 2_000),
-      updatedAt: sql`now()`,
-    }).where(eq(executionHosts.id, hostId));
+        lastError: error.slice(0, 2_000),
+        updatedAt: sql`now()`,
+      })
+      .where(eq(executionHosts.id, hostId));
   }
 
   public async requestDrain(hostId: string): Promise<boolean> {
     return this.db.transaction(async (tx) => {
-      const changed = await tx.update(executionHosts).set({
-        adminState: "DRAINING",
-        updatedAt: sql`now()`,
-      }).where(and(
-        eq(executionHosts.id, hostId),
-        eq(executionHosts.adminState, "ACTIVE"),
-      )).returning({ id: executionHosts.id });
+      const changed = await tx
+        .update(executionHosts)
+        .set({
+          adminState: "DRAINING",
+          updatedAt: sql`now()`,
+        })
+        .where(and(eq(executionHosts.id, hostId), eq(executionHosts.adminState, "ACTIVE")))
+        .returning({ id: executionHosts.id });
       if (changed.length === 0) return false;
       await tx.insert(events).values({
         id: nanoid(),
@@ -198,14 +223,15 @@ export class HostService {
 
   public async activate(hostId: string): Promise<boolean> {
     return this.db.transaction(async (tx) => {
-      const changed = await tx.update(executionHosts).set({
-        adminState: "ACTIVE",
-        healthState: "RECOVERING",
-        updatedAt: sql`now()`,
-      }).where(and(
-        eq(executionHosts.id, hostId),
-        eq(executionHosts.adminState, "MAINTENANCE"),
-      )).returning({ id: executionHosts.id });
+      const changed = await tx
+        .update(executionHosts)
+        .set({
+          adminState: "ACTIVE",
+          healthState: "RECOVERING",
+          updatedAt: sql`now()`,
+        })
+        .where(and(eq(executionHosts.id, hostId), eq(executionHosts.adminState, "MAINTENANCE")))
+        .returning({ id: executionHosts.id });
       if (changed.length === 0) return false;
       await tx.insert(events).values({
         id: nanoid(),
@@ -221,13 +247,14 @@ export class HostService {
 
   public async markMaintenance(hostId: string): Promise<void> {
     await this.db.transaction(async (tx) => {
-      const changed = await tx.update(executionHosts).set({
-        adminState: "MAINTENANCE",
-        updatedAt: sql`now()`,
-      }).where(and(
-        eq(executionHosts.id, hostId),
-        eq(executionHosts.adminState, "DRAINING"),
-      )).returning({ id: executionHosts.id });
+      const changed = await tx
+        .update(executionHosts)
+        .set({
+          adminState: "MAINTENANCE",
+          updatedAt: sql`now()`,
+        })
+        .where(and(eq(executionHosts.id, hostId), eq(executionHosts.adminState, "DRAINING")))
+        .returning({ id: executionHosts.id });
       if (changed.length === 0) return;
       await tx.insert(events).values({
         id: nanoid(),
@@ -236,7 +263,9 @@ export class HostService {
         type: "HOST_MAINTENANCE_STARTED",
         payload: {},
       });
-      this.logger?.info("host.maintenance.started", "Execution host entered maintenance", { hostId });
+      this.logger?.info("host.maintenance.started", "Execution host entered maintenance", {
+        hostId,
+      });
     });
   }
 
@@ -248,12 +277,22 @@ export class HostService {
     instanceType: InstanceType = "paper",
   ): Promise<HostPlacementResult> {
     if (groupCapacity) {
-      const rows = await tx.select({
-        active: sql<number>`count(*)::int`.mapWith(Number),
-      }).from(serverInstances).where(and(
-        eq(serverInstances.groupId, groupCapacity.groupId),
-        inArray(serverInstances.lifecycleState, ["CREATING", "STARTING", "RUNNING", "DRAINING"]),
-      ));
+      const rows = await tx
+        .select({
+          active: sql<number>`count(*)::int`.mapWith(Number),
+        })
+        .from(serverInstances)
+        .where(
+          and(
+            eq(serverInstances.groupId, groupCapacity.groupId),
+            inArray(serverInstances.lifecycleState, [
+              "CREATING",
+              "STARTING",
+              "RUNNING",
+              "DRAINING",
+            ]),
+          ),
+        );
       if ((rows[0]?.active ?? 0) >= groupCapacity.maximumInstances) {
         return {
           status: "BLOCKED",
@@ -271,11 +310,16 @@ export class HostService {
       filters.push(isNotNull(executionHosts.proxyAddress));
     }
     if (excludedHostId) filters.push(ne(executionHosts.id, excludedHostId));
-    const hosts = await tx.select({
-      id: executionHosts.id,
-      allocatableCpu: executionHosts.allocatableCpu,
-      allocatableMemoryBytes: executionHosts.allocatableMemoryBytes,
-    }).from(executionHosts).where(and(...filters)).orderBy(executionHosts.id).for("update");
+    const hosts = await tx
+      .select({
+        id: executionHosts.id,
+        allocatableCpu: executionHosts.allocatableCpu,
+        allocatableMemoryBytes: executionHosts.allocatableMemoryBytes,
+      })
+      .from(executionHosts)
+      .where(and(...filters))
+      .orderBy(executionHosts.id)
+      .for("update");
     if (hosts.length === 0) {
       return {
         status: "BLOCKED",
@@ -285,24 +329,36 @@ export class HostService {
       };
     }
 
-    const reservations = await tx.select({
-      hostId: serverInstances.hostId,
-      cpu: sql<number>`COALESCE(sum(${serverInstances.reservedCpu}), 0)::float8`.mapWith(Number),
-      memory: sql<number>`COALESCE(sum(${serverInstances.reservedMemoryBytes}), 0)::float8`.mapWith(Number),
-    }).from(serverInstances).where(and(
-      inArray(serverInstances.hostId, hosts.map((host) => host.id)),
-      ne(serverInstances.lifecycleState, "STOPPED"),
-    )).groupBy(serverInstances.hostId);
+    const reservations = await tx
+      .select({
+        hostId: serverInstances.hostId,
+        cpu: sql<number>`COALESCE(sum(${serverInstances.reservedCpu}), 0)::float8`.mapWith(Number),
+        memory:
+          sql<number>`COALESCE(sum(${serverInstances.reservedMemoryBytes}), 0)::float8`.mapWith(
+            Number,
+          ),
+      })
+      .from(serverInstances)
+      .where(
+        and(
+          inArray(
+            serverInstances.hostId,
+            hosts.map((host) => host.id),
+          ),
+          ne(serverInstances.lifecycleState, "STOPPED"),
+        ),
+      )
+      .groupBy(serverInstances.hostId);
     const byHost = new Map(reservations.map((row) => [row.hostId, row]));
     const candidates = hosts.map((host) => ({
-        ...host,
-        reservedCpu: byHost.get(host.id)?.cpu ?? 0,
-        reservedMemoryBytes: byHost.get(host.id)?.memory ?? 0,
-      }));
-    const selected = selectExecutionHost(
-      candidates,
-      { cpu: runtime.cpu, memoryBytes: runtime.memoryBytes },
-    );
+      ...host,
+      reservedCpu: byHost.get(host.id)?.cpu ?? 0,
+      reservedMemoryBytes: byHost.get(host.id)?.memory ?? 0,
+    }));
+    const selected = selectExecutionHost(candidates, {
+      cpu: runtime.cpu,
+      memoryBytes: runtime.memoryBytes,
+    });
     if (selected) {
       this.logger?.debug("placement.selected", "Execution host selected for placement", {
         groupId: groupCapacity?.groupId,

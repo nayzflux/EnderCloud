@@ -1,5 +1,5 @@
 declare module "tar-stream" {
-  import type { Readable,Writable } from "node:stream";
+  import type { Readable, Writable } from "node:stream";
 
   export interface Headers {
     name: string;

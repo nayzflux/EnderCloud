@@ -81,8 +81,7 @@ const lifecycle = [
   {
     id: "03",
     name: "Players move automatically",
-    description:
-      "Send matched players through Velocity and track the session until the game ends.",
+    description: "Send matched players through Velocity and track the session until the game ends.",
   },
   {
     id: "04",
@@ -166,11 +165,9 @@ export default function Home() {
                 </Reveal>
                 <Reveal delay={0.16}>
                   <p className="mt-8 max-w-3xl text-lg leading-8 text-muted-foreground sm:text-xl">
-                    EnderCloud is an open-source Minecraft server orchestrator
-                    and autoscaler for game networks. It keeps game servers
-                    ready before queues fill, starts servers on demand as
-                    players arrive, and stops idle instances across multiple
-                    Docker hosts.
+                    EnderCloud is an open-source Minecraft server orchestrator and autoscaler for
+                    game networks. It keeps game servers ready before queues fill, starts servers on
+                    demand as players arrive, and stops idle instances across multiple Docker hosts.
                   </p>
                 </Reveal>
                 <Reveal delay={0.24}>
@@ -205,30 +202,20 @@ export default function Home() {
                   <p className="technical-label">WHAT ENDERCLOUD SOLVES</p>
                   <dl className="mt-5 grid gap-0 font-mono text-xs">
                     <div className="grid grid-cols-2 gap-3 border-b border-border py-3">
-                      <dt className="text-muted-foreground">
-                        Different server types
-                      </dt>
+                      <dt className="text-muted-foreground">Different server types</dt>
                       <dd className="text-right">Server variants</dd>
                     </div>
                     <div className="grid grid-cols-2 gap-3 border-b border-border py-3">
-                      <dt className="text-muted-foreground">
-                        Single-host overload
-                      </dt>
+                      <dt className="text-muted-foreground">Single-host overload</dt>
                       <dd className="text-right">Load across multiple hosts</dd>
                     </div>
                     <div className="grid grid-cols-2 gap-3 border-b border-border py-3">
-                      <dt className="text-muted-foreground">
-                        Players wait for boot
-                      </dt>
+                      <dt className="text-muted-foreground">Players wait for boot</dt>
                       <dd className="text-right">Warm capacity</dd>
                     </div>
                     <div className="grid grid-cols-2 gap-3 border-b border-border py-3">
-                      <dt className="text-muted-foreground">
-                        Players need a match
-                      </dt>
-                      <dd className="text-right">
-                        Matchmaking + reservations
-                      </dd>
+                      <dt className="text-muted-foreground">Players need a match</dt>
+                      <dd className="text-right">Matchmaking + reservations</dd>
                     </div>
                     <div className="grid grid-cols-2 gap-3 py-3">
                       <dt className="text-muted-foreground">Match is over</dt>
@@ -263,11 +250,7 @@ export default function Home() {
                   Players get a ready server. You stop managing the lifecycle.
                 </h2>
               </Reveal>
-              <Reveal
-                className="grid sm:grid-cols-2"
-                delay={0.1}
-                direction="left"
-              >
+              <Reveal className="grid sm:grid-cols-2" delay={0.1} direction="left">
                 {lifecycle.map((step, index) => (
                   <article
                     className={cn(
@@ -278,14 +261,10 @@ export default function Home() {
                     key={step.name}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-mono text-xs text-primary">
-                        {step.id}
-                      </span>
+                      <span className="font-mono text-xs text-primary">{step.id}</span>
                       <span className="size-2 bg-signal" />
                     </div>
-                    <h3 className="mt-12 text-2xl font-semibold tracking-tight">
-                      {step.name}
-                    </h3>
+                    <h3 className="mt-12 text-2xl font-semibold tracking-tight">{step.name}</h3>
                     <p className="mt-3 max-w-xs leading-7 text-muted-foreground">
                       {step.description}
                     </p>
@@ -296,9 +275,7 @@ export default function Home() {
 
             <div className="px-5 py-16 lg:px-8 lg:py-24">
               <Reveal className="max-w-3xl">
-                <p className="technical-label">
-                  FEATURES BUILT AROUND THE REAL WORK
-                </p>
+                <p className="technical-label">FEATURES BUILT AROUND THE REAL WORK</p>
                 <h2 className="mt-5 text-4xl font-semibold tracking-[-0.035em] sm:text-5xl">
                   Everything needed to run the network without babysitting it.
                 </h2>
@@ -316,12 +293,8 @@ export default function Home() {
                       <Icon aria-hidden="true" className="size-5" />
                       <span className="technical-label">{code}</span>
                     </div>
-                    <h3 className="mt-16 text-2xl font-semibold tracking-tight">
-                      {title}
-                    </h3>
-                    <p className="mt-3 leading-7 text-muted-foreground">
-                      {description}
-                    </p>
+                    <h3 className="mt-16 text-2xl font-semibold tracking-tight">{title}</h3>
+                    <p className="mt-3 leading-7 text-muted-foreground">{description}</p>
                   </article>
                 ))}
               </Reveal>
@@ -334,17 +307,14 @@ export default function Home() {
           >
             <div className="grid gap-12 lg:grid-cols-[0.75fr_1.25fr] lg:gap-20">
               <Reveal>
-                <p className="technical-label">
-                  SOLUTION / MULTI-HOST OPERATIONS
-                </p>
+                <p className="technical-label">SOLUTION / MULTI-HOST OPERATIONS</p>
                 <h2 className="mt-5 text-4xl font-semibold tracking-[-0.035em] sm:text-5xl">
                   Add hosts without adding more manual work.
                 </h2>
                 <p className="mt-6 max-w-xl text-lg leading-8 text-muted-foreground">
-                  EnderCloud uses the capacity already available across your
-                  machines. It chooses where each server runs, keeps ready
-                  instances balanced, and moves capacity before a host goes into
-                  maintenance.
+                  EnderCloud uses the capacity already available across your machines. It chooses
+                  where each server runs, keeps ready instances balanced, and moves capacity before
+                  a host goes into maintenance.
                 </p>
                 <ol className="mt-10 border-t border-border">
                   {solutions.map((solution, index) => (
@@ -352,9 +322,7 @@ export default function Home() {
                       className="flex items-center gap-5 border-b border-border py-4"
                       key={solution}
                     >
-                      <span className="font-mono text-xs text-primary">
-                        0{index + 1}
-                      </span>
+                      <span className="font-mono text-xs text-primary">0{index + 1}</span>
                       <span className="text-base font-medium">{solution}</span>
                       {index < solutions.length - 1 ? (
                         <ArrowRight
@@ -390,32 +358,25 @@ export default function Home() {
           <section className="site-shell border-b border-border">
             <div className="grid border-b border-border lg:grid-cols-2">
               <Reveal className="border-b border-border px-5 py-12 lg:border-r lg:border-b-0 lg:px-8 lg:py-16">
-                <p className="technical-label">
-                  SOLUTION / CAPACITY AND MATCHMAKING
-                </p>
+                <p className="technical-label">SOLUTION / CAPACITY AND MATCHMAKING</p>
                 <h2 className="mt-5 max-w-xl text-4xl font-semibold tracking-[-0.035em]">
-                  Change how a game mode runs without chasing settings across
-                  services.
+                  Change how a game mode runs without chasing settings across services.
                 </h2>
                 <p className="mt-5 max-w-xl leading-7 text-muted-foreground">
-                  Keep ready capacity, player limits, matchmaking rules, server
-                  versions, and timeouts together. Operators can see the active
-                  policy and the instances satisfying it.
+                  Keep ready capacity, player limits, matchmaking rules, server versions, and
+                  timeouts together. Operators can see the active policy and the instances
+                  satisfying it.
                 </p>
               </Reveal>
-              <Reveal
-                className="px-5 py-12 lg:px-8 lg:py-16"
-                delay={0.1}
-                direction="left"
-              >
+              <Reveal className="px-5 py-12 lg:px-8 lg:py-16" delay={0.1} direction="left">
                 <p className="technical-label">SOLUTION / LIVE INVENTORY</p>
                 <h2 className="mt-5 max-w-xl text-4xl font-semibold tracking-[-0.035em]">
                   Know what is running, where it runs, and why.
                 </h2>
                 <p className="mt-5 max-w-xl leading-7 text-muted-foreground">
-                  Filter servers by state, game mode, version, or host. When a
-                  container fails or a process restarts, EnderCloud compares the
-                  plan with what Docker is actually running.
+                  Filter servers by state, game mode, version, or host. When a container fails or a
+                  process restarts, EnderCloud compares the plan with what Docker is actually
+                  running.
                 </p>
               </Reveal>
             </div>
@@ -451,8 +412,8 @@ export default function Home() {
                   Configure the network without reverse-engineering the code.
                 </h2>
                 <p className="mt-6 leading-7 text-muted-foreground">
-                  Follow the installation, set capacity and matchmaking rules,
-                  add Docker hosts, then connect Paper and Velocity plugins.
+                  Follow the installation, set capacity and matchmaking rules, add Docker hosts,
+                  then connect Paper and Velocity plugins.
                 </p>
               </Reveal>
               <Reveal
@@ -485,15 +446,9 @@ export default function Home() {
                     href={item.href}
                     key={item.label}
                   >
-                    <span className="font-mono text-xs text-primary">
-                      {item.number}
-                    </span>
-                    <h3 className="mt-10 text-xl font-semibold">
-                      {item.label}
-                    </h3>
-                    <p className="mt-3 text-sm leading-6 text-muted-foreground">
-                      {item.text}
-                    </p>
+                    <span className="font-mono text-xs text-primary">{item.number}</span>
+                    <h3 className="mt-10 text-xl font-semibold">{item.label}</h3>
+                    <p className="mt-3 text-sm leading-6 text-muted-foreground">{item.text}</p>
                     <ArrowRight
                       aria-hidden="true"
                       className="mt-auto size-4 transition-transform group-hover:translate-x-1"
@@ -505,30 +460,21 @@ export default function Home() {
             <Separator className="my-16" />
             <Reveal className="flex flex-col items-start justify-between gap-8 sm:flex-row sm:items-end">
               <div>
-                <p className="technical-label">
-                  READY TO REMOVE THE MANUAL WORK?
-                </p>
+                <p className="technical-label">READY TO REMOVE THE MANUAL WORK?</p>
                 <h2 className="mt-4 max-w-3xl text-3xl font-semibold tracking-[-0.03em] sm:text-5xl">
-                  See how EnderCloud fits your network, then run it on your
-                  infrastructure.
+                  See how EnderCloud fits your network, then run it on your infrastructure.
                 </h2>
               </div>
               <div className="flex shrink-0 flex-wrap gap-3">
                 <Link
-                  className={cn(
-                    buttonVariants({ size: "lg" }),
-                    "light-action h-11 px-5",
-                  )}
+                  className={cn(buttonVariants({ size: "lg" }), "light-action h-11 px-5")}
                   href="/docs"
                 >
                   Open docs
                   <ArrowRight aria-hidden="true" data-icon="inline-end" />
                 </Link>
                 <a
-                  className={cn(
-                    buttonVariants({ variant: "outline", size: "lg" }),
-                    "h-11 px-5",
-                  )}
+                  className={cn(buttonVariants({ variant: "outline", size: "lg" }), "h-11 px-5")}
                   href={site.github}
                   rel="noreferrer"
                   target="_blank"

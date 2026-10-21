@@ -1,21 +1,21 @@
 import type {
-ActiveDeadline,
-DashboardClusterSnapshot,
-DashboardGroup,
-DashboardHost,
-DashboardInstance,
-DashboardQueueSummary,
-DashboardSession,
-DashboardVariant
+  ActiveDeadline,
+  DashboardClusterSnapshot,
+  DashboardGroup,
+  DashboardHost,
+  DashboardInstance,
+  DashboardQueueSummary,
+  DashboardSession,
+  DashboardVariant,
 } from "@endercloud/contracts/dashboard";
 import type {
-AvailabilityState,
-ExecutionHostAdminState,
-ExecutionHostHealthState,
-GroupType,
-LifecycleState,
-SessionState,
-VariantRuntimeSpec
+  AvailabilityState,
+  ExecutionHostAdminState,
+  ExecutionHostHealthState,
+  GroupType,
+  LifecycleState,
+  SessionState,
+  VariantRuntimeSpec,
 } from "@endercloud/contracts/domain";
 
 export type DatabaseTimestamp = Date | string;
@@ -171,25 +171,31 @@ export function toVariant(row: VariantRow): DashboardVariant {
     revision: row.revision,
     weight: row.selection_weight,
     runtime: row.runtime_spec,
-    startup: row.startup_state ? {
-      state: row.startup_state,
-      failureCount: row.startup_failure_count ?? 0,
-      retryLimit: row.startup_retry_limit ?? 5,
-      nextRetryAt: iso(row.startup_next_retry_at ?? null),
-      lastFailureAt: iso(row.startup_last_failure_at ?? null),
-      lastFailedInstanceId: row.startup_last_failed_instance_id ?? null,
-      lastFailureReason: row.startup_last_failure_reason ?? null,
-    } : null,
+    startup: row.startup_state
+      ? {
+          state: row.startup_state,
+          failureCount: row.startup_failure_count ?? 0,
+          retryLimit: row.startup_retry_limit ?? 5,
+          nextRetryAt: iso(row.startup_next_retry_at ?? null),
+          lastFailureAt: iso(row.startup_last_failure_at ?? null),
+          lastFailedInstanceId: row.startup_last_failed_instance_id ?? null,
+          lastFailureReason: row.startup_last_failure_reason ?? null,
+        }
+      : null,
   };
 }
 
 export function toInstance(row: InstanceRow): DashboardInstance {
   return {
-    ...(row.group_type === "proxy" ? { proxy: {
-      lastHeartbeatAt: iso(row.proxy_last_seen_at ?? null),
-      ready: row.proxy_ready ?? false,
-      acceptingConnections: row.proxy_accepting_connections ?? false,
-    } } : {}),
+    ...(row.group_type === "proxy"
+      ? {
+          proxy: {
+            lastHeartbeatAt: iso(row.proxy_last_seen_at ?? null),
+            ready: row.proxy_ready ?? false,
+            acceptingConnections: row.proxy_accepting_connections ?? false,
+          },
+        }
+      : {}),
     id: row.id,
     hostId: row.host_id ?? null,
     variantId: row.variant_id,
@@ -269,9 +275,7 @@ export function activeInstanceDeadline(row: InstanceRow): ActiveDeadline | null 
   if (row.lifecycle_state === "DRAINING" && row.drain_deadline) {
     return {
       kind:
-        row.drain_reason === "SESSION_CANCELLED"
-          ? "CANCELLED_INSTANCE_DRAIN"
-          : "INSTANCE_DRAIN",
+        row.drain_reason === "SESSION_CANCELLED" ? "CANCELLED_INSTANCE_DRAIN" : "INSTANCE_DRAIN",
       at: requiredIso(row.drain_deadline),
     };
   }
@@ -295,8 +299,7 @@ export function activeSessionDeadline(
   const pendingTransfer = transfers
     .filter((transfer) => transfer.state === "PENDING")
     .toSorted(
-      (left, right) =>
-        new Date(left.expires_at).getTime() - new Date(right.expires_at).getTime(),
+      (left, right) => new Date(left.expires_at).getTime() - new Date(right.expires_at).getTime(),
     )[0];
   if (pendingTransfer) {
     return { kind: "PLAYER_TRANSFER", at: requiredIso(pendingTransfer.expires_at) };
@@ -359,13 +362,11 @@ export function assembleClusterSnapshot(
         instance.lifecycleState === "DRAINING",
     );
     const warmInstances = activeInstances.filter(
-      (instance) =>
-        instance.lifecycleState === "RUNNING" && instance.availabilityState === "OPEN",
+      (instance) => instance.lifecycleState === "RUNNING" && instance.availabilityState === "OPEN",
     ).length;
     const pendingWarmInstances = activeInstances.filter(
       (instance) =>
-        (instance.lifecycleState === "CREATING" ||
-          instance.lifecycleState === "STARTING") &&
+        (instance.lifecycleState === "CREATING" || instance.lifecycleState === "STARTING") &&
         instance.availabilityState === "OPEN",
     ).length;
     const reservedInstances = activeInstances.filter(
@@ -435,17 +436,10 @@ export function assembleClusterSnapshot(
     generatedAt: generatedAt.toISOString(),
     summary: {
       enabledGroups: groups.filter((group) => group.enabled).length,
-      activeInstances: groups.reduce(
-        (total, group) => total + group.capacity.activeInstances,
-        0,
-      ),
-      runningInstances: allInstances.filter(
-        (instance) => instance.lifecycleState === "RUNNING",
-      ).length,
-      warmInstances: groups.reduce(
-        (total, group) => total + group.capacity.warmInstances,
-        0,
-      ),
+      activeInstances: groups.reduce((total, group) => total + group.capacity.activeInstances, 0),
+      runningInstances: allInstances.filter((instance) => instance.lifecycleState === "RUNNING")
+        .length,
+      warmInstances: groups.reduce((total, group) => total + group.capacity.warmInstances, 0),
       pendingWarmInstances: groups.reduce(
         (total, group) => total + group.capacity.pendingWarmInstances,
         0,
@@ -454,24 +448,18 @@ export function assembleClusterSnapshot(
         (total, group) => total + group.capacity.reservedInstances,
         0,
       ),
-      playersOnline: groups.filter((group) => group.type !== "proxy").flatMap((group) => group.instances).reduce(
-        (total, instance) => total + instance.playerCount,
-        0,
-      ),
+      playersOnline: groups
+        .filter((group) => group.type !== "proxy")
+        .flatMap((group) => group.instances)
+        .reduce((total, instance) => total + instance.playerCount, 0),
       activeSessions: allSessions.filter(
         (session) =>
           session.state !== "FINISHED" &&
           session.state !== "CANCELLED" &&
           session.state !== "FAILED",
       ).length,
-      queuedParties: groups.reduce(
-        (total, group) => total + group.queue.partyCount,
-        0,
-      ),
-      queuedPlayers: groups.reduce(
-        (total, group) => total + group.queue.playerCount,
-        0,
-      ),
+      queuedParties: groups.reduce((total, group) => total + group.queue.partyCount, 0),
+      queuedPlayers: groups.reduce((total, group) => total + group.queue.playerCount, 0),
       activeIncidentCount: rows.incidentSummary?.active ?? 0,
       criticalIncidentCount: rows.incidentSummary?.critical ?? 0,
     },
@@ -484,4 +472,3 @@ export function normalizeDashboardLimit(value: number | undefined): number {
   if (!Number.isFinite(value)) return 50;
   return Math.max(1, Math.min(200, Math.trunc(value ?? 50)));
 }
-

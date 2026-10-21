@@ -25,11 +25,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { RelativeTime } from "@/components/live-time";
 import { cn } from "@/lib/utils";
 
@@ -71,14 +67,9 @@ function LiveIndicator() {
   return (
     <Tooltip>
       <TooltipTrigger
-        render={
-          <div className="flex h-7 items-center gap-2 rounded-lg border px-2.5 text-xs" />
-        }
+        render={<div className="flex h-7 items-center gap-2 rounded-lg border px-2.5 text-xs" />}
       >
-        <span
-          aria-hidden
-          className={cn("size-1.5 shrink-0 rounded-full", dotClass[state])}
-        />
+        <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dotClass[state])} />
         <span className="font-medium">{labels[state]}</span>
         <span className="hidden text-muted-foreground sm:inline tabular">
           {snapshot ? <RelativeTime value={snapshot.generatedAt} /> : "—"}
@@ -102,8 +93,7 @@ function LiveIndicator() {
  * on navigation only, so an open menu is never disturbed by a refresh tick.
  */
 function RefreshControls() {
-  const { refresh, isFetching, refreshInterval, setRefreshInterval } =
-    useCluster();
+  const { refresh, isFetching, refreshInterval, setRefreshInterval } = useCluster();
 
   return (
     <>
@@ -115,11 +105,7 @@ function RefreshControls() {
         value={String(refreshInterval)}
         onValueChange={(value) => setRefreshInterval(Number(value ?? 5_000))}
       >
-        <SelectTrigger
-          size="sm"
-          aria-label="Auto-refresh interval"
-          className="hidden w-24 sm:flex"
-        >
+        <SelectTrigger size="sm" aria-label="Auto-refresh interval" className="hidden w-24 sm:flex">
           <SelectValue />
         </SelectTrigger>
         <SelectContent alignItemWithTrigger={false} align="end">

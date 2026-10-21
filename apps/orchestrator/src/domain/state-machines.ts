@@ -1,4 +1,4 @@
-import type { AvailabilityState,LifecycleState,SessionState } from "@endercloud/contracts/domain";
+import type { AvailabilityState, LifecycleState, SessionState } from "@endercloud/contracts/domain";
 
 const lifecycleTransitions: Readonly<Record<LifecycleState, readonly LifecycleState[]>> = {
   CREATING: ["STARTING", "FAILED"],
@@ -35,27 +35,18 @@ export function assertSessionTransition(from: SessionState, to: SessionState): v
   }
 }
 
-export function assertAvailabilityTransition(
-  from: AvailabilityState,
-  to: AvailabilityState,
-): void {
+export function assertAvailabilityTransition(from: AvailabilityState, to: AvailabilityState): void {
   if (from === to) return;
   if (from !== "OPEN" || to !== "RESERVED") {
     throw new Error(`Invalid availability transition ${from} -> ${to}`);
   }
 }
 
-export function isWarmReady(
-  lifecycle: LifecycleState,
-  availability: AvailabilityState,
-): boolean {
+export function isWarmReady(lifecycle: LifecycleState, availability: AvailabilityState): boolean {
   return lifecycle === "RUNNING" && availability === "OPEN";
 }
 
-export function isWarmPending(
-  lifecycle: LifecycleState,
-  availability: AvailabilityState,
-): boolean {
+export function isWarmPending(lifecycle: LifecycleState, availability: AvailabilityState): boolean {
   return (lifecycle === "CREATING" || lifecycle === "STARTING") && availability === "OPEN";
 }
 

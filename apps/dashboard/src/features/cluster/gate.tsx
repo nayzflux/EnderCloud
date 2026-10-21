@@ -53,9 +53,8 @@ export function ClusterGate({
             </EmptyMedia>
             <EmptyTitle>Cluster unreachable</EmptyTitle>
             <EmptyDescription>
-              The dashboard keeps retrying automatically. Check that the
-              orchestrator is running, or enable <code>DASHBOARD_MOCK_DATA</code>{" "}
-              to work against synthetic data.
+              The dashboard keeps retrying automatically. Check that the orchestrator is running, or
+              enable <code>DASHBOARD_MOCK_DATA</code> to work against synthetic data.
             </EmptyDescription>
           </EmptyHeader>
         </Empty>

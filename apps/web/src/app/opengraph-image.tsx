@@ -6,39 +6,39 @@ export const contentType = "image/png";
 
 export default function OpenGraphImage() {
   return new ImageResponse(
-    (
+    <div
+      style={{
+        alignItems: "stretch",
+        background: "#191a1d",
+        color: "#f0eaf4",
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        justifyContent: "space-between",
+        padding: 64,
+        position: "relative",
+        width: "100%",
+      }}
+    >
+      <div style={{ border: "1px solid #4a4c52", inset: 28, position: "absolute" }} />
+      <div
+        style={{ alignItems: "center", display: "flex", fontSize: 28, fontWeight: 700, gap: 16 }}
+      >
+        <div style={{ background: "#a867f4", display: "flex", height: 38, width: 38 }} />
+        EnderCloud
+      </div>
       <div
         style={{
-          alignItems: "stretch",
-          background: "#191a1d",
-          color: "#f0eaf4",
           display: "flex",
-          flexDirection: "column",
-          height: "100%",
-          justifyContent: "space-between",
-          padding: 64,
-          position: "relative",
-          width: "100%",
+          fontSize: 70,
+          fontWeight: 700,
+          letterSpacing: -4,
+          lineHeight: 1.03,
         }}
       >
-        <div style={{ border: "1px solid #4a4c52", inset: 28, position: "absolute" }} />
-        <div style={{ alignItems: "center", display: "flex", fontSize: 28, fontWeight: 700, gap: 16 }}>
-          <div style={{ background: "#a867f4", display: "flex", height: 38, width: 38 }} />
-          EnderCloud
-        </div>
-        <div
-          style={{
-            display: "flex",
-            fontSize: 70,
-            fontWeight: 700,
-            letterSpacing: -4,
-            lineHeight: 1.03,
-          }}
-        >
-          Scale from player demand to servers ready
-        </div>
+        Scale from player demand to servers ready
       </div>
-    ),
+    </div>,
     size,
   );
 }

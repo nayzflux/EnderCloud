@@ -34,9 +34,7 @@ export function VariantLayerNode({ data, selected }: NodeProps<VariantFlowNode>)
             <p className="text-[0.65rem] font-semibold tracking-[0.16em] text-muted-foreground uppercase">
               {final ? "Final variant" : `Layer ${data.depth + 1}`}
             </p>
-            <p className="mt-1 truncate font-heading text-sm font-semibold">
-              {data.layer.id}
-            </p>
+            <p className="mt-1 truncate font-heading text-sm font-semibold">{data.layer.id}</p>
           </div>
           {final ? (
             <BoxIcon className="size-4 shrink-0 text-muted-foreground" />

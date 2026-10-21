@@ -19,12 +19,12 @@ On Windows use `plugins/gradlew.bat`; elsewhere use `plugins/gradlew` from its d
 
 ## Applications
 
-| Command from root | Application |
-| --- | --- |
-| `bun run dev:orchestrator` | Central control plane |
-| `bun run dev:agent` | Host-local Docker agent |
-| `bun run dev:dashboard` | Authenticated operations console |
-| `bun run dev:web` | Public website and canonical documentation |
+| Command from root          | Application                                |
+| -------------------------- | ------------------------------------------ |
+| `bun run dev:orchestrator` | Central control plane                      |
+| `bun run dev:agent`        | Host-local Docker agent                    |
+| `bun run dev:dashboard`    | Authenticated operations console           |
+| `bun run dev:web`          | Public website and canonical documentation |
 
 The orchestrator needs PostgreSQL, Redis and the required [security environment](/docs/configure/authentication).
 Its default group/template paths resolve from the repository; explicit relative overrides resolve
@@ -82,4 +82,3 @@ that injects the relevant failure between stages. Run the focused checks, then
 
 Edit only `docs/guides/**/*.mdx` for published guides. Fumadocs in `apps/web` reads these
 sources directly. Old root Markdown filenames are links to the canonical guides.
-

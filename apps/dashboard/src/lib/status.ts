@@ -145,23 +145,14 @@ export function needsAttention(instance: DashboardInstance): boolean {
 }
 
 export function isWarm(instance: DashboardInstance): boolean {
-  return (
-    instance.lifecycleState === "RUNNING" && instance.availabilityState === "OPEN"
-  );
+  return instance.lifecycleState === "RUNNING" && instance.availabilityState === "OPEN";
 }
 
 export function isStarting(instance: DashboardInstance): boolean {
-  return (
-    instance.lifecycleState === "CREATING" || instance.lifecycleState === "STARTING"
-  );
+  return instance.lifecycleState === "CREATING" || instance.lifecycleState === "STARTING";
 }
 
-export type InstanceFilter =
-  | "all"
-  | "warm"
-  | "reserved"
-  | "starting"
-  | "attention";
+export type InstanceFilter = "all" | "warm" | "reserved" | "starting" | "attention";
 
 export const instanceFilters: readonly {
   readonly value: InstanceFilter;

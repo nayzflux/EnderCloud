@@ -1,25 +1,23 @@
 import { ApplicationError } from "@endercloud/contracts/errors";
-import type {
-PaperEvent
-} from "@endercloud/contracts/domain";
+import type { PaperEvent } from "@endercloud/contracts/domain";
 import { nanoid } from "@endercloud/runtime/id";
 import type { Logger } from "@endercloud/runtime/logger";
-import { and,eq,inArray,sql } from "drizzle-orm";
-import type { Database,Transaction } from "../../db/client.ts";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import type { Database, Transaction } from "../../db/client.ts";
 import {
-events,
-gameSessions,
-instancePlayers,
-serverGroups,
-serverInstances,
-sessionPlayers,
-transferCommandPlayers,
-transferCommands
+  events,
+  gameSessions,
+  instancePlayers,
+  serverGroups,
+  serverInstances,
+  sessionPlayers,
+  transferCommandPlayers,
+  transferCommands,
 } from "../../db/schema.ts";
 import {
-computeFeasibleProfiles,
-isSessionLockEligible,
-selectRecommendedProfile,
+  computeFeasibleProfiles,
+  isSessionLockEligible,
+  selectRecommendedProfile,
 } from "../../domain/matchmaking.ts";
 import type { MonitoringService } from "../monitoring/metrics.ts";
 import type { HubRouter } from "../routing/hubs.ts";
@@ -28,19 +26,28 @@ import type { TransferService } from "../transfers/service.ts";
 interface LifecycleCallbacks {
   evacuateCancelledMinigame(instanceId: string): Promise<number>;
   markReady(instanceId: string, endpoint?: string): Promise<void>;
-  beginDrain(instanceId: string, reason?: "NORMAL" | "SESSION_CANCELLED" | "HUB_RENEWAL" | "HOST_MAINTENANCE"): Promise<boolean>;
+  beginDrain(
+    instanceId: string,
+    reason?: "NORMAL" | "SESSION_CANCELLED" | "HUB_RENEWAL" | "HOST_MAINTENANCE",
+  ): Promise<boolean>;
   publishRoutingUpdate(instanceId: string): Promise<void>;
 }
 
 export class PaperEvents {
-  public constructor(private readonly db: Database, private readonly transfers: TransferService,
-    private readonly hubs: HubRouter, private readonly logger: Logger, private readonly monitoring: MonitoringService | undefined,
-    private readonly paperHealthLeaseMs: number, private readonly lifecycle: LifecycleCallbacks) {}
-
+  public constructor(
+    private readonly db: Database,
+    private readonly transfers: TransferService,
+    private readonly hubs: HubRouter,
+    private readonly logger: Logger,
+    private readonly monitoring: MonitoringService | undefined,
+    private readonly paperHealthLeaseMs: number,
+    private readonly lifecycle: LifecycleCallbacks,
+  ) {}
 
   // Apply an event emitted by the Paper plugin and persist it for auditing.
   public async handlePaperEvent(instanceId: string, event: PaperEvent): Promise<void> {
-    const [instance] = await this.db.select({ type: serverGroups.type })
+    const [instance] = await this.db
+      .select({ type: serverGroups.type })
       .from(serverInstances)
       .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
       .where(eq(serverInstances.id, instanceId));
@@ -85,7 +92,6 @@ export class PaperEvents {
     await this.recordEvent("instance", instanceId, event.type, event);
   }
 
-
   // Return the current versioned player assignment for a minigame instance.
   public async getAssignment(instanceId: string) {
     const sessions = await this.db
@@ -123,9 +129,7 @@ export class PaperEvents {
       if (player.state === "CONNECTED") {
         connectedTicketSizes.set(
           player.queue_entry_id,
-          (connectedTicketSizes.get(
-            player.queue_entry_id,
-          ) ?? 0) + 1,
+          (connectedTicketSizes.get(player.queue_entry_id) ?? 0) + 1,
         );
       }
     }
@@ -149,13 +153,10 @@ export class PaperEvents {
       revision: session.assignment_revision,
       expectedPlayerCount,
       connectedPlayerCount,
-      acceptingTickets: ["FORMING", "WAITING_FOR_INSTANCE", "TRANSFERRING", "WAITING"]
-        .includes(session.state) &&
+      acceptingTickets:
+        ["FORMING", "WAITING_FOR_INSTANCE", "TRANSFERRING", "WAITING"].includes(session.state) &&
         expectedPlayerCount < (session.maximum_players ?? Number.MAX_SAFE_INTEGER) &&
-        (
-          !session.lobby_stale_deadline ||
-          session.lobby_stale_deadline.getTime() > Date.now()
-        ),
+        (!session.lobby_stale_deadline || session.lobby_stale_deadline.getTime() > Date.now()),
       lockEligible,
       feasibleProfiles,
       recommendedProfile,
@@ -167,7 +168,6 @@ export class PaperEvents {
       })),
     };
   }
-
 
   // Record that the game server consumed the expected assignment revision.
   public async acknowledgeAssignment(instanceId: string, revision: number): Promise<boolean> {
@@ -182,13 +182,12 @@ export class PaperEvents {
         and(
           eq(serverInstances.id, instanceId),
           eq(serverInstances.sessionId, gameSessions.id),
-          eq(gameSessions.assignmentRevision, revision)
-        )
+          eq(gameSessions.assignmentRevision, revision),
+        ),
       )
       .returning({ id: gameSessions.id });
     return rows.length > 0;
   }
-
 
   // Atomically reflect a player arrival in both instance and session state.
   private async playerJoined(
@@ -197,11 +196,7 @@ export class PaperEvents {
     sessionId?: string,
   ): Promise<void> {
     await this.db.transaction(async (tx) => {
-      const effectiveSessionId = await this.validateEventSession(
-        tx,
-        instanceId,
-        sessionId,
-      );
+      const effectiveSessionId = await this.validateEventSession(tx, instanceId, sessionId);
       await tx
         .insert(instancePlayers)
         .values({
@@ -250,15 +245,14 @@ export class PaperEvents {
               eq(sessionPlayers.playerId, playerId),
               eq(gameSessions.id, sessionPlayers.sessionId),
               inArray(gameSessions.state, ["TRANSFERRING", "WAITING"]),
-              inArray(sessionPlayers.state, ["SELECTED", "TRANSFERRING", "LEFT"])
-            )
+              inArray(sessionPlayers.state, ["SELECTED", "TRANSFERRING", "LEFT"]),
+            ),
           )
           .returning({ playerId: sessionPlayers.playerId });
         if (changed.length > 0) await this.bumpAssignmentRevision(tx, effectiveSessionId);
       }
     });
   }
-
 
   // Atomically remove a player from the instance and mark the session departure.
   private async playerLeft(
@@ -267,19 +261,12 @@ export class PaperEvents {
     sessionId?: string,
   ): Promise<void> {
     await this.db.transaction(async (tx) => {
-      const effectiveSessionId = await this.validateEventSession(
-        tx,
-        instanceId,
-        sessionId,
-      );
+      const effectiveSessionId = await this.validateEventSession(tx, instanceId, sessionId);
       // A grace window tolerates one delayed heartbeat before treating a player as absent.
       await tx
         .delete(instancePlayers)
         .where(
-          and(
-            eq(instancePlayers.instanceId, instanceId),
-            eq(instancePlayers.playerId, playerId)
-          )
+          and(eq(instancePlayers.instanceId, instanceId), eq(instancePlayers.playerId, playerId)),
         );
       await tx
         .update(serverInstances)
@@ -299,15 +286,14 @@ export class PaperEvents {
             and(
               eq(sessionPlayers.sessionId, effectiveSessionId),
               eq(sessionPlayers.playerId, playerId),
-              sql`${sessionPlayers.state} <> 'LEFT'`
-            )
+              sql`${sessionPlayers.state} <> 'LEFT'`,
+            ),
           )
           .returning({ playerId: sessionPlayers.playerId });
         if (changed.length > 0) await this.bumpAssignmentRevision(tx, effectiveSessionId);
       }
     });
   }
-
 
   // Release an eliminated player from a running session without disconnecting the spectator.
   private async playerEliminated(
@@ -324,12 +310,7 @@ export class PaperEvents {
         })
         .from(sessionPlayers)
         .innerJoin(gameSessions, eq(gameSessions.id, sessionPlayers.sessionId))
-        .where(
-          and(
-            eq(sessionPlayers.sessionId, sessionId),
-            eq(sessionPlayers.playerId, playerId),
-          ),
-        )
+        .where(and(eq(sessionPlayers.sessionId, sessionId), eq(sessionPlayers.playerId, playerId)))
         .for("update", { of: sessionPlayers });
       const player = rows[0];
       if (!player) return false;
@@ -353,15 +334,24 @@ export class PaperEvents {
     if (!accepted) throw this.invalidSessionEvent(instanceId, sessionId);
   }
 
-
   // Reconcile the authoritative player list reported by the game server.
   private async heartbeat(instanceId: string, playerIds: readonly string[]): Promise<void> {
     await this.db.transaction(async (tx) => {
-      const alive = await tx.update(serverInstances).set({
-        paperHealthDeadline: new Date(Date.now() + this.paperHealthLeaseMs), healthSuspectedAt: null,
-      }).where(and(eq(serverInstances.id, instanceId), inArray(serverInstances.lifecycleState, ["RUNNING", "DRAINING"])))
+      const alive = await tx
+        .update(serverInstances)
+        .set({
+          paperHealthDeadline: new Date(Date.now() + this.paperHealthLeaseMs),
+          healthSuspectedAt: null,
+        })
+        .where(
+          and(
+            eq(serverInstances.id, instanceId),
+            inArray(serverInstances.lifecycleState, ["RUNNING", "DRAINING"]),
+          ),
+        )
         .returning({ id: serverInstances.id });
-      if (!alive.length) throw new ApplicationError("CONFLICT", 409, `Paper instance ${instanceId} is unavailable`);
+      if (!alive.length)
+        throw new ApplicationError("CONFLICT", 409, `Paper instance ${instanceId} is unavailable`);
       const effectiveSessionId = await this.validateEventSession(tx, instanceId);
       let assignmentChanged = false;
       // Refresh every reported player before removing stale rows, making the heartbeat authoritative.
@@ -407,8 +397,8 @@ export class PaperEvents {
                 eq(sessionPlayers.playerId, playerId),
                 eq(gameSessions.id, sessionPlayers.sessionId),
                 inArray(gameSessions.state, ["TRANSFERRING", "WAITING"]),
-                inArray(sessionPlayers.state, ["SELECTED", "TRANSFERRING", "LEFT"])
-              )
+                inArray(sessionPlayers.state, ["SELECTED", "TRANSFERRING", "LEFT"]),
+              ),
             )
             .returning({ playerId: sessionPlayers.playerId });
           assignmentChanged ||= changed.length > 0;
@@ -427,24 +417,25 @@ export class PaperEvents {
     });
   }
 
-
   private async recordTransferArrival(
     tx: Transaction,
     instanceId: string,
     playerId: string,
   ): Promise<void> {
-    await tx.update(transferCommandPlayers)
+    await tx
+      .update(transferCommandPlayers)
       .set({ state: "ARRIVED", observedAt: sql`now()` })
       .from(transferCommands)
-      .where(and(
-        eq(transferCommandPlayers.commandId, transferCommands.id),
-        eq(transferCommands.instanceId, instanceId),
-        eq(transferCommands.state, "PENDING"),
-        eq(transferCommandPlayers.playerId, playerId),
-        eq(transferCommandPlayers.state, "PENDING"),
-      ));
+      .where(
+        and(
+          eq(transferCommandPlayers.commandId, transferCommands.id),
+          eq(transferCommands.instanceId, instanceId),
+          eq(transferCommands.state, "PENDING"),
+          eq(transferCommandPlayers.playerId, playerId),
+          eq(transferCommandPlayers.state, "PENDING"),
+        ),
+      );
   }
-
 
   // Apply only valid, idempotent game-driven session state transitions.
   private async setSessionState(
@@ -453,14 +444,18 @@ export class PaperEvents {
     state: "STARTING" | "RUNNING",
   ): Promise<void> {
     const transitioned = await this.db.transaction(async (tx) => {
-      const current = await tx.select({
-        state: gameSessions.state,
-      })
+      const current = await tx
+        .select({
+          state: gameSessions.state,
+        })
         .from(gameSessions)
-        .innerJoin(serverInstances, and(
-          eq(serverInstances.id, gameSessions.instanceId),
-          eq(serverInstances.sessionId, gameSessions.id),
-        ))
+        .innerJoin(
+          serverInstances,
+          and(
+            eq(serverInstances.id, gameSessions.instanceId),
+            eq(serverInstances.sessionId, gameSessions.id),
+          ),
+        )
         .where(and(eq(gameSessions.id, sessionId), eq(serverInstances.id, instanceId)))
         .for("update", { of: gameSessions });
       const session = current[0];
@@ -469,29 +464,34 @@ export class PaperEvents {
 
       if (state === "STARTING") {
         if (!["TRANSFERRING", "WAITING"].includes(session.state)) return false;
-        await tx.update(gameSessions)
+        await tx
+          .update(gameSessions)
           .set({ state: "STARTING", updatedAt: sql`now()` })
           .where(eq(gameSessions.id, sessionId));
-        const removed = await tx.update(sessionPlayers)
+        const removed = await tx
+          .update(sessionPlayers)
           .set({ state: "LEFT", leftAt: sql`now()` })
-          .where(and(
-            eq(sessionPlayers.sessionId, sessionId),
-            inArray(sessionPlayers.state, ["SELECTED", "TRANSFERRING"]),
-          ))
+          .where(
+            and(
+              eq(sessionPlayers.sessionId, sessionId),
+              inArray(sessionPlayers.state, ["SELECTED", "TRANSFERRING"]),
+            ),
+          )
           .returning({ playerId: sessionPlayers.playerId });
         if (removed.length > 0) {
           await this.bumpAssignmentRevision(tx, sessionId);
         }
-        await tx.update(transferCommands)
+        await tx
+          .update(transferCommands)
           .set({ state: "CANCELLED", completedAt: sql`now()` })
-          .where(and(
-            eq(transferCommands.sessionId, sessionId),
-            eq(transferCommands.state, "PENDING"),
-          ));
+          .where(
+            and(eq(transferCommands.sessionId, sessionId), eq(transferCommands.state, "PENDING")),
+          );
         return true;
       }
       if (state === "RUNNING" && session.state === "STARTING") {
-        await tx.update(gameSessions)
+        await tx
+          .update(gameSessions)
           .set({
             state: "RUNNING",
             startedAt: sql`COALESCE(${gameSessions.startedAt}, now())`,
@@ -510,20 +510,14 @@ export class PaperEvents {
         serverInstances,
         and(
           eq(serverInstances.id, gameSessions.instanceId),
-          eq(serverInstances.sessionId, gameSessions.id)
-        )
+          eq(serverInstances.sessionId, gameSessions.id),
+        ),
       )
-      .where(
-        and(
-          eq(gameSessions.id, sessionId),
-          eq(serverInstances.id, instanceId)
-        )
-      );
+      .where(and(eq(gameSessions.id, sessionId), eq(serverInstances.id, instanceId)));
     // Duplicate plugin events are idempotent, while skipped or foreign transitions are rejected.
     if (current[0]?.state === state) return;
     throw this.invalidSessionEvent(instanceId, sessionId);
   }
-
 
   private evaluateLockEligibility(
     connectedPlayerCount: number,
@@ -546,9 +540,9 @@ export class PaperEvents {
     );
   }
 
-
   private async bumpAssignmentRevision(tx: Transaction, sessionId: string): Promise<void> {
-    await tx.update(gameSessions)
+    await tx
+      .update(gameSessions)
       .set({
         assignmentRevision: sql`${gameSessions.assignmentRevision} + 1`,
         assignmentAcknowledgedAt: null,
@@ -557,7 +551,6 @@ export class PaperEvents {
       .where(eq(gameSessions.id, sessionId));
   }
 
-
   // Accept an authoritative cancellation from the minigame and begin rapid evacuation.
   private async cancelSession(
     instanceId: string,
@@ -565,54 +558,56 @@ export class PaperEvents {
     reason?: string,
   ): Promise<void> {
     const transitioned = await this.db.transaction(async (tx: Transaction) => {
-      const rows = await tx.update(gameSessions)
+      const rows = await tx
+        .update(gameSessions)
         .set({
           state: "CANCELLED",
           finishedAt: sql`COALESCE(${gameSessions.finishedAt}, now())`,
           updatedAt: sql`now()`,
         })
         .from(serverInstances)
-        .where(and(
-          eq(gameSessions.id, sessionId),
-          eq(gameSessions.instanceId, instanceId),
-          eq(serverInstances.id, instanceId),
-          eq(serverInstances.sessionId, sessionId),
-          inArray(gameSessions.state, [
-            "TRANSFERRING",
-            "WAITING",
-            "STARTING",
-            "RUNNING",
-          ]),
-        ))
+        .where(
+          and(
+            eq(gameSessions.id, sessionId),
+            eq(gameSessions.instanceId, instanceId),
+            eq(serverInstances.id, instanceId),
+            eq(serverInstances.sessionId, sessionId),
+            inArray(gameSessions.state, ["TRANSFERRING", "WAITING", "STARTING", "RUNNING"]),
+          ),
+        )
         .returning({ id: gameSessions.id });
       if (rows.length === 0) return false;
-      await tx.update(transferCommands)
+      await tx
+        .update(transferCommands)
         .set({ state: "CANCELLED", completedAt: sql`now()` })
-        .where(and(
-          eq(transferCommands.sessionId, sessionId),
-          eq(transferCommands.state, "PENDING"),
-        ));
-      const removed = await tx.update(sessionPlayers)
+        .where(
+          and(eq(transferCommands.sessionId, sessionId), eq(transferCommands.state, "PENDING")),
+        );
+      const removed = await tx
+        .update(sessionPlayers)
         .set({ state: "LEFT", leftAt: sql`now()` })
-        .where(and(
-          eq(sessionPlayers.sessionId, sessionId),
-          inArray(sessionPlayers.state, ["SELECTED", "TRANSFERRING"]),
-        ))
+        .where(
+          and(
+            eq(sessionPlayers.sessionId, sessionId),
+            inArray(sessionPlayers.state, ["SELECTED", "TRANSFERRING"]),
+          ),
+        )
         .returning({ playerId: sessionPlayers.playerId });
       if (removed.length > 0) await this.bumpAssignmentRevision(tx, sessionId);
       return true;
     });
     if (!transitioned) {
-      const current = await this.db.select({ state: gameSessions.state })
+      const current = await this.db
+        .select({ state: gameSessions.state })
         .from(gameSessions)
-        .innerJoin(serverInstances, and(
-          eq(serverInstances.id, gameSessions.instanceId),
-          eq(serverInstances.sessionId, gameSessions.id),
-        ))
-        .where(and(
-          eq(gameSessions.id, sessionId),
-          eq(serverInstances.id, instanceId),
-        ));
+        .innerJoin(
+          serverInstances,
+          and(
+            eq(serverInstances.id, gameSessions.instanceId),
+            eq(serverInstances.sessionId, gameSessions.id),
+          ),
+        )
+        .where(and(eq(gameSessions.id, sessionId), eq(serverInstances.id, instanceId)));
       if (current[0]?.state !== "CANCELLED") {
         throw this.invalidSessionEvent(instanceId, sessionId);
       }
@@ -625,7 +620,6 @@ export class PaperEvents {
     // A duplicate event may arrive after the lifecycle already entered DRAINING.
     if (!draining) await this.lifecycle.evacuateCancelledMinigame(instanceId);
   }
-
 
   // Persist game completion results and drain the consumed instance.
   private async finishSession(
@@ -647,8 +641,8 @@ export class PaperEvents {
           eq(serverInstances.id, instanceId),
           eq(serverInstances.sessionId, gameSessions.id),
           eq(gameSessions.instanceId, serverInstances.id),
-          inArray(gameSessions.state, ["STARTING", "RUNNING"])
-        )
+          inArray(gameSessions.state, ["STARTING", "RUNNING"]),
+        ),
       )
       .returning({ instance_id: gameSessions.instanceId });
     if (rows.length === 0) {
@@ -659,22 +653,16 @@ export class PaperEvents {
           serverInstances,
           and(
             eq(serverInstances.id, gameSessions.instanceId),
-            eq(serverInstances.sessionId, gameSessions.id)
-          )
+            eq(serverInstances.sessionId, gameSessions.id),
+          ),
         )
-        .where(
-          and(
-            eq(gameSessions.id, sessionId),
-            eq(serverInstances.id, instanceId)
-          )
-        );
+        .where(and(eq(gameSessions.id, sessionId), eq(serverInstances.id, instanceId)));
       if (current[0]?.state === "FINISHED") return;
       throw this.invalidSessionEvent(instanceId, sessionId);
     }
     await this.recordEvent("session", sessionId, "GAME_RESULTS", results ?? {});
     if (rows[0]?.instance_id) await this.lifecycle.beginDrain(rows[0].instance_id);
   }
-
 
   // Reject stale plugin events that refer to a different instance assignment.
   private async validateEventSession(
@@ -697,11 +685,9 @@ export class PaperEvents {
     return instance.session_id ?? undefined;
   }
 
-
   private invalidSessionEvent(instanceId: string, sessionId: string): Error {
     return new Error(`Session ${sessionId} is unavailable for instance ${instanceId}`);
   }
-
 
   // Append an immutable domain event to the audit log.
   private async recordEvent(
@@ -710,14 +696,12 @@ export class PaperEvents {
     type: string,
     payload: unknown,
   ): Promise<void> {
-    await this.db
-      .insert(events)
-      .values({
-        id: nanoid(),
-        aggregateType: aggregateType,
-        aggregateId: aggregateId,
-        type: type,
-        payload,
-      });
+    await this.db.insert(events).values({
+      id: nanoid(),
+      aggregateType: aggregateType,
+      aggregateId: aggregateId,
+      type: type,
+      payload,
+    });
   }
 }
