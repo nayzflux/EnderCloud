@@ -4,6 +4,7 @@ import { loadConfig } from "./config.ts";
 import { synchronizeConfiguration } from "./configuration/sync.ts";
 import { createDatabase } from "./db/client.ts";
 import { migrateDatabase } from "./db/migrate.ts";
+import { RegistryOutbox } from "./events/registry-outbox.ts";
 import { RedisEventBus } from "./events/redis-bus.ts";
 import { AgentExecutor } from "./executor/agent-executor.ts";
 import { Logger } from "./logger.ts";
@@ -77,6 +78,7 @@ await synchronizeConfiguration(
 );
 const bus = new RedisEventBus(config.redisUrl, logger.child({ component: "redis-bus" }));
 await bus.connect();
+const outbox = new RegistryOutbox(db, bus);
 const hosts = new HostService(db, logger.child({ component: "host-service" }));
 const templates = new TemplateArchiveService(db);
 const executor = new AgentExecutor(hosts, {
@@ -161,6 +163,7 @@ try {
 
 // Each periodic control loop is independent and protects itself from overlapping ticks.
 const scheduler = new Scheduler(logger.child({ component: "scheduler" }), incidents);
+scheduler.every("registry-outbox", 250, () => outbox.tick());
 scheduler.every("capacity", config.capacityIntervalMs, () => capacity.tick());
 scheduler.every("instance-start-worker", 250, () => startWorker.tick());
 scheduler.every("matchmaking", config.matchmakingIntervalMs, () => matchmaker.tick());

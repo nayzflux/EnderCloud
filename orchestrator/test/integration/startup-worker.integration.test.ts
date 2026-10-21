@@ -20,6 +20,8 @@ import { Logger } from "../../src/logger.ts";
 import type { InstanceController } from "../../src/services/instance-controller.ts";
 import { InstanceStartWorker } from "../../src/services/instance-start-worker.ts";
 import { VariantStartController } from "../../src/services/variant-start-controller.ts";
+import { RegistryOutbox } from "../../src/events/registry-outbox.ts";
+import { registryOutbox } from "../../src/db/schema.ts";
 import { VariantSelector } from "../../src/services/variant-selector.ts";
 import { HostService } from "../../src/services/host-service.ts";
 import { InstanceController as RealInstanceController } from "../../src/services/instance-controller.ts";
@@ -132,6 +134,7 @@ describe("durable instance startup", () => {
   }, 30_000);
 
   beforeEach(async () => {
+    await db.delete(registryOutbox);
     await sqlClient`TRUNCATE TABLE template_layers, server_groups, execution_hosts CASCADE`;
     await seedBase();
   });
@@ -139,6 +142,35 @@ describe("durable instance startup", () => {
   afterAll(async () => {
     if (sqlClient) await sqlClient.end();
     if (container) await container.stop();
+  });
+
+  test("Redis outage cannot lose or double-count a startup failure", async () => {
+    await seedCreates(1);
+    const policy = new VariantStartController(db, {} as Executor, {
+      instanceStartRetryLimit: 5, instanceStartRetryBaseDelayMs: 1_000,
+    }, logger);
+    const controller = new RealInstanceController(db, {
+      stopInstance: async () => {}, deleteInstance: async () => {},
+    } as unknown as Executor, new VariantSelector(db), {
+      publishRegistry: async () => { throw new Error("Redis unavailable"); },
+    } as unknown as RedisEventBus, { cancelForInstance: async () => {} } as unknown as TransferService,
+    {} as HubRouter, logger, undefined, undefined, policy);
+    expect(await controller.failInstance("startup-instance-0", "CREATE_FAILED")).toBe(true);
+    expect((await policy.getStatus(groupId, variantId, 1))?.failureCount).toBe(1);
+    expect(await controller.failInstance("startup-instance-0", "CREATE_FAILED")).toBe(false);
+    expect((await policy.getStatus(groupId, variantId, 1))?.failureCount).toBe(1);
+    const first = await db.select().from(registryOutbox);
+    expect(first.filter(event => event.type === "SERVER_UNREGISTERED")).toHaveLength(1);
+    let calls = 0;
+    const publisher = new RegistryOutbox(db, { publishRegistry: async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("Redis unavailable");
+    } });
+    await expect(publisher.tick()).rejects.toThrow("Redis unavailable");
+    expect((await db.select().from(registryOutbox))[0]?.publishedAt).toBeNull();
+    await db.update(registryOutbox).set({ nextAttemptAt: new Date(0) });
+    await publisher.tick();
+    expect((await db.select().from(registryOutbox))[0]?.publishedAt).not.toBeNull();
   });
 
   test("claims CREATE commands in FIFO order without exceeding global concurrency", async () => {

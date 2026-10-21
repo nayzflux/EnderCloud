@@ -492,6 +492,16 @@ export const commands = pgTable(
   (table) => [index("commands_pending_idx").on(table.state, table.createdAt)],
 );
 
+export const registryOutbox = pgTable("registry_outbox", {
+  id: text("id").primaryKey(),
+  type: text("type").notNull(),
+  payload: jsonb("payload").notNull(),
+  attempts: integer("attempts").notNull().default(0),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  publishedAt: timestamp("published_at", { withTimezone: true }),
+}, table => [index("registry_outbox_pending_idx").on(table.nextAttemptAt).where(sql`${table.publishedAt} IS NULL`)]);
+
 export const nodes = pgTable("nodes", {
   id: text("id").primaryKey(),
   kind: text("kind").notNull().default("LOCAL_DOCKER"),

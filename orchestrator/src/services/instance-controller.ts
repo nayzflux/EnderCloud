@@ -38,6 +38,7 @@ import type { HubRouter } from "./hub-router.ts";
 import type { MonitoringService } from "./monitoring-service.ts";
 import type { HostService } from "./host-service.ts";
 import type { VariantStartController } from "./variant-start-controller.ts";
+import { enqueueRegistryEvent } from "../events/registry-outbox.ts";
 import { countsAsStartupFailure } from "../domain/startup-policy.ts";
 
 interface CreateRow {
@@ -133,17 +134,24 @@ export class InstanceController {
         type: "INSTANCE_FAILED",
         payload: { reason, ...details },
       });
-      return rows[0]!;
+      const startupFailure = countsAsStartupFailure(reason, rows[0]!.runningAt !== null);
+      const state = startupFailure && this.startPolicy
+        ? await this.startPolicy.recordFailure(instanceId, reason, tx) : null;
+      const [group] = await tx.select({ type: serverGroups.type }).from(serverInstances)
+        .innerJoin(serverGroups, eq(serverGroups.id, serverInstances.groupId))
+        .where(eq(serverInstances.id, instanceId));
+      if (group?.type !== "proxy") await enqueueRegistryEvent(tx, "SERVER_UNREGISTERED", { instanceId });
+      return { ...rows[0]!, startupFailure, state };
     });
     if (!changed) return false;
-    await this.unregisterBackend(instanceId);
-    const startupFailure = countsAsStartupFailure(reason, changed.runningAt !== null);
+    const { startupFailure, state } = changed;
     if (startupFailure && this.startPolicy) {
-      const state = await this.startPolicy.recordFailure(instanceId, reason);
       if (state && (
         state.state !== "BLOCKED" || state.lastFailedInstanceId !== instanceId
       )) {
         await this.stopAndDelete(instanceId);
+      } else if (state?.state === "BLOCKED") {
+        await this.startPolicy.retainFinalRuntime(instanceId);
       }
     }
     const failureFields = { instanceId, reason, details };

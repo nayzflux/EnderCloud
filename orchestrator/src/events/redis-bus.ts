@@ -33,8 +33,9 @@ export class RedisEventBus {
   public async publishRegistry(
     type: "SERVER_REGISTERED" | "SERVER_UPDATED" | "SERVER_UNREGISTERED",
     payload: unknown,
+    eventId?: string,
   ): Promise<void> {
-    await this.publish(REGISTRY_CHANNEL, type, payload);
+    await this.publish(REGISTRY_CHANNEL, type, payload, eventId);
   }
 
   // Publish a player transfer command for the proxy layer.
@@ -54,10 +55,11 @@ export class RedisEventBus {
     channel: string,
     type: RedisEnvelope["type"],
     payload: unknown,
+    eventId = nanoid(),
   ): Promise<void> {
     const envelope: RedisEnvelope = {
       schemaVersion: 1,
-      eventId: nanoid(),
+      eventId,
       type,
       occurredAt: new Date().toISOString(),
       payload,

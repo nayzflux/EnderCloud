@@ -87,8 +87,8 @@ export class VariantStartController {
     return true;
   }
 
-  public async recordFailure(instanceId: string, reason: string): Promise<VariantStartupStatus | null> {
-    const result = await this.db.transaction(async (tx) => {
+  public async recordFailure(instanceId: string, reason: string, transaction?: Transaction): Promise<VariantStartupStatus | null> {
+    const apply = async (tx: Transaction) => {
       const instances = await tx.select({
         groupId: serverInstances.groupId,
         variantId: serverInstances.variantId,
@@ -202,8 +202,10 @@ export class VariantStartController {
         lastFailedInstanceId: instanceId,
         lastFailureReason: reason,
       } satisfies VariantStartupStatus;
+      if (blocked) await tx.update(serverInstances).set({ runtimeRetained: true }).where(eq(serverInstances.id, instanceId));
       return { startup, counted: true, cancelledInstanceIds };
-    });
+    };
+    const result = transaction ? await apply(transaction) : await this.db.transaction(apply);
     if (!result) return null;
 
     const status = result.startup;
@@ -237,7 +239,7 @@ export class VariantStartController {
     };
     if (status.state === "BLOCKED") {
       this.logger.error("variant.start.blocked", "Variant revision blocked after repeated startup failures", fields);
-      await this.retainFinalRuntime(instanceId);
+      if (!transaction) await this.retainFinalRuntime(instanceId);
     } else {
       this.logger.warn("variant.start.retry_scheduled", "Variant startup retry scheduled", fields);
     }
@@ -356,7 +358,7 @@ export class VariantStartController {
     }
   }
 
-  private async retainFinalRuntime(instanceId: string): Promise<void> {
+  public async retainFinalRuntime(instanceId: string): Promise<void> {
     const rows = await this.db.select({
       hostId: serverInstances.hostId,
       shutdownTimeoutMs: serverGroups.shutdownTimeoutMs,
